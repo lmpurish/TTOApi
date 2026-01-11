@@ -1,0 +1,19 @@
+# Visual Studio
+.vs/
+bin/
+obj/
+
+# Publish
+publish/
+
+# Node (si aplica)
+node_modules/
+
+# Secrets / env (ajusta según tu proyecto)
+appsettings.json
+appsettings.Production.json
+.env
+
+
+# Publish profiles user-specific
+*.pubxml.user

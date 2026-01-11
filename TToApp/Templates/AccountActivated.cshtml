@@ -1,0 +1,100 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Account Activated</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h2 {
+            color: #28a745;
+            text-align: center;
+        }
+
+        p {
+            font-size: 16px;
+            color: #333;
+        }
+
+        a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .credentials-box {
+            background-color: #f0f4ff;
+            border: 1px solid #cce0ff;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 15px;
+            color: #004085;
+        }
+
+        .footer {
+            margin-top: 30px;
+            font-size: 14px;
+            color: #777;
+            text-align: center;
+        }
+    </style>
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
+    <div style="max-width: 600px; margin: auto; background: #ffffff; padding: 25px; border-radius: 8px; border: 1px solid #e0e0e0;">
+
+        <h2 style="color: #0a4d8c; text-align: center;">✅ Your Account is Now Active</h2>
+
+        <p>Dear <strong>{{Name}} {{LastName}}</strong>,</p>
+
+        <p>
+            We are pleased to inform you that your account with
+            <strong>Torres Transportation One LLC</strong> (TTO Logistics) has been activated successfully.
+        </p>
+
+        <p>
+            You can now log in to your driver portal to complete your personal information
+            and continue with the background check process.
+        </p>
+
+        <h3 style="margin-top: 25px;">🔐 Login Credentials</h3>
+        <div style="background: #f0f4f8; padding: 15px; border-radius: 6px; font-size: 15px; border: 1px solid #d6e0eb;">
+            <div><strong>Email:</strong> Your email used during your application</div>
+            <div><strong>Password:</strong> <span style="color:#d32f2f;">password</span></div>
+        </div>
+
+        <p style="margin-top: 20px;">
+            🚀
+            <a href="https://admin.ttologistics.com/authentication/login"
+               style="color: #0a4d8c; font-weight: bold;" target="_blank">
+                Click here to log in
+            </a>
+        </p>
+
+        <p>
+            For security, you may change your password once you access your account.
+        </p>
+
+        <div style="margin-top: 30px; color: #555;">
+            Best regards,<br />
+            <strong>TTO Logistics Team</strong>
+        </div>
+
+    </div>
+</body>
+</html>

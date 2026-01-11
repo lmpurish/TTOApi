@@ -1,0 +1,106 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Start Date Confirmation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,.1);
+        }
+
+        h2 {
+            color: #28a745;
+            margin-top: 0;
+        }
+
+        p {
+            font-size: 16px;
+            color: #333;
+            margin: 0 0 12px;
+        }
+
+        .info {
+            background: #f9f9f9;
+            padding: 15px;
+            border-left: 5px solid #28a745;
+            margin-top: 15px;
+            border-radius: 5px;
+        }
+
+        .footer {
+            margin-top: 30px;
+            font-size: 14px;
+            color: #777;
+        }
+
+        ul {
+            padding-left: 20px;
+            margin: 8px 0;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 10px 16px;
+            background: #28a745;
+            color: #fff !important;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        a {
+            color: #28a745;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>✅ Your Start Date is Confirmed!</h2>
+        <p>Dear <strong>{{Name}} {{LastName}}</strong>,</p>
+        <p>Welcome to <strong>TTO Logistics</strong>! We’re excited to have you join us as a <strong>{{Position}}</strong>.</p>
+
+        <div class="info">
+            <p><strong>🗓 Start Details:</strong></p>
+            <ul>
+                <li><strong>Date:</strong> {{StartDate}} ({{StartWeekday}})</li>
+                <li><strong>Time:</strong> {{StartTime}}</li>
+                <li><strong>Location:</strong> {{WarehouseName}} — {{WarehouseAddress}}</li>
+            </ul>
+        </div>
+
+        <div class="info">
+            <p><strong>👤 Your Manager:</strong></p>
+            <ul>
+                <li><strong>Name:</strong> {{ManagerName}}</li>
+                <li><strong>Phone:</strong> {{ManagerPhone}}</li>
+                <li><strong>Email:</strong> <a href="mailto:{{ManagerEmail}}">{{ManagerEmail}}</a></li>
+            </ul>
+        </div>
+
+        <p>Please bring a valid ID and any documents requested by HR. If you have questions or need to reschedule, contact your manager.</p>
+
+        <p>
+            <a class="btn" href="{{ConfirmUrl}}" target="_blank">➕ Confirm my start date</a>
+        </p>
+
+        <p class="footer">
+            Best regards,<br />
+            <strong>TTO Logistics Recruitment Team</strong><br />
+            📧 <a href="mailto:support@ttologistics.com">support@ttologistics.com</a>
+        </p>
+    </div>
+</body>
+</html>

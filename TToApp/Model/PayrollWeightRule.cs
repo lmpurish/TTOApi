@@ -15,7 +15,8 @@ namespace TToApp.Model
         [JsonIgnore]
         public PayrollConfig PayrollConfig { get; set; } = null!;
 
-        // Rango de peso (en LB o KG). Recomiendo LB si tus reportes vienen en LB.
+        // Rango de peso (en LB o KG). Recomiendo LB si tus reportes vienen en LB. 
+
         [Column(TypeName = "decimal(18,2)")]
         public decimal MinWeight { get; set; }
 
@@ -23,6 +24,7 @@ namespace TToApp.Model
         public decimal? MaxWeight { get; set; } // null = sin tope
 
         // Extra por paquete en ese rango
+
         [Column(TypeName = "decimal(18,2)")]
         public decimal ExtraAmount { get; set; }
 

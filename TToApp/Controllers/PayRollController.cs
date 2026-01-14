@@ -156,32 +156,17 @@ namespace TToApp.Controllers
                       && r.Date < endExclusive.ToDateTime(TimeOnly.MinValue)
                 select new { r, z };
 
+
             // ✅ Filtro por Warehouse según tipo
-
-               
-          // tabla paquete ver los bonos  y ver por el almacén
-
             if (widInt.HasValue)
             {
                 if (isOnTrac)
                 {
-                    var countNullZ = await routesQ.CountAsync(x => x.z == null);
-
-                    if (countNullZ > 0)
-                    {
-                        var data = await routesQ
-                            .Where(x => x.z == null)
-                            .GroupBy(x => x.r.Date.Date)
-                            .Select(g => new
-                            {
-                                Date = g.Key,
-                                Count = g.Count()
-                            })
-                            .ToDictionaryAsync(x => x.Date.ToString("yyyy-MM-dd"), x => x.Count);
-
-                        return Ok(new { Data = data, Message = "Some routes do not have Zone. Please assign Zones to the routes to be able to filter by WarehouseId." });
-                    }
+                    // OnTrac => por zona (requiere z)
+                    // if routeQ tiene valor y no estan las zonas asignadas hay que lanzar un error
+                    
                     routesQ = routesQ.Where(x => x.z != null && x.z.IdWarehouse == widInt.Value);
+
 
                 }
                 else

@@ -28,10 +28,11 @@ namespace TToApp.Model
         public DbSet<PayRunLine> PayRunLines => Set<PayRunLine>();
         public DbSet<PayrollAdjustment> PayrollAdjustments => Set<PayrollAdjustment>();
         public DbSet<ScheduleEvent> ScheduleEvents => Set<ScheduleEvent>();
-        public DbSet<PayrollConfig> payrollConfigs => Set<PayrollConfig>();
-        public DbSet<PayrollWeightRule> payrollWeightRules => Set<PayrollWeightRule>();
+        public DbSet<PayrollConfig> PayrollConfigs => Set<PayrollConfig>();
+        public DbSet<PayrollWeightRule> PayrollWeightRules => Set<PayrollWeightRule>();
         public DbSet<Permits>  Permits => Set<Permits>();
         public DbSet<Metro> Metro => Set<Metro>();
+        public DbSet<DriverPunch> DriverPunches => Set<DriverPunch>();
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -176,6 +177,10 @@ namespace TToApp.Model
             modelBuilder.ApplyConfiguration(new PayRunConfig());
             modelBuilder.ApplyConfiguration(new PayRunLineConfig());
             modelBuilder.ApplyConfiguration(new PayrollAdjustmentConfig());
+            modelBuilder.Entity<PayrollConfig>().ToTable("PayrollConfigs");
+            modelBuilder.Entity<PayrollWeightRule>().ToTable("PayrollWeightRules");
+            modelBuilder.Entity<PayrollPenaltyRule>().ToTable("PayrollPenaltyRules");
+            modelBuilder.Entity<PayrollBonusRule>().ToTable("PayrollBonusRules");
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
 

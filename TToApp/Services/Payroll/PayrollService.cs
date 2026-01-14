@@ -59,10 +59,18 @@ namespace TToApp.Services.Payroll
             // 3) PayrollConfig (por warehouse)
             PayrollConfig? payrollConfig = null;
             List<PayrollWeightRule> weightRules = new();
+            bool isOnTrac = false;
 
             if (warehouseId.HasValue)
             {
-                payrollConfig = await _db.payrollConfigs
+                isOnTrac = await _db.Warehouses
+                .AsNoTracking()
+                .AnyAsync(w =>
+                    w.Id == (int)warehouseId.Value &&
+                    w.CompanyId == companyId &&          // si aplica en tu modelo
+                    w.Company == "OnTrac"                // AJUSTA: o Contains("OnTrac")
+                );
+                payrollConfig = await _db.PayrollConfigs
                     .AsNoTracking()
                     .Include(x => x.WeightRules)
                     .FirstOrDefaultAsync(x => x.WarehouseId == (int)warehouseId.Value);
@@ -90,13 +98,24 @@ namespace TToApp.Services.Payroll
                     r.UserId == (int)driverId
                 );
 
-            if (filterZoneId.HasValue)
+            if (filterZoneId.HasValue && isOnTrac)
                 routesQuery = routesQuery.Where(r => r.ZoneId == filterZoneId.Value);
 
-            if (warehouseId.HasValue)
+            if (warehouseId.HasValue && isOnTrac)
             {
-                routesQuery = routesQuery.Where(r => r.ZoneId != null && r.Zone!.IdWarehouse == warehouseId.Value);
+                // OnTrac: requiere zona y amarra el warehouse a la zona
+                routesQuery = routesQuery.Where(r =>
+                    r.ZoneId != null &&
+                    r.Zone != null &&
+                    r.Zone.IdWarehouse == warehouseId.Value
+                );
             }
+            if (warehouseId.HasValue && !isOnTrac)
+            {
+                var wid = (int)warehouseId.Value;
+                routesQuery = routesQuery.Where(r => r.WarehouseId == wid);
+            }
+
 
             var routes = await routesQuery
                 .Include(r => r.Zone)

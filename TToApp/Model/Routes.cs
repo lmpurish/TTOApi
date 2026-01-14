@@ -43,7 +43,9 @@ namespace TToApp.Model
 
         public double? PriceRoute {  get; set; }
         public string? RouteCode{  get; set; }
-      
+
+
+        [Column("WarehouseId")]
         public int? WarehouseId { get; set; }
         public Warehouse? Warehouse { get; set; }
     }

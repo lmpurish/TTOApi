@@ -34,5 +34,6 @@ namespace TToApp.Model
         public List<PayrollWeightRule> WeightRules { get; set; } = new();
         public List<PayrollPenaltyRule> PenaltyRules { get; set; } = new();
         public List<PayrollBonusRule> BonusRules { get; set; } = new();
+        public bool IsActive { get; set; } = true;
     }
 }

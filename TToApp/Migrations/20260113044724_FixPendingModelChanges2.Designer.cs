@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TToApp.Model;
 
@@ -11,9 +12,11 @@ using TToApp.Model;
 namespace TToApp.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260113044724_FixPendingModelChanges2")]
+    partial class FixPendingModelChanges2
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1249,7 +1252,7 @@ namespace TToApp.Migrations
                     b.Property<decimal?>("DriveRate")
                         .HasColumnType("decimal(18,2)");
 
-                    b.Property<int>("GeofenceRadiusMeters")
+                    b.Property<int?>("GeofenceRadiusMeters")
                         .HasColumnType("int");
 
                     b.Property<bool>("IsHiring")

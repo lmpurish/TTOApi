@@ -110,6 +110,7 @@ namespace TToApp.Controllers
                 p.StartDate == start &&
                 p.EndDate == end
             );
+
             if (period is null)
             {
                 period = new PayPeriod
@@ -125,39 +126,65 @@ namespace TToApp.Controllers
                 await _db.SaveChangesAsync();
             }
 
-            // 2) Rutas COMPLETED, STOPS>0 en rango, filtrando por Warehouse si se envía
-            var routesQ =
-     from r in _db.Set<Routes>().IgnoreQueryFilters().AsNoTracking()
-     join z in _db.Set<Zone>().IgnoreQueryFilters().AsNoTracking()
-         on r.ZoneId equals z.Id into zj
-     from z in zj.DefaultIfEmpty()
-     where r.UserId != null
-           && r.routeStatus == RouteStatus.Completed
-           && r.DeliveryStops > 0
-           && r.Date >= start.ToDateTime(TimeOnly.MinValue)
-           && r.Date < endExclusive.ToDateTime(TimeOnly.MinValue)
-     select new { r, z };
-
-            if (req.ZoneId.HasValue && req.ZoneId.Value > 0)
-                routesQ = routesQ.Where(x => x.r.ZoneId == req.ZoneId.Value);
-
+            // ✅ Determinar si el warehouse es OnTrac (solo si viene WarehouseId)
+            bool isOnTrac = false;
+            int? widInt = null;
 
             if (req.WarehouseId.HasValue)
             {
-                // Solo rutas de ese almacén; excluye sin zona para no duplicar entre almacenes
-                routesQ = routesQ.Where(x => x.z != null && x.z.IdWarehouse == req.WarehouseId.Value);
+                widInt = (int)req.WarehouseId.Value;
+
+                isOnTrac = await _db.Warehouses
+                    .AsNoTracking()
+                    .AnyAsync(w =>
+                        w.Id == widInt.Value &&
+                        w.CompanyId == req.CompanyId &&
+                        (w.Company ?? "").Trim().ToLower() == "ontrac"
+                    );
             }
 
+            // 2) Rutas COMPLETED, STOPS>0 en rango
+            var routesQ =
+                from r in _db.Set<Routes>().IgnoreQueryFilters().AsNoTracking()
+                join z in _db.Set<Zone>().IgnoreQueryFilters().AsNoTracking()
+                    on r.ZoneId equals z.Id into zj
+                from z in zj.DefaultIfEmpty()
+                where r.UserId != null
+                      && r.routeStatus == RouteStatus.Completed
+                      && r.DeliveryStops > 0
+                      && r.Date >= start.ToDateTime(TimeOnly.MinValue)
+                      && r.Date < endExclusive.ToDateTime(TimeOnly.MinValue)
+                select new { r, z };
 
+            // ✅ Filtro por Warehouse según tipo
+            if (widInt.HasValue)
+            {
+                if (isOnTrac)
+                {
+                    // OnTrac => por zona (requiere z)
+                    routesQ = routesQ.Where(x => x.z != null && x.z.IdWarehouse == widInt.Value);
+                }
+                else
+                {
+                    // No-OnTrac => por Routes.WarehouseId (sin depender de Zone)
+                    routesQ = routesQ.Where(x => x.r.WarehouseId == widInt.Value);
+                }
+            }
 
-               //         var data = await routesQ.Take(80).ToListAsync();
-               //       return Ok(data);
+            // ✅ Filtro ZoneId SOLO aplica cuando es OnTrac (o cuando no se pasó WarehouseId)
+            if (req.ZoneId.HasValue && req.ZoneId.Value > 0)
+            {
+                if (!widInt.HasValue || isOnTrac)
+                    routesQ = routesQ.Where(x => x.r.ZoneId == req.ZoneId.Value);
+            }
+
+            // (Opcional) Debug rápido:
+            // var debugCount = await routesQ.CountAsync();
 
             var driverIds = await routesQ
                 .Select(x => (long)x.r.UserId!)
                 .Distinct()
                 .ToListAsync();
-
 
             // 3) Evitar recalcular si ya existe (a menos que se pida)
             HashSet<long> already = new();
@@ -169,7 +196,7 @@ namespace TToApp.Controllers
                     .ToListAsync()).ToHashSet();
             }
 
-            // 4) Calcular por driver (el servicio ahora también filtra por warehouse, ver punto 2)
+            // 4) Calcular por driver
             foreach (var driverId in driverIds)
             {
                 if (!req.RecalculateAll && already.Contains(driverId)) continue;
@@ -200,22 +227,22 @@ namespace TToApp.Controllers
 
             // 5) Summary
             var runs = await (
-    from r in _db.PayRuns.AsNoTracking()
-    join u in _db.Set<User>().AsNoTracking()
-        on r.DriverId equals u.Id into gj
-    from u in gj.DefaultIfEmpty()
-    where r.PayPeriodId == period.Id
-    select new PeriodSummaryRow
-    {
-        DriverId = r.DriverId,
-        DriverName = u != null
-            ? (u.Name + " " + u.LastName).Trim()
-            : null,                                     // o "Unknown" si prefieres
-        Gross = r.GrossAmount,
-        Adjustments = r.Adjustments,
-        Net = r.NetAmount
-    }
-).ToListAsync();
+                from r in _db.PayRuns.AsNoTracking()
+                join u in _db.Set<User>().AsNoTracking()
+                    on r.DriverId equals u.Id into gj
+                from u in gj.DefaultIfEmpty()
+                where r.PayPeriodId == period.Id
+                select new PeriodSummaryRow
+                {
+                    DriverId = r.DriverId,
+                    DriverName = u != null
+                        ? (u.Name + " " + u.LastName).Trim()
+                        : null,
+                    Gross = r.GrossAmount,
+                    Adjustments = r.Adjustments,
+                    Net = r.NetAmount
+                }
+            ).ToListAsync();
 
             var dto = new PeriodSummaryDto
             {
@@ -227,6 +254,7 @@ namespace TToApp.Controllers
 
             return Ok(dto);
         }
+
         public sealed class PeriodRouteDebugDto
         {
             public int RouteId { get; set; }

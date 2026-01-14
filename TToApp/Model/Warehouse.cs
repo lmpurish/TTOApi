@@ -57,6 +57,10 @@ namespace TToApp.Model
 
         public decimal? DriveRate {  get; set; }
 
+        public double? Latitude { get; set; }
+        public double? Longitude { get; set; }
+        public int GeofenceRadiusMeters { get; set; } = 200;
+
 
     }
 

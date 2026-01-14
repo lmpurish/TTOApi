@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TToApp.Model;
 
@@ -11,9 +12,11 @@ using TToApp.Model;
 namespace TToApp.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260113044336_FixPendingModelChanges")]
+    partial class FixPendingModelChanges
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1255,10 +1258,10 @@ namespace TToApp.Migrations
                     b.Property<bool>("IsHiring")
                         .HasColumnType("bit");
 
-                    b.Property<double?>("Latitude")
+                    b.Property<double>("Latitude")
                         .HasColumnType("float");
 
-                    b.Property<double?>("Longitude")
+                    b.Property<double>("Longitude")
                         .HasColumnType("float");
 
                     b.Property<int?>("MetroId")

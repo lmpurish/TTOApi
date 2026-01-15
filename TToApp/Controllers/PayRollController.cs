@@ -162,7 +162,7 @@ namespace TToApp.Controllers
             {
                 if (isOnTrac)
                 {
-                    var countNullZ = await routesQ.CountAsync(x => x.z == null && x.r.DeliveryStops > 0 && x.r.routeStatus == RouteStatus.Completed);
+                    var countNullZ = await routesQ.CountAsync(x => x.z == null);
 
                     if (countNullZ > 0)
                     {

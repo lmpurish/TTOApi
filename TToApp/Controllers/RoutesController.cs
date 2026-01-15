@@ -560,7 +560,8 @@ namespace TToApp.Controllers
                         routeStatus = RouteStatus.Completed,
                         Attempts = attempts,
                         CNL = cnlValue,
-                        BranchOnTime = 100 // Se asignará más adelante si es un RSP
+                        BranchOnTime = 100, // Se asignará más adelante si es un RSP
+                        WarehouseId = warehouseId
                     };
 
                     routesToSave.Add(route);

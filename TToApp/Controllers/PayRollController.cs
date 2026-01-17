@@ -66,12 +66,19 @@ namespace TToApp.Controllers
             public decimal Net { get; set; }
         }
 
+        public sealed class WarehouseNullZoneSummaryDto
+        {
+            public int WarehouseId { get; set; }
+            public Dictionary<string, int> NullZoneRoutesByDate { get; set; } = new();
+        }
+
         public sealed class PeriodSummaryDto
         {
             public long PayPeriodId { get; set; }
             public string StartDate { get; set; } = null!;
             public string EndDate { get; set; } = null!;
             public List<PeriodSummaryRow> Drivers { get; set; } = new();
+            public List<WarehouseNullZoneSummaryDto> OnTracNullZoneRoutes { get; set; } = new();
             public decimal TotalNet => Drivers.Sum(d => d.Net);
         }
 
@@ -130,18 +137,18 @@ namespace TToApp.Controllers
             bool isOnTrac = false;
             int? widInt = null;
 
-            if (req.WarehouseId.HasValue)
-            {
-                widInt = (int)req.WarehouseId.Value;
+            // if (req.WarehouseId.HasValue)
+            // {
+            //     widInt = (int)req.WarehouseId.Value;
 
-                isOnTrac = await _db.Warehouses
-                    .AsNoTracking()
-                    .AnyAsync(w =>
-                        w.Id == widInt.Value &&
-                        w.CompanyId == req.CompanyId &&
-                        (w.Company ?? "").Trim().ToLower() == "ontrac"
-                    );
-            }
+            //     isOnTrac = await _db.Warehouses
+            //         .AsNoTracking()
+            //         .AnyAsync(w =>
+            //             w.Id == widInt.Value &&
+            //             w.CompanyId == req.CompanyId &&
+            //             (w.Company ?? "").Trim().ToLower() == "ontrac"
+            //         );
+            // }
 
             // 2) Rutas COMPLETED, STOPS>0 en rango
             var routesQ =
@@ -154,52 +161,76 @@ namespace TToApp.Controllers
                       && r.DeliveryStops > 0
                       && r.Date >= start.ToDateTime(TimeOnly.MinValue)
                       && r.Date < endExclusive.ToDateTime(TimeOnly.MinValue)
+                      && (req.WarehouseId.HasValue == false || (int)req.WarehouseId.Value == 0 ||r.WarehouseId == (int)req.WarehouseId.Value)
+                      && (req.ZoneId.HasValue == false ||  (int)req.ZoneId.Value == 0 || r.ZoneId == (int)req.ZoneId.Value)
                 select new { r, z };
 
+            // Get distinct warehouseIds
+            var warehouseIds = await routesQ
+                .Select(x => x.r.WarehouseId)
+                .Where(id => id != null)
+                .Distinct()
+                .ToListAsync();
+            
+            // Clacify is OnTrac per warehouse
+            var onTracWarehouseIds = await _db.Warehouses
+                .AsNoTracking()
+                .Where(w =>
+                    warehouseIds.Contains(w.Id) &&
+                    w.CompanyId == req.CompanyId &&
+                    (w.Company ?? "").Trim().ToLower() == "ontrac"
+                )
+                .Select(w => w.Id)
+                .ToListAsync();
+            // var nonOnTracWarehouseIds = warehouseIds
+            //     .Except(onTracWarehouseIds)
+            //     .ToList();
 
-            // ✅ Filtro por Warehouse según tipo
-            if (widInt.HasValue)
-            {
-                if (isOnTrac)
+            //
+           
+            var onTracWarehousesWithNullZone = await routesQ
+                .Where(x =>
+                    x.z == null &&
+                    x.r.WarehouseId.HasValue &&
+                    onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
+                )
+                .Select(x => x.r.WarehouseId!.Value)
+                .Distinct()
+                .ToListAsync();
+
+            var flat = await routesQ
+                .Where(x =>
+                    x.z == null &&
+                    x.r.WarehouseId.HasValue &&
+                    onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+                )
+                .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
+                .Select(g => new
                 {
-                    var countNullZ = await routesQ.CountAsync(x => x.z == null);
+                    g.Key.WarehouseId,
+                    Date = g.Key.Day,
+                    Count = g.Count()
+                })
+                .ToListAsync();
 
-                    if (countNullZ > 0)
+                var onTracNullZoneByWarehouse = flat
+                    .GroupBy(x => x.WarehouseId)
+                    .Select(g => new
                     {
-                        var data = await routesQ
-                            .Where(x => x.z == null)
-                            .GroupBy(x => x.r.Date.Date)
-                            .Select(g => new
-                            {
-                                Date = g.Key,
-                                Count = g.Count()
-                            })
-                            .ToDictionaryAsync(x => x.Date.ToString("yyyy-MM-dd"), x => x.Count);
+                        WarehouseId = g.Key,
+                        NullZoneRoutesByDate = g.ToDictionary(
+                            x => x.Date.ToString("yyyy-MM-dd"),
+                            x => x.Count
+                        )
+                    })
+                    .ToList();
 
-                        return Ok(new { Data = data, Message = "Some routes do not have Zone. Please assign Zones to the routes to be able to filter by WarehouseId." });
-                    }
+                // return Ok(onTracNullZoneByWarehouse);
 
-                    
-                    routesQ = routesQ.Where(x => x.z != null && x.z.IdWarehouse == widInt.Value);
-                    //this is an example
-
-                }
-                else
-                {
-                    // No-OnTrac => por Routes.WarehouseId (sin depender de Zone)
-                    routesQ = routesQ.Where(x => x.r.WarehouseId == widInt.Value);
-                }
-            }
-
-            // ✅ Filtro ZoneId SOLO aplica cuando es OnTrac (o cuando no se pasó WarehouseId)
-            if (req.ZoneId.HasValue && req.ZoneId.Value > 0)
-            {
-                if (!widInt.HasValue || isOnTrac)
-                    routesQ = routesQ.Where(x => x.r.ZoneId == req.ZoneId.Value);
-            }
-
-            // (Opcional) Debug rápido:
-            // var debugCount = await routesQ.CountAsync();
+            routesQ = routesQ.Where(x =>
+                x.r.WarehouseId.HasValue
+                && !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+                );
 
             var driverIds = await routesQ
                 .Select(x => (long)x.r.UserId!)
@@ -269,7 +300,15 @@ namespace TToApp.Controllers
                 PayPeriodId = period.Id,
                 StartDate = period.StartDate.ToString("yyyy-MM-dd"),
                 EndDate = period.EndDate.ToString("yyyy-MM-dd"),
-                Drivers = runs
+                Drivers = runs,
+                OnTracNullZoneRoutes = onTracNullZoneByWarehouse
+                    .Select(x => new WarehouseNullZoneSummaryDto
+                    {
+                        WarehouseId = x.WarehouseId,
+                        NullZoneRoutesByDate = x.NullZoneRoutesByDate
+                    })
+                    .ToList()
+
             };
 
             return Ok(dto);

@@ -1888,7 +1888,7 @@ public class UserController : ControllerBase
     {
         var user = await _authContext.Users
             .Include(u => u.Profile)
-            //.Include(u => u.DocumentSignatures)
+            .Include(u => u.DocumentSignatures)
             .Include(u => u.Vehicles)
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Id == id);
@@ -1931,6 +1931,11 @@ public class UserController : ControllerBase
             if (user.Profile.DateOfBirth == null)
                 missing.Add("Date of Birth");
         }
+        if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner ) && ((user.DocumentSignatures == null || !user.DocumentSignatures.Any())))
+        {
+            missing.Add("Document Signatures");
+        }
+
 
         if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner ) && user.Warehouse == null)
         {

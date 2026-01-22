@@ -34,7 +34,7 @@ namespace TToApp.Model
         
         public DateOnly? ExpInsurance {  get; set; }
         public string? InsuranceUrl {  get; set; }
-
+        [JsonIgnore]
         public User? User { get; set; }
     }
 

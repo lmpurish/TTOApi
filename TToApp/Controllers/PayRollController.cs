@@ -156,6 +156,7 @@ namespace TToApp.Controllers
                       && (req.ZoneId.HasValue == false ||  (int)req.ZoneId.Value == 0 || r.ZoneId == (int)req.ZoneId.Value)
                 select new { r, z };
 
+<<<<<<< Updated upstream
             // Get distinct warehouseIds
             var warehouseIds = await routesQ
                 .Select(x => x.r.WarehouseId)
@@ -204,6 +205,22 @@ namespace TToApp.Controllers
             var onTracNullZoneByWarehouse = flat
                 .GroupBy(x => x.WarehouseId)
                 .Select(g => new
+=======
+
+            // ✅ Filtro por Warehouse según tipo
+            if (widInt.HasValue)
+            {
+                if (isOnTrac)
+                {
+                    // OnTrac => por zona (requiere z)
+                    // if routeQ tiene valor y no estan las zonas asignadas hay que lanzar un error
+                    
+                    routesQ = routesQ.Where(x => x.z != null && x.z.IdWarehouse == widInt.Value);
+
+
+                }
+                else
+>>>>>>> Stashed changes
                 {
                     WarehouseId = g.Key,
                     NullZoneRoutesByDate = g.ToDictionary(

@@ -361,9 +361,14 @@ namespace TToApp.Services.Payroll
             string? description,
             decimal qty,
             decimal rate,
-            string? tags = null
+            string? tags = null,
+            DateTime? routeDate = null,
+            long? zoneId = null,
+            string? zoneArea = null
+
         )
         {
+            var amount = qty * rate;
             var line = new PayRunLine
             {
                 PayRunId = run.Id,
@@ -372,7 +377,10 @@ namespace TToApp.Services.Payroll
                 Description = description,
                 Qty = qty,
                 Rate = rate,
-                Tags = tags
+                Tags = tags,
+                RouteDate = routeDate,
+                ZoneId = zoneId,
+                ZoneArea = zoneArea
             };
 
             _db.PayRunLines.Add(line);

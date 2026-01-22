@@ -422,7 +422,6 @@ namespace TToApp.Controllers
         {
             if (file == null || file.Length == 0 || Path.GetExtension(file.FileName).ToLower() != ".xml")
                 return BadRequest(new { message = "Debe subir un archivo XML válido con extensión .xml." });
-
             try
             {
                 using var stream = new MemoryStream();
@@ -493,9 +492,14 @@ namespace TToApp.Controllers
                     return BadRequest(new { message = "No se encontraron IdentificationNumber en el XML." });
 
                 // 🔍 Obtener los conductores de la base de datos basados en `IdentificationNumber` y `WarehouseId` recibido
+                
                 var users = await _context.Users
                     .Where(u => spValues.Contains(u.IdentificationNumber) && u.WarehouseId == warehouseId)
                     .ToListAsync();
+
+                var notFoundInUsers = spValues
+                 .Except(users.Select(u => u.IdentificationNumber))
+                 .ToList();
 
                 var rsp = await _context.Users
                     .Where(u => u.UserRole ==  global::User.Role.Rsp && u.WarehouseId == warehouseId)
@@ -590,7 +594,10 @@ namespace TToApp.Controllers
                 }
                 else
                 {
-                    return BadRequest(new { message = "No se encontraron nuevas rutas para insertar en la base de datos." });
+                    return BadRequest(new { message = "No new routes were found to insert into the database.",
+                        NotFountInUsers= notFoundInUsers
+
+                    });
                 }
 
                 if (losBeforeCutoffDetails.Count == 0) {
@@ -886,7 +893,11 @@ namespace TToApp.Controllers
 
 
 
-                return Ok(new { message = $"{routesToSave.Count} registros guardados en Routes, incluyendo el RSP." });
+                return Ok(new
+                {
+                    message = $"{routesToSave.Count} registros guardados en Routes, incluyendo el RSP.",
+                    notFoundUsers = notFoundInUsers
+                });
             }
             catch (Exception ex)
             {

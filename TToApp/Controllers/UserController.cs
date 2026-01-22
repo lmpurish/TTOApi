@@ -774,59 +774,83 @@ public class UserController : ControllerBase
                 return BadRequest(new { message = "El Manager no tiene un almacén asignado." });
             }
 
-            var drivers = await _authContext.Users
-                   .AsNoTracking()
-                   .Include(v => v.Vehicles)
-                   .Where(u => u.WarehouseId == user.WarehouseId && u.UserRole == global::User.Role.Applicant)
-                   .Select(u => new
-                   {
-                       // Campos del usuario
-                       u.Id,
-                       u.Name,
-                       u.LastName,
-                       u.Email,
-                       u.IsActive,
-                       u.UserRole,
-                       u.WarehouseId,
-                       u.AvatarUrl,
-                       u.WasContacted,
-                       u.IsFirstLogin,
-                       u.UpdatedAt,
-                       // Campos del warehouse
-                       Warehouse = u.Warehouse != null ? new
-                       {
-                           u.Warehouse.City,
-                           u.Warehouse.Company
-                       } : null,
+            var warehouseId = user.WarehouseId;
 
-                       // Campos del profile
-                       Profile = u.Profile != null ? new
-                       {
-                           PhoneNumber = u.Profile.PhoneNumber,
-                           ssn = u.Profile.SsnLast4,
-                           address = u.Profile.Address,
-                           city = u.Profile.City,
-                           zipcode = u.Profile.ZipCode,
-                           state = u.Profile.State,
-                           dob = u.Profile.DateOfBirth
-                       } : null,
-                       Vehicle = u.Vehicles
-                            .Select(v => new
-                            {
-                                v.Make,
-                                v.Model
-                            })
-                            .FirstOrDefault(),
-                       Account = u.Accounts
-                            .Where(a => a.IsDefault)
-                            .Select(a => new
-                            {
-                                a.Id,
-                                accountNumber = a.AccountNumber,
-                                routingNumber = a.RoutingNumber
-                            })
-                            .FirstOrDefault()
-                   })
+            // Si MetroId está en Warehouse, resuélvelo aparte:
+            int? metroId = await _authContext.Warehouses
+                .AsNoTracking()
+                .Where(w => w.Id == warehouseId)
+                .Select(w => (int?)w.MetroId)
+                .FirstOrDefaultAsync();
+
+            var drivers = await _authContext.Users
+                .AsNoTracking()
+                .Include(u => u.Vehicles)
+                // (opcional) si quieres usar u.Warehouse en el projection, puedes incluirlo también:
+                .Include(u => u.Warehouse)
+                .Where(u =>
+                    u.UserRole == global::User.Role.Applicant &&
+                    (
+                        (
+                            u.MetroId == metroId &&
+                            u.WarehouseId == null
+                        )
+                        ||
+                        (
+                            u.WarehouseId == warehouseId
+                        )
+                    )
+                )
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Name,
+                    u.LastName,
+                    u.Email,
+                    u.IsActive,
+                    u.UserRole,
+                    u.WarehouseId,
+                    u.AvatarUrl,
+                    u.WasContacted,
+                    u.IsFirstLogin,
+                    u.UpdatedAt,
+                    Metro = u.Metro != null ? new
+                    {
+                        u.Metro.Id,
+                        u.Metro.City
+                    } : null,
+
+                    Warehouse = u.Warehouse != null ? new
+                    {
+                        u.Warehouse.City,
+                        u.Warehouse.Company
+                    } : null,
+
+                    Profile = u.Profile != null ? new
+                    {
+                        PhoneNumber = u.Profile.PhoneNumber,
+                        ssn = u.Profile.SsnLast4,
+                        address = u.Profile.Address,
+                        city = u.Profile.City,
+                        zipcode = u.Profile.ZipCode,
+                        state = u.Profile.State,
+                        dob = u.Profile.DateOfBirth
+                    } : null,
+
+                    Vehicle = u.Vehicles
+                        .Select(v => new { v.Make, v.Model })
+                        .FirstOrDefault(),
+
+                    Account = u.Accounts
+                        .Where(a => a.IsDefault)
+                        .Select(a => new
+                        {
+                            a.Id,
+                            accountNumber = a.AccountNumber,
+                            routingNumber = a.RoutingNumber
+                        })
+                        .FirstOrDefault()
+                })
                 .ToListAsync();
 
             return Ok(drivers);

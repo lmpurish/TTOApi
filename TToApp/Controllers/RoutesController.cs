@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
+using System.IO.Packaging;
 using System.Linq;
 using System.Security.Claims;
 using System.Text;
@@ -1298,7 +1299,9 @@ namespace TToApp.Controllers
                     string.IsNullOrWhiteSpace(routeCode) ||
                     planDate == null)
                     continue;
+                var statusEnum = MapPackageStatus(S(row, "FinalStatus"));
 
+                
                 rawRows.Add(new RouteParcelRow
                 {
                     Tracking = tracking,
@@ -1314,7 +1317,7 @@ namespace TToApp.Controllers
                     City = S(row, "City"),
                     State = S(row, "State"),
                     Zip = S(row, "ZipCode"),
-                    FinalStatus = S(row, "FinalStatus"),
+                    Status = statusEnum,
 
                     // ✅ Peso (NO weightType)
                     Weight = Dec(row, "Weight")
@@ -1380,8 +1383,9 @@ namespace TToApp.Controllers
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Count();
 
+                var delivered = g.Where(x => x.Status == PackageStatus.CL);
                 // ✅ STOPS = tu lógica (NO la cambio): StopKey con BuildStopKey(x)
-                var stopGroups = g
+                var stopGroups = delivered
                     .Select(x => new { x.Tracking, StopKey = BuildStopKey(x) })
                     .Where(x => !string.IsNullOrWhiteSpace(x.Tracking) && !string.IsNullOrWhiteSpace(x.StopKey))
                     .GroupBy(x => x.StopKey, StringComparer.OrdinalIgnoreCase);
@@ -1398,7 +1402,7 @@ namespace TToApp.Controllers
                     return c > 1 ? (c - 1) : 0;
                 });
 
-                var cnl = g.Count(x => string.Equals(x.FinalStatus, "CNL", StringComparison.OrdinalIgnoreCase));
+                var cnl = g.Count(x => x.Status == PackageStatus.CNL);
 
                 // DriverName (toma el primero no vacío dentro del grupo)
                 var driverRaw = g.Select(x => x.DriverNameRaw)
@@ -1550,7 +1554,7 @@ namespace TToApp.Controllers
                     // ✅ Peso guardado (NO weightType)
                     Weight = x.Weight,
 
-                    Status = PackageStatus.RD,
+                    Status = x.Status,
                     DaysElapsed = 0,
                     Notified = false,
                     ReviewStatus = ReviewStatus.Open
@@ -1594,6 +1598,31 @@ namespace TToApp.Controllers
 
             return s;
         }
+
+        private static PackageStatus MapPackageStatus(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return PackageStatus.RD;
+
+            var s = raw.Trim().ToUpperInvariant();
+
+            return s switch
+            {
+                "DELIVERED" => PackageStatus.CL,
+
+                // Intento fallido (no entregado)
+                "FAILED_ATTEMPT" => PackageStatus.UD,
+
+                // Devuelto por error de clasificación
+                "MIS_SORT_RETURN" => PackageStatus.RTN,
+
+                // Devuelto al centro
+                "RETURNED_SORT_CENTER" => PackageStatus.RTN,
+
+                _ => PackageStatus.OD
+            };
+        }
+
 
         static string BuildStopKey(RouteParcelRow x)
         {
@@ -1695,7 +1724,7 @@ namespace TToApp.Controllers
             public string? City { get; set; }
             public string? State { get; set; }
             public string? Zip { get; set; }
-            public string? FinalStatus { get; set; }
+            public PackageStatus Status { get; set; }
             public decimal? Weight { get; set; }  // ✅ solo el número
         }
     

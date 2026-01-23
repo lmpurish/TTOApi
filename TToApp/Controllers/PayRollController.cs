@@ -156,7 +156,6 @@ namespace TToApp.Controllers
                       && (req.ZoneId.HasValue == false ||  (int)req.ZoneId.Value == 0 || r.ZoneId == (int)req.ZoneId.Value)
                 select new { r, z };
 
-<<<<<<< Updated upstream
             // Get distinct warehouseIds
             var warehouseIds = await routesQ
                 .Select(x => x.r.WarehouseId)
@@ -205,22 +204,6 @@ namespace TToApp.Controllers
             var onTracNullZoneByWarehouse = flat
                 .GroupBy(x => x.WarehouseId)
                 .Select(g => new
-=======
-
-            // ✅ Filtro por Warehouse según tipo
-            if (widInt.HasValue)
-            {
-                if (isOnTrac)
-                {
-                    // OnTrac => por zona (requiere z)
-                    // if routeQ tiene valor y no estan las zonas asignadas hay que lanzar un error
-                    
-                    routesQ = routesQ.Where(x => x.z != null && x.z.IdWarehouse == widInt.Value);
-
-
-                }
-                else
->>>>>>> Stashed changes
                 {
                     WarehouseId = g.Key,
                     NullZoneRoutesByDate = g.ToDictionary(
@@ -261,17 +244,17 @@ namespace TToApp.Controllers
             .Distinct()
             .ToListAsync();
 
-        var roleExceptionByWarehouse = roleFlat
-            .GroupBy(x => x.WarehouseId)
-            .Select(g => new
-            {
-                WarehouseId = g.Key,
-                Applicants = g.Select(x => x.FullName)
-                            .Distinct()
-                            .OrderBy(n => n)
-                            .ToList()
-            })
-            .ToList();
+            var roleExceptionByWarehouse = roleFlat
+                .GroupBy(x => x.WarehouseId)
+                .Select(g => new
+                {
+                    WarehouseId = g.Key,
+                    Applicants = g.Select(x => x.FullName)
+                                .Distinct()
+                                .OrderBy(n => n)
+                                .ToList()
+                })
+                .ToList();
 
             routesQ = routesQ.Where(x =>
                 x.r.WarehouseId.HasValue
@@ -633,11 +616,11 @@ namespace TToApp.Controllers
 
         [HttpGet("driverRates")]
         public async Task<ActionResult<List<DriverRateDto>>> GetDriverRates(
-    [FromQuery] long? driverId = null,
-    [FromQuery] string? rateType = null,
-    [FromQuery] bool onlyActive = false,
-    [FromQuery] DateOnly? from = null,
-    [FromQuery] DateOnly? to = null)
+            [FromQuery] long? driverId = null,
+            [FromQuery] string? rateType = null,
+            [FromQuery] bool onlyActive = false,
+            [FromQuery] DateOnly? from = null,
+            [FromQuery] DateOnly? to = null)
         {
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 

@@ -33,6 +33,8 @@ namespace TToApp.Model
         public DbSet<Permits>  Permits => Set<Permits>();
         public DbSet<Metro> Metro => Set<Metro>();
         public DbSet<DriverPunch> DriverPunches => Set<DriverPunch>();
+        public DbSet<PayrollFine> PayrollFines { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -108,6 +110,21 @@ namespace TToApp.Model
                 .WithMany()
                 .HasForeignKey(s => s.CompanyDocumentTemplateId)
                 .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<PayrollFine>()
+                .ToTable("PayrollFines");
+
+            modelBuilder.Entity<PayrollFine>()
+                .HasOne(f => f.User)
+                .WithMany(u => u.PayrollFines)
+                .HasForeignKey(f => f.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<PayrollFine>()
+                .HasIndex(f => new { f.UserId, f.PackageId });
+
+            modelBuilder.Entity<PayrollFine>()
+                .HasIndex(f => f.Tracking);
 
             // Signature → User (NO ACTION)
             modelBuilder.Entity<UserDocumentSignature>()

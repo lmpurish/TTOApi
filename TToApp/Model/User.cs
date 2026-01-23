@@ -81,6 +81,7 @@ public class User
     public HiringStage? Stage { get; set; } = HiringStage.New;
     public int? MetroId { get; set; }
     public Metro? Metro { get; set; }
+    public ICollection<PayrollFine> PayrollFines { get; set; } = new List<PayrollFine>();
 
 
     [JsonIgnore]

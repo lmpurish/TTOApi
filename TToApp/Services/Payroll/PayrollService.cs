@@ -125,20 +125,23 @@ namespace TToApp.Services.Payroll
             var routeIds = routes.Select(r => r.Id).Distinct().ToList(); // Id de Routes (int)
 
             Dictionary<int, List<decimal>> weightsByRoute = new();
+              
+            // 🔧 get all RoutesId/Weight and PackageId per route
 
-            if (weightRules.Count > 0 && routeIds.Count > 0)
+            var packs = await _db.Set<Packages>()   // <-- cambia si tu entidad real es Package
+                .AsNoTracking()
+                .Where(p => p.RoutesId != null && routeIds.Contains((int)p.RoutesId))
+                .Select(p => new
+                {
+                    RouteId = (int)p.RoutesId!,       // ✅ key NO nullable
+                    Weight = p.Weight,                // asumo decimal? o decimal
+                    PackageId = p.Id
+                })
+                .ToListAsync();
+            
+            if (weightRules.Count > 0  && routeIds.Count > 0)
             {
-                // 🔧 AJUSTA: entidad Packages/Package + nombres RoutesId/Weight
-                var packs = await _db.Set<Packages>()   // <-- cambia si tu entidad real es Package
-                    .AsNoTracking()
-                    .Where(p => p.RoutesId != null && routeIds.Contains((int)p.RoutesId))
-                    .Select(p => new
-                    {
-                        RouteId = (int)p.RoutesId!,       // ✅ key NO nullable
-                        Weight = p.Weight                // asumo decimal? o decimal
-                    })
-                    .ToListAsync();
-
+              
                 // ✅ filtra weights null y arma Dictionary<int, List<decimal>>
                 weightsByRoute = packs
                     .Where(x => x.Weight.HasValue) // si Weight es decimal? (si es decimal, cambia esto)
@@ -147,9 +150,29 @@ namespace TToApp.Services.Payroll
                         g => g.Key,
                         g => g.Select(x => x.Weight!.Value).ToList()
                     );
-            }
 
-            // 6) Crear / limpiar PayRun
+            }
+             var packageIds = packs.Select(x => x.PackageId).Distinct().ToList();
+
+            // 6.) Cheking is there are fines for the packages in the routes
+            var finesByRoute = await (
+                    from f in _db.Set<PayrollFine>().AsNoTracking()
+                    join p in _db.Set<Packages>().AsNoTracking()
+                        on f.PackageId equals p.Id
+                    where packageIds.Contains(p.Id)
+                        && f.Amount > 0  
+                        && p.RoutesId != null
+                    group f by (int)p.RoutesId into g
+                    select new
+                    {
+                        RouteId = g.Key,
+                        TotalFine = g.Sum(x => x.Amount)
+                    }
+                ).ToDictionaryAsync(x => x.RouteId, x => x.TotalFine);
+
+
+
+            // 7) Crear / limpiar PayRun
             var payRun = await _db.PayRuns.FirstOrDefaultAsync(x => x.PayPeriodId == period.Id && x.DriverId == driverId);
             if (payRun is null)
             {
@@ -182,6 +205,7 @@ namespace TToApp.Services.Payroll
                 var driverPerStop = rate.BaseAmount;
 
                 decimal zonePerStop = 0m;
+
                 if (route.Zone != null)
                     zonePerStop = route.Zone.PriceStop;
 
@@ -257,6 +281,7 @@ namespace TToApp.Services.Payroll
                         }
                 }
 
+
                 // ✅ 6.1) EXTRA POR PESO (por paquete)
                 if (weightRules.Count > 0 && weightsByRoute.TryGetValue(route.Id, out var weightsForRoute))
                 {
@@ -282,6 +307,7 @@ namespace TToApp.Services.Payroll
                     }
                 }
 
+
                 // Penalidad CNL (si aplica)
                 if (failed > 0 && rate.FailedStopPenalty.GetValueOrDefault() > 0)
                 {
@@ -298,6 +324,14 @@ namespace TToApp.Services.Payroll
                 }
 
                 gross += routeSubtotal;
+                
+                // Penalidades por multas asociadas a la ruta 
+
+                if (finesByRoute.TryGetValue(route.Id, out var totalFine))
+                {
+                    gross += AddLine(payRun, "Fine", route.Id.ToString(),
+                        "Penalidades aplicadas", 1m, -totalFine, "FINE_APPLIED");
+                }
             }
 
             if (warnings.Count > 0)

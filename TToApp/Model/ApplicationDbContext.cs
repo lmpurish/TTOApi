@@ -34,6 +34,10 @@ namespace TToApp.Model
         public DbSet<Metro> Metro => Set<Metro>();
         public DbSet<DriverPunch> DriverPunches => Set<DriverPunch>();
         public DbSet<PayrollFine> PayrollFines { get; set; }
+        public DbSet<PayrollBonusRule> PayrollBonusRules { get; set; } = null!;
+
+        public DbSet<PayrollPenaltyRule> PayrollPenaltyRules { get; set; } = null!;
+        //public DbSet<PayrollConfig> PayrollConfigs { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -185,10 +189,6 @@ namespace TToApp.Model
                 .HasIndex(x => x.WarehouseId)
                 .IsUnique();
 
-            modelBuilder.Entity<PayrollPenaltyRule>()
-                .HasIndex(x => new { x.PayrollConfigId, x.Type })
-                .IsUnique(false);
-
             modelBuilder.ApplyConfiguration(new PayPeriodConfig());
             modelBuilder.ApplyConfiguration(new DriverRateConfig());
             modelBuilder.ApplyConfiguration(new PayRunConfig());
@@ -196,7 +196,18 @@ namespace TToApp.Model
             modelBuilder.ApplyConfiguration(new PayrollAdjustmentConfig());
             modelBuilder.Entity<PayrollConfig>().ToTable("PayrollConfigs");
             modelBuilder.Entity<PayrollWeightRule>().ToTable("PayrollWeightRules");
-            modelBuilder.Entity<PayrollPenaltyRule>().ToTable("PayrollPenaltyRules");
+            
+            modelBuilder.Entity<PayrollPenaltyRule>(entity =>
+            {
+                entity.ToTable("PayrollPenaltyRules"); // tabla plural
+                entity.HasKey(x => x.Id)
+                    .HasName("PK_PayrollPenaltyRule"); // PK real (singular)
+                entity.HasIndex(x => new { x.PayrollConfigId, x.Type })
+                    .HasDatabaseName("IX_PayrollPenaltyRule_PayrollConfigId_Type") // índice real
+                    .IsUnique(); // ✅ no lleva parámetro
+            });
+       
+
             modelBuilder.Entity<PayrollBonusRule>().ToTable("PayrollBonusRules");
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

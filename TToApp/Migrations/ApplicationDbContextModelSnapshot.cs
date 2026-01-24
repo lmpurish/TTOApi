@@ -876,9 +876,12 @@ namespace TToApp.Migrations
                     b.Property<int>("Type")
                         .HasColumnType("int");
 
-                    b.HasKey("Id");
+                    b.HasKey("Id")
+                        .HasName("PK_PayrollPenaltyRule");
 
-                    b.HasIndex("PayrollConfigId", "Type");
+                    b.HasIndex("PayrollConfigId", "Type")
+                        .IsUnique()
+                        .HasDatabaseName("IX_PayrollPenaltyRule_PayrollConfigId_Type");
 
                     b.ToTable("PayrollPenaltyRules", (string)null);
                 });

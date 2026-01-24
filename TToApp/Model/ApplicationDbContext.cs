@@ -33,6 +33,12 @@ namespace TToApp.Model
         public DbSet<Permits>  Permits => Set<Permits>();
         public DbSet<Metro> Metro => Set<Metro>();
         public DbSet<DriverPunch> DriverPunches => Set<DriverPunch>();
+        public DbSet<PayrollFine> PayrollFines { get; set; }
+        public DbSet<PayrollBonusRule> PayrollBonusRules { get; set; } = null!;
+
+        public DbSet<PayrollPenaltyRule> PayrollPenaltyRules { get; set; } = null!;
+        //public DbSet<PayrollConfig> PayrollConfigs { get; set; } = null!;
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -109,6 +115,21 @@ namespace TToApp.Model
                 .HasForeignKey(s => s.CompanyDocumentTemplateId)
                 .OnDelete(DeleteBehavior.NoAction);
 
+            modelBuilder.Entity<PayrollFine>()
+                .ToTable("PayrollFines");
+
+            modelBuilder.Entity<PayrollFine>()
+                .HasOne(f => f.User)
+                .WithMany(u => u.PayrollFines)
+                .HasForeignKey(f => f.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<PayrollFine>()
+                .HasIndex(f => new { f.UserId, f.PackageId });
+
+            modelBuilder.Entity<PayrollFine>()
+                .HasIndex(f => f.Tracking);
+
             // Signature → User (NO ACTION)
             modelBuilder.Entity<UserDocumentSignature>()
                 .HasOne(s => s.User)
@@ -168,10 +189,6 @@ namespace TToApp.Model
                 .HasIndex(x => x.WarehouseId)
                 .IsUnique();
 
-            modelBuilder.Entity<PayrollPenaltyRule>()
-                .HasIndex(x => new { x.PayrollConfigId, x.Type })
-                .IsUnique(false);
-
             modelBuilder.ApplyConfiguration(new PayPeriodConfig());
             modelBuilder.ApplyConfiguration(new DriverRateConfig());
             modelBuilder.ApplyConfiguration(new PayRunConfig());
@@ -179,7 +196,18 @@ namespace TToApp.Model
             modelBuilder.ApplyConfiguration(new PayrollAdjustmentConfig());
             modelBuilder.Entity<PayrollConfig>().ToTable("PayrollConfigs");
             modelBuilder.Entity<PayrollWeightRule>().ToTable("PayrollWeightRules");
-            modelBuilder.Entity<PayrollPenaltyRule>().ToTable("PayrollPenaltyRules");
+            
+            modelBuilder.Entity<PayrollPenaltyRule>(entity =>
+            {
+                entity.ToTable("PayrollPenaltyRules"); // tabla plural
+                entity.HasKey(x => x.Id)
+                    .HasName("PK_PayrollPenaltyRule"); // PK real (singular)
+                entity.HasIndex(x => new { x.PayrollConfigId, x.Type })
+                    .HasDatabaseName("IX_PayrollPenaltyRule_PayrollConfigId_Type") // índice real
+                    .IsUnique(); // ✅ no lleva parámetro
+            });
+       
+
             modelBuilder.Entity<PayrollBonusRule>().ToTable("PayrollBonusRules");
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

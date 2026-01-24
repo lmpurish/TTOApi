@@ -16,5 +16,8 @@ namespace TToApp.Model
 
         [JsonIgnore]                 // <-- rompe el ciclo
         public PayRun PayRun { get; set; } = null!;
+        public DateTime? RouteDate { get; set; }   // o DateOnly? si prefieres
+        public string? ZoneArea { get; set; }
+        public long? ZoneId { get; set; }
     }
 }

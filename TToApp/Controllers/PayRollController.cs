@@ -244,17 +244,17 @@ namespace TToApp.Controllers
             .Distinct()
             .ToListAsync();
 
-        var roleExceptionByWarehouse = roleFlat
-            .GroupBy(x => x.WarehouseId)
-            .Select(g => new
-            {
-                WarehouseId = g.Key,
-                Applicants = g.Select(x => x.FullName)
-                            .Distinct()
-                            .OrderBy(n => n)
-                            .ToList()
-            })
-            .ToList();
+            var roleExceptionByWarehouse = roleFlat
+                .GroupBy(x => x.WarehouseId)
+                .Select(g => new
+                {
+                    WarehouseId = g.Key,
+                    Applicants = g.Select(x => x.FullName)
+                                .Distinct()
+                                .OrderBy(n => n)
+                                .ToList()
+                })
+                .ToList();
 
             routesQ = routesQ.Where(x =>
                 x.r.WarehouseId.HasValue
@@ -616,11 +616,11 @@ namespace TToApp.Controllers
 
         [HttpGet("driverRates")]
         public async Task<ActionResult<List<DriverRateDto>>> GetDriverRates(
-    [FromQuery] long? driverId = null,
-    [FromQuery] string? rateType = null,
-    [FromQuery] bool onlyActive = false,
-    [FromQuery] DateOnly? from = null,
-    [FromQuery] DateOnly? to = null)
+            [FromQuery] long? driverId = null,
+            [FromQuery] string? rateType = null,
+            [FromQuery] bool onlyActive = false,
+            [FromQuery] DateOnly? from = null,
+            [FromQuery] DateOnly? to = null)
         {
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 

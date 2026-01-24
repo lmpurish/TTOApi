@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TToApp.Model;
 
@@ -11,9 +12,11 @@ using TToApp.Model;
 namespace TToApp.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260119013754_v70")]
+    partial class v70
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -803,53 +806,6 @@ namespace TToApp.Migrations
                     b.ToTable("PayrollConfigs", (string)null);
                 });
 
-            modelBuilder.Entity("TToApp.Model.PayrollFine", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("Amount")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)");
-
-                    b.Property<int>("PackageId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Tracking")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int>("UserId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PackageId");
-
-                    b.HasIndex("Tracking");
-
-                    b.HasIndex("UserId", "PackageId");
-
-                    b.ToTable("PayrollFines", (string)null);
-                });
-
             modelBuilder.Entity("TToApp.Model.PayrollPenaltyRule", b =>
                 {
                     b.Property<int>("Id")
@@ -876,12 +832,9 @@ namespace TToApp.Migrations
                     b.Property<int>("Type")
                         .HasColumnType("int");
 
-                    b.HasKey("Id")
-                        .HasName("PK_PayrollPenaltyRule");
+                    b.HasKey("Id");
 
-                    b.HasIndex("PayrollConfigId", "Type")
-                        .IsUnique()
-                        .HasDatabaseName("IX_PayrollPenaltyRule_PayrollConfigId_Type");
+                    b.HasIndex("PayrollConfigId", "Type");
 
                     b.ToTable("PayrollPenaltyRules", (string)null);
                 });
@@ -1685,25 +1638,6 @@ namespace TToApp.Migrations
                     b.Navigation("Warehouse");
                 });
 
-            modelBuilder.Entity("TToApp.Model.PayrollFine", b =>
-                {
-                    b.HasOne("TToApp.Model.Packages", "Package")
-                        .WithMany()
-                        .HasForeignKey("PackageId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("User", "User")
-                        .WithMany("PayrollFines")
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Package");
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("TToApp.Model.PayrollPenaltyRule", b =>
                 {
                     b.HasOne("TToApp.Model.PayrollConfig", "PayrollConfig")
@@ -1933,8 +1867,6 @@ namespace TToApp.Migrations
                     b.Navigation("Accounts");
 
                     b.Navigation("DocumentSignatures");
-
-                    b.Navigation("PayrollFines");
 
                     b.Navigation("Profile");
 

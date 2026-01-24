@@ -774,59 +774,83 @@ public class UserController : ControllerBase
                 return BadRequest(new { message = "El Manager no tiene un almacén asignado." });
             }
 
-            var drivers = await _authContext.Users
-                   .AsNoTracking()
-                   .Include(v => v.Vehicles)
-                   .Where(u => u.WarehouseId == user.WarehouseId && u.UserRole == global::User.Role.Applicant)
-                   .Select(u => new
-                   {
-                       // Campos del usuario
-                       u.Id,
-                       u.Name,
-                       u.LastName,
-                       u.Email,
-                       u.IsActive,
-                       u.UserRole,
-                       u.WarehouseId,
-                       u.AvatarUrl,
-                       u.WasContacted,
-                       u.IsFirstLogin,
-                       u.UpdatedAt,
-                       // Campos del warehouse
-                       Warehouse = u.Warehouse != null ? new
-                       {
-                           u.Warehouse.City,
-                           u.Warehouse.Company
-                       } : null,
+            var warehouseId = user.WarehouseId;
 
-                       // Campos del profile
-                       Profile = u.Profile != null ? new
-                       {
-                           PhoneNumber = u.Profile.PhoneNumber,
-                           ssn = u.Profile.SsnLast4,
-                           address = u.Profile.Address,
-                           city = u.Profile.City,
-                           zipcode = u.Profile.ZipCode,
-                           state = u.Profile.State,
-                           dob = u.Profile.DateOfBirth
-                       } : null,
-                       Vehicle = u.Vehicles
-                            .Select(v => new
-                            {
-                                v.Make,
-                                v.Model
-                            })
-                            .FirstOrDefault(),
-                       Account = u.Accounts
-                            .Where(a => a.IsDefault)
-                            .Select(a => new
-                            {
-                                a.Id,
-                                accountNumber = a.AccountNumber,
-                                routingNumber = a.RoutingNumber
-                            })
-                            .FirstOrDefault()
-                   })
+            // Si MetroId está en Warehouse, resuélvelo aparte:
+            int? metroId = await _authContext.Warehouses
+                .AsNoTracking()
+                .Where(w => w.Id == warehouseId)
+                .Select(w => (int?)w.MetroId)
+                .FirstOrDefaultAsync();
+
+            var drivers = await _authContext.Users
+                .AsNoTracking()
+                .Include(u => u.Vehicles)
+                // (opcional) si quieres usar u.Warehouse en el projection, puedes incluirlo también:
+                .Include(u => u.Warehouse)
+                .Where(u =>
+                    u.UserRole == global::User.Role.Applicant &&
+                    (
+                        (
+                            u.MetroId == metroId &&
+                            u.WarehouseId == null
+                        )
+                        ||
+                        (
+                            u.WarehouseId == warehouseId
+                        )
+                    )
+                )
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Name,
+                    u.LastName,
+                    u.Email,
+                    u.IsActive,
+                    u.UserRole,
+                    u.WarehouseId,
+                    u.AvatarUrl,
+                    u.WasContacted,
+                    u.IsFirstLogin,
+                    u.UpdatedAt,
+                    Metro = u.Metro != null ? new
+                    {
+                        u.Metro.Id,
+                        u.Metro.City
+                    } : null,
+
+                    Warehouse = u.Warehouse != null ? new
+                    {
+                        u.Warehouse.City,
+                        u.Warehouse.Company
+                    } : null,
+
+                    Profile = u.Profile != null ? new
+                    {
+                        PhoneNumber = u.Profile.PhoneNumber,
+                        ssn = u.Profile.SsnLast4,
+                        address = u.Profile.Address,
+                        city = u.Profile.City,
+                        zipcode = u.Profile.ZipCode,
+                        state = u.Profile.State,
+                        dob = u.Profile.DateOfBirth
+                    } : null,
+
+                    Vehicle = u.Vehicles
+                        .Select(v => new { v.Make, v.Model })
+                        .FirstOrDefault(),
+
+                    Account = u.Accounts
+                        .Where(a => a.IsDefault)
+                        .Select(a => new
+                        {
+                            a.Id,
+                            accountNumber = a.AccountNumber,
+                            routingNumber = a.RoutingNumber
+                        })
+                        .FirstOrDefault()
+                })
                 .ToListAsync();
 
             return Ok(drivers);
@@ -1883,6 +1907,90 @@ public class UserController : ControllerBase
         }
     }
 
+    [HttpGet("{id:int}/incomplete-fields")]
+    public async Task<ActionResult<UserValidationResultDto>> GetIncompleteFields(int id)
+    {
+        var user = await _authContext.Users
+            .Include(u => u.Profile)
+            .Include(u => u.DocumentSignatures)
+            .Include(u => u.Vehicles)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == id);
+
+        if (user == null)
+            return NotFound();
+
+        var missing = new List<string>();
+        DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // Campos del User
+        if (string.IsNullOrWhiteSpace(user.Name))      missing.Add("Name");
+        if (string.IsNullOrWhiteSpace(user.LastName))  missing.Add("Last Name");
+        if (string.IsNullOrWhiteSpace(user.Email))     missing.Add("Email");
+        //if (string.IsNullOrWhiteSpace(user.AvatarUrl)) missing.Add("AvatarUrl");
+
+
+        // Profile (puede ser null)
+        if (user.Profile == null)
+        {
+            missing.Add("Profile");
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(user.Profile.PhoneNumber))
+                missing.Add("Phone Number");
+            if ( user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(user.Profile.DriverLicenseNumber))        
+                missing.Add("Driver License Number");
+            if (user.UserRole == global::User.Role.Driver && (user.Profile.ExpDriverLicense == null || user.Profile.ExpDriverLicense < today))
+                missing.Add("Expired Driver License");
+            if (string.IsNullOrWhiteSpace(user.Profile.SsnLast4))
+                missing.Add("SSN Last 4");
+            if (user.UserRole == global::User.Role.Driver &&string.IsNullOrWhiteSpace(user.Profile.InsuranceUrl))   
+                missing.Add("Insurance photo");
+            if (user.UserRole == global::User.Role.Driver && (user.Profile.ExpInsurance == null || user.Profile.ExpInsurance < today))
+                missing.Add("Expired Insurance");
+            if (string.IsNullOrWhiteSpace(user.Profile.SocialSecurityUrl))
+                missing.Add("Social Security photo");
+            if (user.UserRole == global::User.Role.Driver && (string.IsNullOrWhiteSpace(user.Profile.DrivingLicenseUrl)))
+                missing.Add("Driving License photo");   
+            if (user.Profile.DateOfBirth == null)
+                missing.Add("Date of Birth");
+        }
+        if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner ) && ((user.DocumentSignatures == null || !user.DocumentSignatures.Any())))
+        {
+            missing.Add("Document Signatures");
+        }
+
+
+        if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner ) && user.Warehouse == null)
+        {
+            missing.Add("Warehouse");
+        }
+
+        if (user.UserRole == global::User.Role.Driver && (user.Vehicles == null || !user.Vehicles.Any()))
+        {
+            missing.Add("Vehicles");
+        }
+        else
+        {
+            var i = 0;
+
+            foreach (var v in user.Vehicles)
+            {
+                if (user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(v.Make))  missing.Add($"Vehicles[{i}].Make");
+                if (user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(v.Model)) missing.Add($"Vehicles[{i}].Model");
+                i++;
+            }
+        }
+
+        var result = new UserValidationResultDto
+        {
+            UserId = user.Id,
+            MissingFields = missing
+        };
+
+        return Ok(result);
+    }
+
 
 
 
@@ -2030,4 +2138,11 @@ public class SendMessageApplicantDto
     public int Id { get; set; }                 // applicantId
     public int? WarehouseId { get; set; }       // opcional: forzar almacén
    // public string? Channel { get; set; }        // "email" | "whatsapp" | ambos (opcional)
+}
+
+public class UserValidationResultDto
+{
+    public int UserId { get; set; }
+    public int MissingCount => MissingFields?.Count ?? 0;
+    public List<string> MissingFields { get; set; } = new();
 }

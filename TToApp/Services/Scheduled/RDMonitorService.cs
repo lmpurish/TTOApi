@@ -12,7 +12,9 @@ namespace TToApp.Services.Scheduled
     {
         private readonly ILogger<RDMonitorService> _logger;
         private readonly IServiceProvider _services;
-        private Timer _timer;
+        private Timer _weeklyTimer;
+        private Timer _dailyUnassignedZonesTimer;
+
 
         public RDMonitorService(IServiceProvider services, ILogger<RDMonitorService> logger)
         {
@@ -25,52 +27,91 @@ namespace TToApp.Services.Scheduled
             _logger.LogInformation("⏰ RDMonitorService iniciado.");
 
             var now = DateTime.Now;
-            var nextRun = now.Date.AddDays(1).AddMinutes(10);
-            var delay = nextRun - now;
-
-            _timer = new Timer(Ejecutar, null, delay, TimeSpan.FromDays(1));
-
+            var nextWeeklyRun = now.Date.AddDays(1).AddMinutes(10);
+            var weeklyDelay = nextWeeklyRun - now;
+            new Timer(EjecutarResumenSemanal, null, weeklyDelay, TimeSpan.FromDays(1));
+            
+           var dailyDelay = GetDelayUntil(new TimeSpan(6, 0, 0));
+           //var dailyDelay = GetDelayUntil(DateTime.Now.AddMinutes(1).TimeOfDay); // esto es para prrobar futuros cron
+            _dailyUnassignedZonesTimer = new Timer(
+                EjecutarUnassignedZones,
+                null,
+                dailyDelay,
+                TimeSpan.FromDays(1)
+            );
             return Task.CompletedTask;
         }
 
-        private async void Ejecutar(object state)
+        private async void EjecutarResumenSemanal(object state)
         {
             try
             {
-                if (DateTime.Now.DayOfWeek == DayOfWeek.Sunday)
-                {
-                    _logger.LogInformation("📤 Ejecutando envío de resumen semanal...");
+                if (DateTime.Now.DayOfWeek != DayOfWeek.Sunday)
+                    return;
 
-                    using var scope = _services.CreateScope();
+                _logger.LogInformation("📤 Ejecutando envío de resumen semanal...");
 
-                    var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
-                    var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
-                    var applicantService = scope.ServiceProvider.GetRequiredService<IApplicantContactService>();
+                using var scope = _services.CreateScope();
 
-                    // Puedes pasar el emailService o applicantService como necesites a RDResumenSender
-                    var resumen = new RDResumenSender(scope.ServiceProvider, emailService, config);
+                var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
+                var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
 
-                    await resumen.EnviarCorreosResumenAsync();
+                var resumen = new RDResumenSender(scope.ServiceProvider, emailService, config);
+                await resumen.EnviarCorreosResumenAsync();
 
-                    _logger.LogInformation("✅ Correos enviados correctamente.");
-                }
+                _logger.LogInformation("✅ Correos semanales enviados.");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Error al ejecutar RDMonitorService.");
+                _logger.LogError(ex, "❌ Error en resumen semanal.");
             }
         }
+
+        private async void EjecutarUnassignedZones(object state)
+        {
+            try
+            {
+                _logger.LogInformation("🚚 Ejecutando notificaciones de rutas sin zona (6:00 AM)...");
+
+                using var scope = _services.CreateScope();
+
+                var notificationService =
+                    scope.ServiceProvider.GetRequiredService<INotificationService>();
+
+                await notificationService.unassingnedZonesByManagerOntrac();
+
+                _logger.LogInformation("✅ Notificaciones de rutas sin zona creadas.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error en notificaciones de rutas sin zona.");
+            }
+        }
+
 
         public Task StopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("🛑 RDMonitorService detenido.");
-            _timer?.Dispose();
+            _weeklyTimer?.Dispose();
+            _dailyUnassignedZonesTimer?.Dispose();
             return Task.CompletedTask;
         }
 
         public void Dispose()
         {
-            _timer?.Dispose();
+            _weeklyTimer?.Dispose();
+            _dailyUnassignedZonesTimer?.Dispose();
         }
+
+        private static TimeSpan GetDelayUntil(TimeSpan targetTime)
+        {
+            var now = DateTime.Now;
+            var todayTarget = now.Date.Add(targetTime);
+
+            return todayTarget > now
+                ? todayTarget - now
+                : todayTarget.AddDays(1) - now;
+        }
+
     }
 }

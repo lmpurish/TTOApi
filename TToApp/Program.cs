@@ -15,6 +15,8 @@ using TToApp.Services.Auth;
 using TToApp.Services.Payroll;
 using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
+using TToApp.Services.Notifications;
+
 
 var builder = WebApplication.CreateBuilder(args);
 

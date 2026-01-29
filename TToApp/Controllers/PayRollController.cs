@@ -1016,7 +1016,7 @@ namespace TToApp.Controllers
 
         //     return Ok(result);
         // }
-         [HttpGet("latestGrossAmountByWarehouse")]
+        [HttpGet("latestGrossAmountByWarehouse")]
         public async Task<IActionResult> LatestGrossAmountByWarehouse()
         {
             // 1) Último PayPeriodId por Warehouse, PERO basado en lo que exista en PayRun
@@ -1050,12 +1050,16 @@ namespace TToApp.Controllers
                 group pr by new
                 {
                     pp.WarehouseId,
-                    pr.PayPeriodId
+                    pr.PayPeriodId,
+                    pp.StartDate,
+                    pp.EndDate
                 } into g
                 select new
                 {
                     WarehouseId = g.Key.WarehouseId,
                     PayPeriodId = g.Key.PayPeriodId,
+                    PeriodStartDate = g.Key.StartDate,
+                    PeriodEndDate = g.Key.EndDate,
                     GrossAmountTotal = g.Sum(x => x.GrossAmount),
                     CalculatedAt = g.Max(x => x.CalculatedAt)
                 }
@@ -1078,30 +1082,38 @@ namespace TToApp.Controllers
             var latestMap = latestByWarehouse.ToDictionary(x => x.WarehouseId!, x => x.PayPeriodId);
 
             var sumMap = sums.ToDictionary(
-                x => new { WarehouseId = x.WarehouseId!, x.PayPeriodId },
+                x => new { WarehouseId = x.WarehouseId!, x.PayPeriodId, },
                 x => x
             );
 
             // 4) Armar resultado final (en memoria) + formato de fecha
             var result = latestMap.Select(kvp =>
+        {
+            var whId = kvp.Key;
+            var ppId = kvp.Value;
+
+            whMap.TryGetValue((long)whId!, out var whName);
+            sumMap.TryGetValue(new { WarehouseId = whId, PayPeriodId = ppId }, out var s);
+
+            string? dateRange = null;
+
+            if (s != null)
             {
-                var whId = kvp.Key;          // long? / int? según modelo
-                var ppId = kvp.Value;
+                dateRange =
+                    $"{s.PeriodStartDate:MMM dd yyyy} - {s.PeriodEndDate:MMM dd yyyy}";
+            }
 
-                whMap.TryGetValue((long)whId!, out var whName);
-                sumMap.TryGetValue(new { WarehouseId = whId, PayPeriodId = ppId }, out var s);
-
-                return new
-                {
-                    WarehouseId = whId,
-                    Warehouse = whName ?? "",
-                    PayPeriodId = ppId,
-                    GrossAmountTotal = s?.GrossAmountTotal ?? 0m,
-                    Date = s?.CalculatedAt?.ToString("MMM dd yyyy", CultureInfo.InvariantCulture)
-                };
-            })
-            .OrderBy(x => x.WarehouseId)
-            .ToList();
+            return new
+            {
+                WarehouseId = whId,
+                Warehouse = whName ?? "",
+                PayPeriodId = ppId,
+                GrossAmountTotal = s?.GrossAmountTotal ?? 0m,
+                Date = dateRange
+            };
+        })
+        .OrderBy(x => x.WarehouseId)
+        .ToList();
 
             return Ok(result);
         }  

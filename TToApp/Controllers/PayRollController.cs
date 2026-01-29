@@ -942,7 +942,168 @@ namespace TToApp.Controllers
             });
         }
 
+        // [HttpGet("latestGrossAmountByWarehouse1")]
+        // public async Task<IActionResult> LatestGrossAmountByWarehouse1()
+        // {
+
+        //      // 1) Último PayPeriod por Warehouse (solo lo necesario)
+        //     var latest = await _db.Set<PayPeriod>()
+        //         .AsNoTracking()
+        //         .GroupBy(p => p.WarehouseId)
+        //         .Select(g => g.OrderByDescending(p => p.Id).Select(p => new
+        //         {
+        //             PayPeriodId = p.Id,
+        //             p.WarehouseId
+        //         }).FirstOrDefault())
+        //         .ToListAsync();
+
+        //     // Por si acaso (si algún warehouse no tiene payperiod)
+        //     latest = latest.Where(x => x != null).ToList()!;
+
+        //     var latestPayPeriodIds = latest.Select(x => x!.PayPeriodId).ToList();
+
+        //     // 2) Suma GrossAmount + Max CalculatedAt por PayPeriodId (solo para los últimos)
+        //     var sums = await _db.Set<PayRun>()
+        //         .AsNoTracking()
+        //         .Where(pr => latestPayPeriodIds.Contains(pr.PayPeriodId))
+        //         .GroupBy(pr => pr.PayPeriodId)
+        //         .Select(g => new
+        //         {
+        //             PayPeriodId = g.Key,
+        //             GrossAmountTotal = g.Sum(x => x.GrossAmount),
+        //             CalculatedAt = g.Max(x => x.CalculatedAt) 
+        //         })
+        //         .ToListAsync();
+
+        //     // 3) Warehouses (para nombre City + Company)
+        //     var warehouseIds = latest.Select(x => x!.WarehouseId).Distinct().ToList();
+
+        //     var warehouses = await _db.Set<Warehouse>()
+        //         .AsNoTracking()
+        //         .Where(w => warehouseIds.Contains(w.Id))
+        //         .Select(w => new
+        //         {
+        //             w.Id,
+        //             Name = (w.Metro.City ?? "") + "(" + (w.Company ?? "") + ")"
+        //         })
+        //         .ToListAsync();
+
+        //     var whMap = warehouses.ToDictionary(x => (long)x.Id, x => x.Name);
+        //     var sumMap = sums.ToDictionary(x => x.PayPeriodId, x => x);
+
+        //     // 4) Armar respuesta final (en memoria) + formato de fecha
+        //     var result = latest.Select(x =>
+        //     {
+        //         var ppId = x!.PayPeriodId;
+        //         sumMap.TryGetValue(ppId, out var s);
+        //         whMap.TryGetValue(x.WarehouseId!.Value, out var whName);
+
+        //         return new
+        //         {
+        //             x.WarehouseId,
+        //             Warehouse = whName ?? "",
+        //             PayPeriodId = ppId,
+        //             GrossAmountTotal = s?.GrossAmountTotal ?? 0m,
+        //             Date = s?.CalculatedAt?.ToString("MMM dd yyyy", CultureInfo.InvariantCulture)
+        //         };
+        //     })
+        //     .OrderBy(x => x.WarehouseId)
+        //     .ToList();
+
+        //     return Ok(result);
+        // }
+         [HttpGet("latestGrossAmountByWarehouse")]
+        public async Task<IActionResult> LatestGrossAmountByWarehouse()
+        {
+            // 1) Último PayPeriodId por Warehouse, PERO basado en lo que exista en PayRun
+            var latestByWarehouse = await (
+                from pr in _db.Set<PayRun>().AsNoTracking()
+                join pp in _db.Set<PayPeriod>().AsNoTracking()
+                    on pr.PayPeriodId equals pp.Id
+                group pr by pp.WarehouseId into g
+                select new
+                {
+                    WarehouseId = g.Key,                
+                    PayPeriodId = g.Max(x => x.PayPeriodId)
+                }
+            ).ToListAsync();
+
+            // Quitar warehouses nulos si WarehouseId fuera nullable
+            latestByWarehouse = latestByWarehouse
+                .Where(x => x.WarehouseId != null)
+                .ToList();
+
+            var latestPayPeriodIds = latestByWarehouse.Select(x => x.PayPeriodId).Distinct().ToList();
+            var warehouseIds = latestByWarehouse.Select(x => x.WarehouseId!).Distinct().ToList();
+
+            // 2) Suma GrossAmount + Max CalculatedAt para esos PayPeriodId, por Warehouse
+            var sums = await (
+                from pr in _db.Set<PayRun>().AsNoTracking()
+                join pp in _db.Set<PayPeriod>().AsNoTracking()
+                    on pr.PayPeriodId equals pp.Id
+                where latestPayPeriodIds.Contains(pr.PayPeriodId)
+                    && warehouseIds.Contains(pp.WarehouseId!)
+                group pr by new
+                {
+                    pp.WarehouseId,
+                    pr.PayPeriodId
+                } into g
+                select new
+                {
+                    WarehouseId = g.Key.WarehouseId,
+                    PayPeriodId = g.Key.PayPeriodId,
+                    GrossAmountTotal = g.Sum(x => x.GrossAmount),
+                    CalculatedAt = g.Max(x => x.CalculatedAt)
+                }
+            ).ToListAsync();
+
+            // 3) Warehouses (City + Company)
+            var warehouses = await _db.Set<Warehouse>()
+                .AsNoTracking()
+                .Where(w => warehouseIds.Contains((long)w.Id)) // ajusta si tu WarehouseId es int
+                .Select(w => new
+                {
+                    Id = (long)w.Id,
+                    Name = (w.Metro.City ?? "") + " (" + (w.Company ?? "") + ")"
+                })
+                .ToListAsync();
+
+            var whMap = warehouses.ToDictionary(x => x.Id, x => x.Name);
+
+            // Mapa de (WarehouseId -> sum record) para el último PayPeriodId por warehouse
+            var latestMap = latestByWarehouse.ToDictionary(x => x.WarehouseId!, x => x.PayPeriodId);
+
+            var sumMap = sums.ToDictionary(
+                x => new { WarehouseId = x.WarehouseId!, x.PayPeriodId },
+                x => x
+            );
+
+            // 4) Armar resultado final (en memoria) + formato de fecha
+            var result = latestMap.Select(kvp =>
+            {
+                var whId = kvp.Key;          // long? / int? según modelo
+                var ppId = kvp.Value;
+
+                whMap.TryGetValue((long)whId!, out var whName);
+                sumMap.TryGetValue(new { WarehouseId = whId, PayPeriodId = ppId }, out var s);
+
+                return new
+                {
+                    WarehouseId = whId,
+                    Warehouse = whName ?? "",
+                    PayPeriodId = ppId,
+                    GrossAmountTotal = s?.GrossAmountTotal ?? 0m,
+                    Date = s?.CalculatedAt?.ToString("MMM dd yyyy", CultureInfo.InvariantCulture)
+                };
+            })
+            .OrderBy(x => x.WarehouseId)
+            .ToList();
+
+            return Ok(result);
+        }  
     }
+
+     
 
     public class DriverRateDto
         {

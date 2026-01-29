@@ -56,6 +56,8 @@ namespace TToApp.Model
                 .WithOne(u => u.Warehouse)
                 .HasForeignKey(u => u.WarehouseId)
                 .OnDelete(DeleteBehavior.SetNull);
+            
+            modelBuilder.Entity<Warehouse>().Property(w => w.DriveRate).HasPrecision(10, 4);
 
             // Warehouse → Zones
             modelBuilder.Entity<Zone>()
@@ -91,6 +93,7 @@ namespace TToApp.Model
 
             // Enums a string (SOLO los que deben ir como texto)
             modelBuilder.Entity<Packages>().Property(p => p.Status).HasConversion<string>();
+            modelBuilder.Entity<Packages>().Property(p => p.Weight).HasPrecision(10, 2);
             modelBuilder.Entity<Packages>().Property(p => p.ReviewStatus).HasConversion<string>();
             modelBuilder.Entity<Notification>().Property(n => n.Type).HasConversion<string>();
 
@@ -129,6 +132,7 @@ namespace TToApp.Model
 
             modelBuilder.Entity<PayrollFine>()
                 .HasIndex(f => f.Tracking);
+                modelBuilder.Entity<PayrollFine>().Property(p => p.Amount).HasPrecision(10, 2);
 
             // Signature → User (NO ACTION)
             modelBuilder.Entity<UserDocumentSignature>()

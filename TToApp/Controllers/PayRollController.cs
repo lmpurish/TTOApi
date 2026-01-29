@@ -894,7 +894,11 @@ namespace TToApp.Controllers
             //    (RoleId=3 según tu mensaje)
             var driverIdsWithoutRate = await _db.Users
                 .AsNoTracking()
-                .Where(u => u.UserRole == global::User.Role.Driver && u.WarehouseId == warehouseId)
+                .Where(u =>
+                         (u.UserRole == global::User.Role.Driver ||
+                         u.UserRole == global::User.Role.Manager)
+                        && u.WarehouseId == warehouseId
+                    )
                 .Where(u => !_db.DriverRates.Any(dr => dr.DriverId == u.Id))
                 .Select(u => (long)u.Id)
                 .ToListAsync(ct);

@@ -109,6 +109,8 @@ builder.Services.AddDataProtection();
 builder.Services.AddSingleton<ISensitiveDataProtector, SensitiveDataProtector>();
 builder.Services.AddScoped<IUserUiSettingsService, UserUiSettingsService>();
 builder.Services.AddScoped<PayrollService>();
+builder.Services.AddScoped<PayRunApprovedSender>();
+
 
 // Auth / JWT
 var key = Encoding.ASCII.GetBytes(builder.Configuration["JwtSettings:Secret"]);

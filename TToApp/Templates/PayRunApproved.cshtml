@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PayRun</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f3f4f6;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            color: #1f2937;
+            margin-bottom: 0.5rem;
+        }
+
+        ul {
+            margin: 0.5rem 0 1.5rem 0;
+            padding-left: 1.2rem;
+        }
+
+        ul li {
+            margin-bottom: 0.25rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        table, th, td {
+            border: 1px solid #d1d5db;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f9fafb;
+        }
+
+        tr:last-child {
+            font-weight: bold;
+            background-color: #f3f4f6;
+        }
+
+        .footer {
+            margin-top: 2rem;
+            color: #6b7280;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Hola {{driverName}}</h2>
+
+        <p>Este es el detalle de tu <strong>PayRun</strong>:</p>
+
+        <ul>
+            <li><strong>Pay Period:</strong> {{payPeriod}}</li>
+            <li><strong>Calculated At:</strong> {{calculatedAt}}</li>
+            <li><strong>Gross:</strong> {{gross}}</li>
+            <li><strong>Status:</strong> {{status}}</li>
+
+        </ul>
+
+        {{tablaPayRun}}
+
+        <div class="footer">
+            — TTO Logistics
+        </div>
+    </div>
+</body>
+</html>

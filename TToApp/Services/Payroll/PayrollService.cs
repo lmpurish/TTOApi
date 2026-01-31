@@ -202,7 +202,11 @@ namespace TToApp.Services.Payroll
                 var delivered = Math.Max(0, route.DeliveryStops - route.CNL);
                 var failed = Math.Max(0, route.CNL);
 
-                var driverPerStop = rate.BaseAmount;
+                // var driverPerStop = rate.BaseAmount;
+                var driverPerStop =
+                    (rate.RateType == "Mixed" || rate.RateType == "PerStop")
+                        ? rate.BaseAmount
+                        : 0m;
 
                 decimal zonePerStop = 0m;
 
@@ -212,7 +216,7 @@ namespace TToApp.Services.Payroll
                 decimal effectivePerStop = driverPerStop;
                 string? stopTag;
 
-                if (zonePerStop > 0)
+                if (zonePerStop > 0 )
                 {
                     effectivePerStop = Math.Max(driverPerStop, zonePerStop);
                     stopTag = (driverPerStop > zonePerStop) ? "USE_DRIVER_BASE" : "USE_ZONE_RATE";
@@ -333,6 +337,20 @@ namespace TToApp.Services.Payroll
                         "Penalidades aplicadas", 1m, -totalFine, "FINE_APPLIED");
                 }
             }
+
+            if (rate.RateType == "Mixed" && rate.DailyAmount > 0) {
+                var countDays = await _db.DriverPunches
+                    .AsNoTracking()
+                    .Where(p => p.DriverId == driverId)
+                    .Where(p => DateOnly.FromDateTime(p.OccurredAtUtc) >= weekStart
+                            && DateOnly.FromDateTime(p.OccurredAtUtc) <  weekEnd)
+                    .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
+                    .Distinct()
+                    .CountAsync();
+                gross += AddLine(payRun, "DailyAmount", driverId.ToString(),
+                    "Valor Diario", 1m, rate.DailyAmount.Value * countDays, "DAILY_AMOUNT");
+            }
+            
 
             if (warnings.Count > 0)
                 AddLine(payRun, "Info", null, $"Warnings: {warnings.Count}", 0m, 0m, "WARN_SUMMARY");

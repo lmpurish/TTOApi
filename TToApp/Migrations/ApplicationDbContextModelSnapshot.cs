@@ -322,6 +322,9 @@ namespace TToApp.Migrations
                     b.Property<decimal>("BaseAmount")
                         .HasColumnType("decimal(10,2)");
 
+                    b.Property<decimal?>("DailyAmount")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<long>("DriverId")
                         .HasColumnType("bigint");
 

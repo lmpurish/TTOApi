@@ -18,11 +18,14 @@ namespace TToApp.Controllers
         private readonly ApplicationDbContext _db;
         private readonly PayrollService _service;
         private readonly ILogger<PayRollController> _logger;
-        public PayRollController(ApplicationDbContext db, PayrollService service, ILogger<PayRollController> logger)
+        private readonly PayRunApprovedSender _payRunApprovedSender;
+        public PayRollController(ApplicationDbContext db, PayrollService service, ILogger<PayRollController> logger, PayRunApprovedSender sender)
         {
             _db = db;
             _service = service;
             _logger = logger;
+            _payRunApprovedSender = sender;
+
         }
 
         // -------------------------
@@ -158,11 +161,11 @@ namespace TToApp.Controllers
 
             // Get distinct warehouseIds
             var warehouseIds = await routesQ
-                .Select(x => x.r.WarehouseId)
-                .Where(id => id != null)
-                .Distinct()
-                .ToListAsync();
-            
+               .Select(x => x.r.WarehouseId)
+               .Where(id => id != null)
+               .Distinct()
+               .ToListAsync();
+
             // Clacify is OnTrac per warehouse
             var onTracWarehouseIds = await _db.Warehouses
                 .AsNoTracking()
@@ -277,6 +280,10 @@ namespace TToApp.Controllers
                     .ToListAsync()).ToHashSet();
             }
             // 4) Calcular por driver
+
+
+            return Ok(driverIds);
+           
             foreach (var driverId in driverIds)
             {
                 if (!req.RecalculateAll && already.Contains(driverId)) continue;
@@ -476,7 +483,7 @@ namespace TToApp.Controllers
         public async Task<IActionResult> LockPeriod(long id)
         {
             var period = await _db.PayPeriods.FindAsync(id);
-            if (period is null) return NotFound("PayPeriod no existe.");
+            if (period is null) return NotFound("PayRun doesn’t exist");
             if (!string.Equals(period.Status, "Open", StringComparison.OrdinalIgnoreCase))
                 return BadRequest("Solo se puede bloquear un período en estado 'Open'.");
 
@@ -486,16 +493,27 @@ namespace TToApp.Controllers
         }
 
         /// <summary>Aprueba un PayRun (status: Draft -> Approved).</summary>
-        [HttpPost("runs/{id:long}/approve")]
+        [HttpPost("{id}/approve")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
         public async Task<IActionResult> ApproveRun(long id)
         {
             var run = await _db.PayRuns.FindAsync(id);
-            if (run is null) return NotFound("PayRun no existe.");
+
+            if (run is null)
+                return NotFound(new { message = "PayRun does not exist." });
+
+            if (run.Status == "Approved")
+                return BadRequest(new { message = "PayRun is already approved." });
+
             run.Status = "Approved";
             await _db.SaveChangesAsync();
-            return NoContent();
-        }
 
+           _=_payRunApprovedSender.SendLatestPayRunLineAsync(run.DriverId);
+
+            return Ok();
+        }
         /// <summary>Devuelve un PayRun con detalle de líneas y ajustes.</summary>
         [HttpGet("runs/{id:long}")]
         public async Task<ActionResult<PayRun>> GetRun(long id)

@@ -166,6 +166,7 @@ namespace TToApp.Controllers
                .Distinct()
                .ToListAsync();
 
+
             // Clacify is OnTrac per warehouse
             var onTracWarehouseIds = await _db.Warehouses
                 .AsNoTracking()
@@ -280,10 +281,6 @@ namespace TToApp.Controllers
                     .ToListAsync()).ToHashSet();
             }
             // 4) Calcular por driver
-
-
-            return Ok(driverIds);
-           
             foreach (var driverId in driverIds)
             {
                 if (!req.RecalculateAll && already.Contains(driverId)) continue;

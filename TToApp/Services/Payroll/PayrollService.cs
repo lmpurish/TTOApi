@@ -53,8 +53,8 @@ namespace TToApp.Services.Payroll
                 .OrderByDescending(r => r.EffectiveFrom)
                 .FirstOrDefaultAsync();
 
-            if (rate is null)
-                throw new InvalidOperationException("No hay DriverRate configurado para este driver y período.");
+            // if (rate is null)
+            //     throw new InvalidOperationException("No hay DriverRate configurado para este driver y período.");
 
             // 3) PayrollConfig (por warehouse)
             PayrollConfig? payrollConfig = null;
@@ -358,7 +358,7 @@ namespace TToApp.Services.Payroll
             payRun.GrossAmount = gross;
             payRun.CalculatedAt = DateTime.UtcNow;
             payRun.CalculatedBy = userId;
-
+            
             await _db.SaveChangesAsync();
             return payRun;
         }

@@ -72,6 +72,14 @@ namespace TToApp.Controllers
             public Dictionary<string, int> NullZoneRoutesByDate { get; set; } = new();
         }
 
+        public sealed class UserMissingRateDto
+        {
+            public long UserId { get; set; }
+            public string? Name { get; set; }
+            public string? LastName { get; set; }
+        }
+
+
         public sealed class RoleExceptionSummaryDto
         {
             public int WarehouseId { get; set; }
@@ -86,6 +94,7 @@ namespace TToApp.Controllers
             public List<PeriodSummaryRow> Drivers { get; set; } = new();
             public List<WarehouseNullZoneSummaryDto> OnTracNullZoneRoutes { get; set; } = new();
             public List<RoleExceptionSummaryDto> RoleExceptionByWarehouse { get; set; } = new();
+            public List<UserMissingRateDto> UsersWithOutRate{ get; set; } = new();
             public decimal TotalNet => Drivers.Sum(d => d.Net);
         }
 
@@ -227,7 +236,6 @@ namespace TToApp.Controllers
             .Distinct()
             .ToListAsync();
 
-            
             var roleFlat = await (
                 from rq in routesQ
                 join u in _db.Users.AsNoTracking()
@@ -266,7 +274,50 @@ namespace TToApp.Controllers
                 .Select(x => (long)x.r.UserId!)
                 .Distinct()
                 .ToListAsync();
-        
+            
+            // 1) Users especiales (solo IDs) como IQueryable (mejor que ToList y luego Select)
+            var specialUserIdsQuery = _db.Users
+                .AsNoTracking()
+                .Where(u =>
+                    u.IsActive &&
+                    u.UserRole != global::User.Role.Applicant &&
+                    u.UserRole != global::User.Role.Driver &&
+                    (!req.WarehouseId.HasValue || req.WarehouseId.Value == 0 || u.WarehouseId == (int)req.WarehouseId.Value)
+                )
+                .Select(u => (long)u.Id);
+
+            // 2) driverIds ya lo tienes como List<long>. Lo convertimos a queryable "IN (...)"
+            var driverIdsQuery = driverIds.AsQueryable();
+
+            // 3) conjunto final de candidatos (IDs únicos)
+            var candidateIds = driverIdsQuery
+                .Union(specialUserIdsQuery)
+                .Distinct();
+
+            // 4) IDs que SÍ tienen rate (se resuelve en SQL)
+            var allUserIdsWithRates = await _db.DriverRates
+                .AsNoTracking()
+                .Where(r => candidateIds.Contains(r.DriverId))
+                .Select(r => r.DriverId)
+                .Distinct()
+                .ToListAsync();
+
+            // 5) Usuarios que NO tienen rate + Name/LastName (LEFT JOIN)
+            var usersWithoutRates = await (
+                from u in _db.Users.AsNoTracking()
+                where candidateIds.Contains((long)u.Id)
+                join r in _db.DriverRates.AsNoTracking()
+                    on (long)u.Id equals r.DriverId into rr
+                where !rr.Any()
+                select new UserMissingRateDto
+                {
+                    UserId = (long)u.Id,
+                    Name = u.Name,
+                    LastName = u.LastName
+                }
+            ).ToListAsync();
+
+
             // 3) Evitar recalcular si ya existe (a menos que se pida)
             HashSet<long> already = new();
             if (!req.RecalculateAll)
@@ -277,7 +328,7 @@ namespace TToApp.Controllers
                     .ToListAsync()).ToHashSet();
             }
             // 4) Calcular por driver
-            foreach (var driverId in driverIds)
+            foreach (var driverId in allUserIdsWithRates)
             {
                 if (!req.RecalculateAll && already.Contains(driverId)) continue;
 
@@ -292,6 +343,7 @@ namespace TToApp.Controllers
                         userId: req.UserId,
                         filterZoneId: req.ZoneId
                     );
+                    
                 }
                 catch (Exception ex)
                 {
@@ -345,8 +397,9 @@ namespace TToApp.Controllers
                             .Select((name, index) => new { name, index })
                             .ToDictionary(a => (a.index + 1).ToString(), a => a.name)
                     })
-                    .ToList()
-
+                    .ToList(),
+                    UsersWithOutRate = usersWithoutRates
+                    
             };
 
             return Ok(dto);

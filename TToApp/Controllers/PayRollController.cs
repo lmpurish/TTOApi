@@ -268,19 +268,19 @@ namespace TToApp.Controllers
                 })
                 .ToList();
 
-            routesQ = routesQ.Where(x =>
+           routesQ = routesQ.Where(x =>
                 x.r.WarehouseId.HasValue
                 && !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
                 && !roleExceptionWarehouseIds.Contains(x.r.WarehouseId.Value)
             );
-            
+
             var driverIds = await routesQ
                 .Select(x => (long)x.r.UserId!)
                 .Distinct()
                 .ToListAsync();
 
-            // 1) Users especiales (solo IDs) como IQueryable (mejor que ToList y luego Select)
-            var specialUserIdsQuery = _db.Users
+            // 1) Special users (EF query)
+            var specialUserIds = await _db.Users
                 .AsNoTracking()
                 .Where(u =>
                     u.IsActive &&
@@ -288,17 +288,21 @@ namespace TToApp.Controllers
                     u.UserRole != global::User.Role.Driver &&
                     (!req.WarehouseId.HasValue || req.WarehouseId.Value == 0 || u.WarehouseId == (int)req.WarehouseId.Value)
                 )
-                .Select(u => (long)u.Id);
+                .Select(u => (long)u.Id)
+                .ToListAsync();
 
-            // 2) driverIds ya lo tienes como List<long>. Lo convertimos a queryable "IN (...)"
-            var driverIdsQuery = driverIds.AsQueryable();
+            // 2) Candidates: union en memoria
+            var candidateIds = driverIds
+                .Union(specialUserIds)
+                .Distinct()
+                .ToList();
 
-            // 3) conjunto final de candidatos (IDs únicos)
-            var candidateIds = driverIdsQuery
-                .Union(specialUserIdsQuery)
-                .Distinct();
+            if (candidateIds.Count == 0)
+            {
+                return Ok(new { message = "No drivers to process" });
+            }
 
-            // 4) IDs que SÍ tienen rate (se resuelve en SQL)
+            // 3) IDs que SÍ tienen rate (SQL)
             var allUserIdsWithRates = await _db.DriverRates
                 .AsNoTracking()
                 .Where(r => candidateIds.Contains(r.DriverId))
@@ -306,7 +310,7 @@ namespace TToApp.Controllers
                 .Distinct()
                 .ToListAsync();
 
-            // 5) Usuarios que NO tienen rate + Name/LastName (LEFT JOIN)
+            // 4) Usuarios que NO tienen rate + Name/LastName (LEFT JOIN en SQL)
             var usersWithoutRates = await (
                 from u in _db.Users.AsNoTracking()
                 where candidateIds.Contains((long)u.Id)
@@ -320,6 +324,7 @@ namespace TToApp.Controllers
                     LastName = u.LastName
                 }
             ).ToListAsync();
+
         
             // 3) Evitar recalcular si ya existe (a menos que se pida)
             HashSet<long> already = new();

@@ -339,19 +339,33 @@ namespace TToApp.Services.Payroll
             }
 
             if (rate.RateType == "Mixed" && rate.DailyAmount > 0) {
-                var countDays = await _db.DriverPunches
+ 
+                var days = await _db.DriverPunches
                     .AsNoTracking()
                     .Where(p => p.DriverId == driverId)
-                    .Where(p => DateOnly.FromDateTime(p.OccurredAtUtc) >= weekStart
-                            && DateOnly.FromDateTime(p.OccurredAtUtc) <  weekEnd)
+                    .Where(p => p.OccurredAtUtc >= weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
+                            && p.OccurredAtUtc <  weekEnd.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc))
                     .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
                     .Distinct()
-                    .CountAsync();
-                gross += AddLine(payRun, "DailyAmount", driverId.ToString(),
-                    "Valor Diario", 1m, rate.DailyAmount.Value * countDays, "DAILY_AMOUNT");
+                    .OrderBy(d => d)
+                    .ToListAsync();
+                    var dailyRate = rate.DailyAmount.GetValueOrDefault();
+                foreach (var day in days)
+                {
+                    AddLine(
+                        payRun,
+                        "DailyAmount",
+                        driverId.ToString(),
+                        $"Daily Amount on: {day:MMM dd yyyy}" ,
+                        1m,
+                        dailyRate,
+                        "DAILY_AMOUNT"
+                    );
+                }
+                gross += days.Count * dailyRate;
+
             }
             
-
             if (warnings.Count > 0)
                 AddLine(payRun, "Info", null, $"Warnings: {warnings.Count}", 0m, 0m, "WARN_SUMMARY");
 

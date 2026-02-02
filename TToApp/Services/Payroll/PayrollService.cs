@@ -344,7 +344,7 @@ namespace TToApp.Services.Payroll
                     .AsNoTracking()
                     .Where(p => p.DriverId == driverId)
                     .Where(p => p.OccurredAtUtc >= weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
-                            && p.OccurredAtUtc <  weekEnd.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc))
+                            && p.OccurredAtUtc <=  weekEnd.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc))
                     .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
                     .Distinct()
                     .OrderBy(d => d)

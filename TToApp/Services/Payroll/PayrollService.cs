@@ -340,16 +340,18 @@ namespace TToApp.Services.Payroll
 
             if (rate.RateType == "Mixed" && rate.DailyAmount > 0) {
  
+                var startUtc = weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                var endExclusiveUtc = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+
                 var days = await _db.DriverPunches
                     .AsNoTracking()
                     .Where(p => p.DriverId == driverId)
-                    .Where(p => p.OccurredAtUtc >= weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
-                            && p.OccurredAtUtc <=  weekEnd.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc))
+                    .Where(p => p.OccurredAtUtc >= startUtc && p.OccurredAtUtc < endExclusiveUtc)
                     .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
                     .Distinct()
                     .OrderBy(d => d)
                     .ToListAsync();
-                    var dailyRate = rate.DailyAmount.GetValueOrDefault();
+                var dailyRate = rate.DailyAmount.GetValueOrDefault();
                 foreach (var day in days)
                 {
                     AddLine(

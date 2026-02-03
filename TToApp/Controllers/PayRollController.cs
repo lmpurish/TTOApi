@@ -85,7 +85,7 @@ namespace TToApp.Controllers
         public sealed class RoleExceptionSummaryDto
         {
             public int WarehouseId { get; set; }
-            public Dictionary<string, string> UserName { get; set; } = new();
+            public List< string> UserNames { get; set; } = new();
         }
 
         public sealed class PeriodSummaryDto
@@ -168,18 +168,24 @@ namespace TToApp.Controllers
                 select new { r, z };
 
             // Get distinct warehouseIds
-            var warehouseIds = await routesQ
-               .Select(x => x.r.WarehouseId)
-               .Where(id => id != null)
-               .Distinct()
-               .ToListAsync();
+            var warehouseIdsAll = await routesQ
+                .Select(x => x.r.WarehouseId)
+                .Where(id => id.HasValue)
+                .Select(id => id.Value)
+                .Distinct()
+                .ToListAsync(); // List<int>
 
+            
+            if (warehouseIdsAll.Count == 0)
+            {
+                return Ok(new { message = "No warehouses to process" });
+            }
 
             // Clacify is OnTrac per warehouse
             var onTracWarehouseIds = await _db.Warehouses
                 .AsNoTracking()
                 .Where(w =>
-                    warehouseIds.Contains(w.Id) &&
+                    warehouseIdsAll.Contains(w.Id) &&
                     w.CompanyId == req.CompanyId &&
                     (w.Company ?? "").Trim().ToLower() == "ontrac"
                 )
@@ -188,58 +194,58 @@ namespace TToApp.Controllers
             
             //
            
-            var onTracWarehousesWithNullZone = await routesQ
-                .Where(x =>
-                    x.z == null &&
-                    x.r.WarehouseId.HasValue &&
-                    onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
-                )
-                .Select(x => x.r.WarehouseId!.Value)
-                .Distinct()
-                .ToListAsync();
+            var onTracWarehousesWithNullZone = new List<int>();
+            var onTracNullZoneByWarehouse = new List<WarehouseNullZoneSummaryDto>(); 
 
-            var flat = await routesQ
-                .Where(x =>
-                    x.z == null &&
-                    x.r.WarehouseId.HasValue &&
-                    onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
-                )
-                .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
-                .Select(g => new
-                {
-                    g.Key.WarehouseId,
-                    Date = g.Key.Day,
-                    Count = g.Count()
-                })
-                .ToListAsync();
-
-            var onTracNullZoneByWarehouse = flat
-                .GroupBy(x => x.WarehouseId)
-                .Select(g => new
-                {
-                    WarehouseId = g.Key,
-                    NullZoneRoutesByDate = g.ToDictionary(
-                        x => x.Date.ToString("yyyy-MM-dd"),
-                        x => x.Count
+            if (onTracWarehouseIds.Count > 0)
+            {
+                onTracWarehousesWithNullZone = await routesQ
+                    .Where(x =>
+                        x.z == null &&
+                        x.r.WarehouseId.HasValue &&
+                        onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
                     )
-                })
-                .ToList();
+                    .Select(x => x.r.WarehouseId!.Value)
+                    .Distinct()
+                    .ToListAsync();
+            }
 
-                // return Ok(onTracNullZoneByWarehouse);
-                
-                //Get WarehouseId for the applicants users
-            var roleExceptionWarehouseIds = await (
-                from rq in routesQ
-                join u in _db.Users.AsNoTracking()
-                    on rq.r.UserId equals u.Id
-                where u.UserRole == global::User.Role.Applicant
-                    && rq.r.WarehouseId.HasValue
-                select rq.r.WarehouseId.Value
-            )
-            .Distinct()
-            .ToListAsync();
+            if (onTracWarehousesWithNullZone.Count > 0)
+            {
+                var flat = await routesQ
+                    .Where(x =>
+                        x.z == null &&
+                        x.r.WarehouseId.HasValue &&
+                        onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+                    )
+                    .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
+                    .Select(g => new
+                    {
+                        g.Key.WarehouseId,
+                        Date = g.Key.Day,
+                        Count = g.Count()
+                    })
+                    .ToListAsync();
 
-            
+                onTracNullZoneByWarehouse = flat
+                    .GroupBy(x => x.WarehouseId)
+                    .Select(g => new WarehouseNullZoneSummaryDto
+                    {
+                        WarehouseId = g.Key,
+                        NullZoneRoutesByDate = g.ToDictionary(
+                            x => x.Date.ToString("yyyy-MM-dd"),
+                            x => x.Count
+                        )
+                    })
+                    .ToList();
+            }
+
+
+           routesQ = routesQ.Where(x =>
+                x.r.WarehouseId.HasValue
+                && !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+            );
+
             var roleFlat = await (
                 from rq in routesQ
                 join u in _db.Users.AsNoTracking()
@@ -250,6 +256,7 @@ namespace TToApp.Controllers
                 select new
                 {
                     WarehouseId = rq.r.WarehouseId.Value,
+                    //UserId = u.Id,
                     FullName = ((u.Name ?? "") + " " + (u.LastName ?? "")).Trim()
                 }
             )
@@ -258,35 +265,60 @@ namespace TToApp.Controllers
 
             var roleExceptionByWarehouse = roleFlat
                 .GroupBy(x => x.WarehouseId)
-                .Select(g => new
+                .Select(g => new RoleExceptionSummaryDto
                 {
                     WarehouseId = g.Key,
-                    Applicants = g.Select(x => x.FullName)
-                                .Distinct()
-                                .OrderBy(n => n)
-                                .ToList()
+                    UserNames = g
+                        .Select(x => x.FullName)
+                        .Where(n => !string.IsNullOrWhiteSpace(n))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(n => n)
+                        .ToList()
                 })
                 .ToList();
 
-           routesQ = routesQ.Where(x =>
-                x.r.WarehouseId.HasValue
-                && !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
-                && !roleExceptionWarehouseIds.Contains(x.r.WarehouseId.Value)
-            );
 
-            var driverIds = await routesQ
-                .Select(x => (long)x.r.UserId!)
+           // Warehouses presentes en routesQ  (List<int>)
+            var warehouseIdsFiltered = await routesQ
+                .Select(x => x.r.WarehouseId)
+                .Where(id => id.HasValue)
+                .Select(id => id.Value)
                 .Distinct()
                 .ToListAsync();
 
-            // 1) Special users (EF query)
+            if (warehouseIdsFiltered.Count == 0)
+                 return Ok(new { message = "No warehouses to process" });
+
+
+            // UserIds presentes en routesQ (List<int>)
+            var routeUserIdsQ = routesQ
+                .Select(rq => rq.r.UserId)
+                .Where(id => id.HasValue)
+                .Select(id => id.Value)
+                .Distinct();
+
+            // DriverIds (sin Applicants) -> List<long>
+            var driverIds = await (
+                from uid in routeUserIdsQ
+                join u in _db.Users.AsNoTracking()
+                    on uid equals u.Id
+                where u.UserRole.HasValue
+                && u.UserRole.Value != global::User.Role.Applicant
+                select (long)u.Id
+            )
+            .Distinct()
+            .ToListAsync();
+
+            // Special users (activos, no Applicant, no Driver, y warehouse dentro de los de routesQ)
             var specialUserIds = await _db.Users
                 .AsNoTracking()
                 .Where(u =>
                     u.IsActive &&
-                    u.UserRole != global::User.Role.Applicant &&
-                    u.UserRole != global::User.Role.Driver &&
-                    (!req.WarehouseId.HasValue || req.WarehouseId.Value == 0 || u.WarehouseId == (int)req.WarehouseId.Value)
+                    u.UserRole.HasValue &&
+                    u.UserRole.Value != global::User.Role.Applicant &&
+                    u.UserRole.Value != global::User.Role.Driver &&
+                    u.WarehouseId.HasValue &&
+                    warehouseIdsFiltered.Contains(u.WarehouseId.Value)
                 )
                 .Select(u => (long)u.Id)
                 .ToListAsync();
@@ -389,23 +421,9 @@ namespace TToApp.Controllers
                 StartDate = period.StartDate.ToString("yyyy-MM-dd"),
                 EndDate = period.EndDate.ToString("yyyy-MM-dd"),
                 Drivers = runs,
-                OnTracNullZoneRoutes = onTracNullZoneByWarehouse
-                    .Select(x => new WarehouseNullZoneSummaryDto
-                    {
-                        WarehouseId = x.WarehouseId,
-                        NullZoneRoutesByDate = x.NullZoneRoutesByDate
-                    })
-                    .ToList(),
-                RoleExceptionByWarehouse = roleExceptionByWarehouse
-                    .Select(x => new RoleExceptionSummaryDto
-                    {
-                        WarehouseId = x.WarehouseId,
-                        UserName = x.Applicants
-                            .Select((name, index) => new { name, index })
-                            .ToDictionary(a => (a.index + 1).ToString(), a => a.name)
-                    })
-                    .ToList(),
-                    UsersWithOutRate = usersWithoutRates
+                OnTracNullZoneRoutes = onTracNullZoneByWarehouse,
+                RoleExceptionByWarehouse = roleExceptionByWarehouse,
+                UsersWithOutRate = usersWithoutRates
 
             };
 

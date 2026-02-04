@@ -1991,7 +1991,493 @@ public class UserController : ControllerBase
         return Ok(result);
     }
 
+    // [HttpGet("{userId:int}/daily-summary")]
+    // public async Task<IActionResult> GetDailySummary(
+    //     int userId,
+    //     [FromQuery] DateOnly? from,
+    //     [FromQuery] DateOnly? to)
+    // {
+    //     // 0) Validar usuario + obtener Warehouse.Company
+    //     var userInfo = await (
+    //         from u in _authContext.Users.AsNoTracking()
+    //         join w in _authContext.Warehouses.AsNoTracking()
+    //             on u.WarehouseId equals w.Id into wj
+    //         from w in wj.DefaultIfEmpty()
+    //         where u.Id == userId
+    //         select new
+    //         {
+    //             u.Id,
+    //             u.WarehouseId,
+    //             WarehouseCompany = w != null ? w.Company : null
+    //         }
+    //     ).FirstOrDefaultAsync();
 
+    //     if (userInfo is null)
+    //         return NotFound($"User {userId} not found.");
+        
+    //     var userWarehouseId = userInfo.WarehouseId.Value;
+
+
+    //     if (!userInfo.WarehouseId.HasValue)
+    //         return Ok(new List<RouteWithPackagesDto>()); // el usuario no tiene warehouse
+
+
+    //     var isOnTrac = (userInfo.WarehouseCompany ?? "")
+    //         .Trim()
+    //         .Equals("ontrac", StringComparison.OrdinalIgnoreCase);
+
+    //     // 1) Fechas opcionales (rango semi-abierto para incluir el último día completo)
+    //     DateTime? start = from.HasValue ? from.Value.ToDateTime(TimeOnly.MinValue) : null;
+    //     DateTime? endExclusive = to.HasValue ? to.Value.AddDays(1).ToDateTime(TimeOnly.MinValue) : null;
+
+    //     // 2) Si es OnTrac: SOLO rutas (sin paquetes)
+    //     if (isOnTrac)
+    //     {
+    //         var routesOnly = await _authContext.Set<Routes>()
+    //             .AsNoTracking()
+    //             .Where(r => r.UserId.HasValue &&
+    //                 r.UserId.Value == userId &&
+    //                 r.WarehouseId.HasValue &&
+    //                 r.WarehouseId.Value == userWarehouseId
+    //             )
+    //             .Where(r => !start.HasValue || r.Date >= start.Value)
+    //             .Where(r => !endExclusive.HasValue || r.Date < endExclusive.Value)
+    //             .Select(r => new RouteWithPackagesDto
+    //             {
+    //                 RouteId = r.Id,
+    //                 Date = r.Date,
+    //                 WarehouseId = r.WarehouseId,
+    //                 DeliveryStops = r.DeliveryStops,
+    //                 RouteStatus = r.routeStatus,
+    //                 Volumen = r.Volumen,
+    //                 Los = r.Los,
+    //                 CustomerOnTime = r.CustomerOnTime,
+    //                 BranchOnTime = r.BranchOnTime,
+    //                 CNL = r.CNL,
+    //                 Attempts = r.Attempts,
+    //                 Packages = new List<PackageDto>()
+    //             })
+    //             .OrderByDescending(r => r.Date)
+    //             .ToListAsync();
+
+    //         var byDay = routesOnly
+    //             .GroupBy(r => DateOnly.FromDateTime(r.Date))
+    //             .OrderByDescending(g => g.Key)
+    //             .Select(g => new UserDailySummaryDto
+    //             {
+    //                 Date = g.Key,
+    //                 Routes = g.OrderByDescending(x => x.Date).ToList()
+    //             })
+    //             .ToList();
+
+    //         return Ok(byDay);
+    //     }
+
+
+    //     // 3) No OnTrac: rutas + paquetes (LEFT JOIN para incluir rutas sin paquetes)
+    //     var flat = await (
+    //         from r in _authContext.Set<Routes>().AsNoTracking()
+    //         join p in _authContext.Set<Packages>().AsNoTracking()
+    //             on r.Id equals p.RoutesId into pj
+    //         from p in pj.DefaultIfEmpty()
+
+    //         join z in _authContext.Set<Zone>().AsNoTracking()
+    //             on r.ZoneId equals z.Id into zj
+    //         from z in zj.DefaultIfEmpty()
+
+    //         where r.UserId.HasValue && r.UserId.Value == userId
+    //             && (!start.HasValue || r.Date >= start.Value)
+    //             && (!endExclusive.HasValue || r.Date < endExclusive.Value)
+    //             && r.WarehouseId.HasValue
+    //             && r.WarehouseId.Value == userWarehouseId
+
+    //         select new
+    //         {
+    //             // Route
+    //             RouteId = r.Id,
+    //             r.Date,
+    //             r.WarehouseId,
+    //             r.DeliveryStops,
+    //             RouteStatus = r.routeStatus,
+    //             r.Volumen,
+    //             r.Los,
+    //             r.CustomerOnTime,
+    //             r.BranchOnTime,
+    //             r.CNL,
+    //             r.Attempts,
+    //             ZoneId = r.ZoneId,
+    //             ZoneCode = z != null ? z.ZoneCode : null,
+
+    //             // Package (nullable por LEFT JOIN)
+    //             PackageId = (int?)(p != null ? p.Id : null),
+    //             Tracking = p != null ? p.Tracking : null,
+    //             IncidentDate = (DateTime?)(p != null ? p.IncidentDate : null),
+    //             Status = (PackageStatus?)(p != null ? p.Status : null),
+    //             ReviewStatus = (ReviewStatus?)(p != null ? p.ReviewStatus : null),
+
+    //             Address = p != null ? p.Address : null,
+    //             City = p != null ? p.City : null,
+    //             State = p != null ? p.State : null,
+    //             ZipCode = p != null ? p.ZipCode : null,
+
+    //             ScanLat = p != null ? p.ScanLat : null,
+    //             ScanLon = p != null ? p.ScanLon : null,
+    //             AddrLat = p != null ? p.AddrLat : null,
+    //             AddrLon = p != null ? p.AddrLon : null,
+
+    //             DaysElapsed = (int?)(p != null ? p.DaysElapsed : null),
+    //             RSP = (int?)(p != null ? p.RSP : null)
+    //         }
+    //     ).ToListAsync();
+
+    //    var routes = flat
+    //         .GroupBy(x => new
+    //         {
+    //             x.RouteId,
+    //             x.Date,
+    //             x.WarehouseId,
+    //             x.DeliveryStops,
+    //             x.Volumen,
+    //             x.Los,
+    //             x.CustomerOnTime,
+    //             x.BranchOnTime,
+    //             x.CNL,
+    //             x.Attempts,
+    //             x.RouteStatus,
+    //             x.ZoneId,
+    //             x.ZoneCode
+    //         })
+    //         .Select(g => new RouteWithPackagesDto
+    //         {
+    //             RouteId = g.Key.RouteId,
+    //             Date = g.Key.Date,
+    //             WarehouseId = g.Key.WarehouseId,
+    //             DeliveryStops = g.Key.DeliveryStops,
+    //             Volumen = g.Key.Volumen,
+    //             Los = g.Key.Los,
+    //             CustomerOnTime = g.Key.CustomerOnTime,
+    //             BranchOnTime = g.Key.BranchOnTime,
+    //             CNL = g.Key.CNL,
+    //             Attempts = g.Key.Attempts,
+    //             RouteStatus = g.Key.RouteStatus,
+
+    //             Packages = g
+    //                 .Where(x => x.PackageId.HasValue)
+    //                 .GroupBy(x => x.PackageId!.Value)
+    //                 .Select(gg => gg.First())
+    //                 .Select(x => new PackageDto
+    //                 {
+    //                     Id = x.PackageId!.Value,
+    //                     Tracking = x.Tracking,
+    //                     IncidentDate = x.IncidentDate,
+    //                     Status = (x.Status ?? PackageStatus.RD).ToString(),
+    //                     ReviewStatus = (x.ReviewStatus ?? ReviewStatus.Open).ToString(),
+    //                     Address = x.Address,
+    //                     City = x.City,
+    //                     State = x.State,
+    //                     ZipCode = x.ZipCode,
+    //                     ScanLat = x.ScanLat,
+    //                     ScanLon = x.ScanLon,
+    //                     AddrLat = x.AddrLat,
+    //                     AddrLon = x.AddrLon,
+    //                     DayElapsed = x.DaysElapsed,
+    //                     RSP = x.RSP,
+    //                     warehouseID = x.WarehouseId
+    //                 })
+    //                 .ToList()
+    //         })
+    //         .OrderByDescending(r => r.Date)
+    //         .ToList();
+
+    //     // ✅ agrupar por día (nivel superior)
+    //     var resultByDay = routes
+    //         .GroupBy(r => DateOnly.FromDateTime(r.Date))
+    //         .OrderByDescending(g => g.Key)
+    //         .Select(g => new UserDailySummaryDto
+    //         {
+    //             Date = g.Key,
+    //             Routes = g.OrderByDescending(x => x.Date).ToList()
+    //         })
+    //         .ToList();
+
+    //     return Ok(resultByDay);
+
+    // }
+
+    [HttpGet("{userId:int}/daily-summary")]
+    public async Task<IActionResult> GetDailySummary(
+        int userId,
+        [FromQuery] DateOnly? from,
+        [FromQuery] DateOnly? to)
+    {
+        // 0) Validar usuario + warehouse + company name
+        var userInfo = await (
+            from u in _authContext.Users.AsNoTracking()
+            join w in _authContext.Warehouses.AsNoTracking()
+                on u.WarehouseId equals w.Id into wj
+            from w in wj.DefaultIfEmpty()
+            where u.Id == userId
+            select new
+            {
+                u.Id,
+                u.WarehouseId,
+                WarehouseCompany = w != null ? w.Company : null
+            }
+        ).FirstOrDefaultAsync();
+
+        if (userInfo is null)
+            return NotFound($"User {userId} not found.");
+
+        if (!userInfo.WarehouseId.HasValue)
+            return Ok(new List<UserDailySummaryDto>());
+
+        var userWarehouseId = userInfo.WarehouseId.Value;
+
+        var isOnTrac = (userInfo.WarehouseCompany ?? "")
+            .Trim()
+            .Equals("ontrac", StringComparison.OrdinalIgnoreCase);
+
+        // 1) Fechas opcionales (rango semi-abierto)
+        DateTime? start = from.HasValue ? from.Value.ToDateTime(TimeOnly.MinValue) : null;
+        DateTime? endExclusive = to.HasValue ? to.Value.AddDays(1).ToDateTime(TimeOnly.MinValue) : null;
+
+        // =========================
+        // A) ROUTES (+ PACKAGES si aplica)
+        // =========================
+
+        List<RouteWithPackagesDto> routes = new();
+
+        if (isOnTrac)
+        {
+            routes = await (
+                from r in _authContext.Set<Routes>().AsNoTracking()
+                join z in _authContext.Set<Zone>().AsNoTracking()
+                    on r.ZoneId equals z.Id into zj
+                from z in zj.DefaultIfEmpty()
+
+                where r.UserId.HasValue && r.UserId.Value == userId
+                    && r.WarehouseId.HasValue && r.WarehouseId.Value == userWarehouseId
+                    && (!start.HasValue || r.Date >= start.Value)
+                    && (!endExclusive.HasValue || r.Date < endExclusive.Value)
+
+                select new RouteWithPackagesDto
+                {
+                    RouteId = r.Id,
+                    Date = r.Date,
+                    WarehouseId = r.WarehouseId,
+                    DeliveryStops = r.DeliveryStops,
+                    Volumen = r.Volumen,
+                    Los = r.Los,
+                    CustomerOnTime = r.CustomerOnTime,
+                    BranchOnTime = r.BranchOnTime,
+                    CNL = r.CNL,
+                    Attempts = r.Attempts,
+                    RouteStatus = r.routeStatus,
+
+                    // ✅ nuevo campo
+                    ZoneCode = z != null ? z.ZoneCode : null,
+
+                    Packages = new List<PackageDto>() // vacío (OnTrac / sin paquetes)
+                }
+            )
+            .OrderByDescending(x => x.Date)
+            .ToListAsync();
+
+        }
+        else
+        {
+            var flat = await (
+                from r in _authContext.Set<Routes>().AsNoTracking()
+                join p in _authContext.Set<Packages>().AsNoTracking()
+                    on r.Id equals p.RoutesId into pj
+                from p in pj.DefaultIfEmpty()
+                join z in _authContext.Set<Zone>().AsNoTracking()
+                    on r.ZoneId equals z.Id into zj
+                from z in zj.DefaultIfEmpty()
+
+                where r.UserId.HasValue && r.UserId.Value == userId
+                    && r.WarehouseId.HasValue && r.WarehouseId.Value == userWarehouseId
+                    && (!start.HasValue || r.Date >= start.Value)
+                    && (!endExclusive.HasValue || r.Date < endExclusive.Value)
+
+                select new
+                {
+                    // Route
+                    RouteId = r.Id,
+                    r.Date,
+                    r.WarehouseId,
+                    r.DeliveryStops,
+                    RouteStatus = r.routeStatus,
+                    r.Volumen,
+                    r.Los,
+                    r.CustomerOnTime,
+                    r.BranchOnTime,
+                    r.CNL,
+                    r.Attempts,
+                    ZoneCode = z != null ? z.ZoneCode : null,
+
+                    // Package
+                    PackageId = (int?)(p != null ? p.Id : null),
+                    Tracking = p != null ? p.Tracking : null,
+                    IncidentDate = (DateTime?)(p != null ? p.IncidentDate : null),
+                    Status = (PackageStatus?)(p != null ? p.Status : null),
+                    ReviewStatus = (ReviewStatus?)(p != null ? p.ReviewStatus : null),
+                    Address = p != null ? p.Address : null,
+                    City = p != null ? p.City : null,
+                    State = p != null ? p.State : null,
+                    ZipCode = p != null ? p.ZipCode : null,
+                    ScanLat = p != null ? p.ScanLat : null,
+                    ScanLon = p != null ? p.ScanLon : null,
+                    AddrLat = p != null ? p.AddrLat : null,
+                    AddrLon = p != null ? p.AddrLon : null,
+                    DaysElapsed = (int?)(p != null ? p.DaysElapsed : null),
+                    RSP = (int?)(p != null ? p.RSP : null)
+                }
+            ).ToListAsync();
+
+            routes = flat
+                .GroupBy(x => new
+                {
+                    x.RouteId,
+                    x.Date,
+                    x.WarehouseId,
+                    x.DeliveryStops,
+                    x.RouteStatus,
+                    x.Volumen,
+                    x.Los,
+                    x.CustomerOnTime,
+                    x.BranchOnTime,
+                    x.CNL,
+                    x.Attempts,
+                    x.ZoneCode
+                })
+                .Select(g => new RouteWithPackagesDto
+                {
+                    RouteId = g.Key.RouteId,
+                    Date = g.Key.Date,
+                    WarehouseId = g.Key.WarehouseId,
+                    DeliveryStops = g.Key.DeliveryStops,
+                    Volumen = g.Key.Volumen,
+                    Los = g.Key.Los,
+                    CustomerOnTime = g.Key.CustomerOnTime,
+                    BranchOnTime = g.Key.BranchOnTime,
+                    CNL = g.Key.CNL,
+                    Attempts = g.Key.Attempts,
+                    RouteStatus = g.Key.RouteStatus,
+                    ZoneCode = g.Key.ZoneCode,
+                    Packages = g.Where(x => x.PackageId.HasValue)
+                        .GroupBy(x => x.PackageId!.Value)
+                        .Select(gg => gg.First())
+                        .Select(x => new PackageDto
+                        {
+                            Id = x.PackageId!.Value,
+                            Tracking = x.Tracking,
+                            IncidentDate = x.IncidentDate,
+                            Status = (x.Status ?? PackageStatus.RD).ToString(),
+                            ReviewStatus = (x.ReviewStatus ?? ReviewStatus.Open).ToString(),
+                            Address = x.Address,
+                            City = x.City,
+                            State = x.State,
+                            ZipCode = x.ZipCode,
+                            ScanLat = x.ScanLat,
+                            ScanLon = x.ScanLon,
+                            AddrLat = x.AddrLat,
+                            AddrLon = x.AddrLon,
+                            DayElapsed = x.DaysElapsed,
+                            RSP = x.RSP,
+                            warehouseID = x.WarehouseId
+                        })
+                        .ToList()
+                })
+                .ToList();
+        }
+
+        // =========================
+        // B) PAYRUN LINES del usuario (DriverId)
+        // =========================
+
+        var payRunLines = await (
+            from l in _authContext.PayRunLines.AsNoTracking()
+            join pr in _authContext.PayRuns.AsNoTracking()
+                on l.PayRunId equals pr.Id
+            where pr.DriverId == userId
+                && l.RouteDate.HasValue
+                && (!start.HasValue || l.RouteDate >= start.Value)
+                && (!endExclusive.HasValue || l.RouteDate < endExclusive.Value)
+                // && pr.Status == "Completed"
+            select new PayRunLineDto
+            {
+                Id = l.Id,
+                PayRunId = l.PayRunId,
+                SourceType = l.SourceType,
+                SourceId = l.SourceId,
+                Description = l.Description,
+                Qty = l.Qty,
+                Rate = l.Rate,
+                Amount = l.Amount,
+                Tags = l.Tags,
+                RouteDate = l.RouteDate,
+                ZoneId = l.ZoneId,
+                ZoneArea = l.ZoneArea
+            }
+        ).ToListAsync();
+        // return Ok(new
+        //     {
+        //         count = payRunLines.Count,
+        //         items = payRunLines
+        //     });
+        // =========================
+        // C) MERGE por día (DateOnly)
+        // =========================
+
+        // diccionario día -> dto
+        var map = new Dictionary<DateOnly, UserDailySummaryDto>();
+
+        void EnsureDay(DateOnly d)
+        {
+            if (!map.ContainsKey(d))
+            {
+                map[d] = new UserDailySummaryDto
+                {
+                    Date = d.ToString("yyyy-MM-dd"),
+                    Routes = new List<RouteWithPackagesDto>(),
+                    PayRunLines = new List<PayRunLineDto>()
+                };
+            }
+        }
+
+        foreach (var r in routes)
+        {
+            var day = DateOnly.FromDateTime(r.Date);
+            EnsureDay(day);
+            map[day].Routes.Add(r);
+        }
+
+        foreach (var l in payRunLines)
+        {
+            var day = DateOnly.FromDateTime(l.RouteDate!.Value);
+            EnsureDay(day);
+            map[day].PayRunLines.Add(l);
+        }
+
+       // ordenar rutas y líneas dentro de cada día (opcional pero recomendado)
+        foreach (var d in map.Values)
+        {
+            d.Routes = d.Routes.OrderByDescending(x => x.Date).ToList();
+            d.PayRunLines = d.PayRunLines
+                .OrderByDescending(x => x.RouteDate)
+                .ThenBy(x => x.Id)
+                .ToList();
+        }
+
+        // ordenar días (más reciente primero)
+        var result = map
+            .OrderByDescending(kvp => kvp.Key)
+            .Select(kvp => kvp.Value)
+            .ToList();
+
+        return Ok(result);
+    }
 
 
 }
@@ -2146,3 +2632,60 @@ public class UserValidationResultDto
     public int MissingCount => MissingFields?.Count ?? 0;
     public List<string> MissingFields { get; set; } = new();
 }
+// public sealed class PackageDto
+// {
+//     public int Id { get; set; }
+//     public string Tracking { get; set; } = "";
+//     public TToApp.Model.PackageStatus Status { get; set; }
+//     public DateTime IncidentDate { get; set; }
+// }
+
+public sealed class RouteWithPackagesDto
+{
+    public int RouteId { get; set; }
+    public DateTime Date { get; set; }
+    public int? WarehouseId { get; set; }
+    public int DeliveryStops { get; set; }
+    public int Volumen { get; set; }
+    public double Los { get; set; }
+    public double CustomerOnTime { get; set; }
+    public double BranchOnTime { get; set; }
+    public int CNL { get; set; }
+    public int Attempts { get; set; }
+    public  string? ZoneCode { get; set; }
+    public TToApp.Model.RouteStatus? RouteStatus { get; set; }
+    public List<PackageDto> Packages { get; set; } = new();
+}
+
+public sealed class UserDailySummaryDto
+{
+    public string Date { get; set; } = null!; // "yyyy-MM-dd"
+    public List<RouteWithPackagesDto> Routes { get; set; } = new();
+    public List<PayRunLineDto> PayRunLines { get; set; } = new();
+    // Flags / Conteos
+    public bool HasRoutes => Routes.Count > 0;
+    public bool HasPayroll => PayRunLines.Count > 0;
+    public int RoutesCount => Routes.Count;
+    public int PayRunLinesCount => PayRunLines.Count;
+
+    // ✅ Totales por día (Routes)
+    public int RoutesTotalStops => Routes.Sum(r => r.DeliveryStops);
+    public int RoutesCNL => Routes.Sum(r => r.CNL);
+    public int PackagesTotal => Routes.Sum(r => r.Packages?.Count ?? 0);
+
+    // (Opcional) Delivered stops del día
+    public int RoutesDeliveredStops => Routes.Sum(r => Math.Max(0, r.DeliveryStops - r.CNL));
+
+    // ✅ Totales por día (Payroll)
+    public decimal PayrollTotal => PayRunLines.Sum(x => x.Amount);
+    public decimal PayrollPositive => PayRunLines.Where(x => x.Amount > 0).Sum(x => x.Amount);
+    public decimal PayrollNegative => PayRunLines.Where(x => x.Amount < 0).Sum(x => x.Amount);
+
+    public Dictionary<string, decimal> PayrollBySourceType =>
+        PayRunLines
+            .GroupBy(x => x.SourceType ?? "")
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
+}
+
+
+

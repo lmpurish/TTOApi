@@ -14,5 +14,8 @@ namespace TToApp.Model
 
         [JsonIgnore]
         public PayRun PayRun { get; set; } = null!;
+        public string? RefType { get; set; }   // "Loan"
+        public string? RefId { get; set; }     // loanId
+
     }
 }

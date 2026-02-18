@@ -175,14 +175,12 @@ namespace TToApp.Controllers
                 .Distinct()
                 .ToListAsync(); // List<int>
 
+            var onTracWarehousesWithNullZone = new List<int>();
+            var onTracNullZoneByWarehouse = new List<WarehouseNullZoneSummaryDto>(); 
             
-            if (warehouseIdsAll.Count == 0)
+            if (warehouseIdsAll.Count > 0)
             {
-                return Ok(new { message = "No warehouses to process" });
-            }
-
-            // Clacify is OnTrac per warehouse
-            var onTracWarehouseIds = await _db.Warehouses
+               var onTracWarehouseIds = await _db.Warehouses
                 .AsNoTracking()
                 .Where(w =>
                     warehouseIdsAll.Contains(w.Id) &&
@@ -194,57 +192,54 @@ namespace TToApp.Controllers
             
             //
            
-            var onTracWarehousesWithNullZone = new List<int>();
-            var onTracNullZoneByWarehouse = new List<WarehouseNullZoneSummaryDto>(); 
-
-            if (onTracWarehouseIds.Count > 0)
-            {
-                onTracWarehousesWithNullZone = await routesQ
-                    .Where(x =>
-                        x.z == null &&
-                        x.r.WarehouseId.HasValue &&
-                        onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
-                    )
-                    .Select(x => x.r.WarehouseId!.Value)
-                    .Distinct()
-                    .ToListAsync();
-            }
-
-            if (onTracWarehousesWithNullZone.Count > 0)
-            {
-                var flat = await routesQ
-                    .Where(x =>
-                        x.z == null &&
-                        x.r.WarehouseId.HasValue &&
-                        onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
-                    )
-                    .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
-                    .Select(g => new
-                    {
-                        g.Key.WarehouseId,
-                        Date = g.Key.Day,
-                        Count = g.Count()
-                    })
-                    .ToListAsync();
-
-                onTracNullZoneByWarehouse = flat
-                    .GroupBy(x => x.WarehouseId)
-                    .Select(g => new WarehouseNullZoneSummaryDto
-                    {
-                        WarehouseId = g.Key,
-                        NullZoneRoutesByDate = g.ToDictionary(
-                            x => x.Date.ToString("yyyy-MM-dd"),
-                            x => x.Count
+                if (onTracWarehouseIds.Count > 0)
+                {
+                    onTracWarehousesWithNullZone = await routesQ
+                        .Where(x =>
+                            x.z == null &&
+                            x.r.WarehouseId.HasValue &&
+                            onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
                         )
-                    })
-                    .ToList();
+                        .Select(x => x.r.WarehouseId!.Value)
+                        .Distinct()
+                        .ToListAsync();
+                }
+
+                if (onTracWarehousesWithNullZone.Count > 0)
+                {
+                    var flat = await routesQ
+                        .Where(x =>
+                            x.z == null &&
+                            x.r.WarehouseId.HasValue &&
+                            onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+                        )
+                        .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
+                        .Select(g => new
+                        {
+                            g.Key.WarehouseId,
+                            Date = g.Key.Day,
+                            Count = g.Count()
+                        })
+                        .ToListAsync();
+
+                    onTracNullZoneByWarehouse = flat
+                        .GroupBy(x => x.WarehouseId)
+                        .Select(g => new WarehouseNullZoneSummaryDto
+                        {
+                            WarehouseId = g.Key,
+                            NullZoneRoutesByDate = g.ToDictionary(
+                                x => x.Date.ToString("yyyy-MM-dd"),
+                                x => x.Count
+                            )
+                        })
+                        .ToList();
+                          
+                }
+                routesQ = routesQ.Where(x =>
+                    x.r.WarehouseId.HasValue
+                    && !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+                );
             }
-
-
-           routesQ = routesQ.Where(x =>
-                x.r.WarehouseId.HasValue
-                && !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
-            );
 
             var roleFlat = await (
                 from rq in routesQ
@@ -286,8 +281,8 @@ namespace TToApp.Controllers
                 .Distinct()
                 .ToListAsync();
 
-            if (warehouseIdsFiltered.Count == 0)
-                 return Ok(new { message = "No warehouses to process" });
+            // if (warehouseIdsFiltered.Count == 0)
+            //      return Ok(new { message = "No Users to process" });
 
 
             // UserIds presentes en routesQ (List<int>)
@@ -329,11 +324,6 @@ namespace TToApp.Controllers
                 .Distinct()
                 .ToList();
 
-            if (candidateIds.Count == 0)
-            {
-                return Ok(new { message = "No drivers to process" });
-            }
-
             // 3) IDs que SÍ tienen rate (SQL)
             var allUserIdsWithRates = await _db.DriverRates
                 .AsNoTracking()
@@ -357,7 +347,6 @@ namespace TToApp.Controllers
                 }
             ).ToListAsync();
 
-        
             // 3) Evitar recalcular si ya existe (a menos que se pida)
             HashSet<long> already = new();
             if (!req.RecalculateAll)

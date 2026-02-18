@@ -38,6 +38,9 @@ namespace TToApp.Model
 
         public DbSet<PayrollPenaltyRule> PayrollPenaltyRules { get; set; } = null!;
         //public DbSet<PayrollConfig> PayrollConfigs { get; set; } = null!;
+        public DbSet<EmployeeLoan> EmployeeLoans => Set<EmployeeLoan>();
+        public DbSet<LoanRepayment> LoanRepayments => Set<LoanRepayment>();
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -213,6 +216,42 @@ namespace TToApp.Model
        
 
             modelBuilder.Entity<PayrollBonusRule>().ToTable("PayrollBonusRules");
+
+            modelBuilder.Entity<EmployeeLoan>(e =>
+            {
+                e.Property(x => x.Principal).HasPrecision(10,2);
+                e.Property(x => x.Balance).HasPrecision(10,2);
+                e.Property(x => x.InstallmentAmount).HasPrecision(10,2);
+                e.Property(x => x.MaxDeductionPerPayRun).HasPrecision(10,2);
+
+                e.HasIndex(x => new { x.DriverId, x.Status });
+                e.HasIndex(x => x.Status);
+
+            });
+            modelBuilder.Entity<LoanRepayment>(e =>
+            {
+                e.Property(x => x.Amount).HasPrecision(10, 2);
+
+                e.HasOne(x => x.Loan)
+                    .WithMany(l => l.Repayments)
+                    .HasForeignKey(x => x.LoanId)
+                    .OnDelete(DeleteBehavior.Restrict); // requerido por default (LoanId no nullable)
+
+                e.HasOne(x => x.PayRun)
+                    .WithMany()
+                    .HasForeignKey(x => x.PayRunId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired(false); // SOLO PayRunId opcional
+
+                e.HasIndex(x => x.LoanId);
+                e.HasIndex(x => new { x.PayRunId, x.DriverId }); // conserva el índice útil
+            });
+            modelBuilder.Entity<PayrollAdjustment>(e =>
+            {
+                e.Property(x => x.Amount).HasPrecision(10,2);
+                // Si agregaste RefType/RefId, no hace falta nada extra.
+                e.HasIndex(x => new { x.PayRunId, x.Type });
+            });
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
 

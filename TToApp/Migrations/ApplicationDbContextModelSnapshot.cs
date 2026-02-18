@@ -365,6 +365,110 @@ namespace TToApp.Migrations
                     b.ToTable("DriverRate", (string)null);
                 });
 
+            modelBuilder.Entity("TToApp.Model.EmployeeLoan", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long?>("ApprovedBy")
+                        .HasColumnType("bigint");
+
+                    b.Property<decimal>("Balance")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long>("CreatedBy")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("DriverId")
+                        .HasColumnType("bigint");
+
+                    b.Property<decimal?>("InstallmentAmount")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<decimal?>("MaxDeductionPerPayRun")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<decimal>("Principal")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("DriverId", "Status");
+
+                    b.ToTable("EmployeeLoans");
+                });
+
+            modelBuilder.Entity("TToApp.Model.LoanRepayment", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<DateTime>("AppliedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long>("AppliedBy")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("DriverId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("LoanId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("PayRunId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("ReversedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long?>("ReversedBy")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LoanId");
+
+                    b.HasIndex("PayRunId", "DriverId");
+
+                    b.ToTable("LoanRepayments");
+                });
+
             modelBuilder.Entity("TToApp.Model.Metro", b =>
                 {
                     b.Property<int>("Id")
@@ -705,6 +809,7 @@ namespace TToApp.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
                     b.Property<decimal>("Amount")
+                        .HasPrecision(10, 2)
                         .HasColumnType("decimal(10,2)");
 
                     b.Property<DateTime>("CreatedAt")
@@ -722,6 +827,12 @@ namespace TToApp.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
 
+                    b.Property<string>("RefId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("RefType")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -729,7 +840,7 @@ namespace TToApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("PayRunId");
+                    b.HasIndex("PayRunId", "Type");
 
                     b.ToTable("PayrollAdjustment", (string)null);
                 });
@@ -1594,6 +1705,24 @@ namespace TToApp.Migrations
                     b.Navigation("Company");
                 });
 
+            modelBuilder.Entity("TToApp.Model.LoanRepayment", b =>
+                {
+                    b.HasOne("TToApp.Model.EmployeeLoan", "Loan")
+                        .WithMany("Repayments")
+                        .HasForeignKey("LoanId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TToApp.Model.PayRun", "PayRun")
+                        .WithMany()
+                        .HasForeignKey("PayRunId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Loan");
+
+                    b.Navigation("PayRun");
+                });
+
             modelBuilder.Entity("TToApp.Model.Metro", b =>
                 {
                     b.HasOne("TToApp.Model.Company", "Company")
@@ -1900,6 +2029,11 @@ namespace TToApp.Migrations
                     b.Navigation("Users");
 
                     b.Navigation("Warehouses");
+                });
+
+            modelBuilder.Entity("TToApp.Model.EmployeeLoan", b =>
+                {
+                    b.Navigation("Repayments");
                 });
 
             modelBuilder.Entity("TToApp.Model.PayPeriod", b =>

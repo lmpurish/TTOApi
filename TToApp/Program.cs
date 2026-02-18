@@ -78,9 +78,13 @@ builder.Services.AddCors(options =>
 builder.Services.AddMemoryCache();
 
 // EF Core
-var connectionString = builder.Configuration.GetConnectionString("DevConnection");
-if (string.IsNullOrEmpty(connectionString))
-    throw new Exception("Connection string 'DevConnection' not found.");
+var connectionString = builder.Configuration.GetConnectionString("Default");
+
+if (string.IsNullOrWhiteSpace(connectionString))
+    throw new InvalidOperationException(
+        "Connection string 'Default' not found. Check appsettings.{Environment}.json or environment variables."
+    );
+
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
 

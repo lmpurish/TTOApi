@@ -1,26 +1,40 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Configuration;
-using System.IO;
-using TToApp.Model;
 
-public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
+namespace TToApp.Model
 {
-    public ApplicationDbContext CreateDbContext(string[] args)
+    public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
     {
-        // Construye la configuración
-        IConfigurationRoot configuration = new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json")
-            .Build();
+        public ApplicationDbContext CreateDbContext(string[] args)
+        {
+            // EF tools corre desde el directorio actual => aquí tiene que estar tu appsettings
+            var basePath = Directory.GetCurrentDirectory();
 
-        // Obtiene la cadena de conexión
-        var connectionString = configuration.GetConnectionString("DevConnection");
+            var env =
+                Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ??
+                Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ??
+                "Production"; // o "Development" si prefieres
 
-        // Configura las opciones del DbContext
-        var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
-        optionsBuilder.UseSqlServer(connectionString);
+            var config = new ConfigurationBuilder()
+                .SetBasePath(basePath)
+                .AddJsonFile("appsettings.json", optional: true)
+                .AddJsonFile($"appsettings.{env}.json", optional: true)
+                .AddEnvironmentVariables()
+                .Build();
 
-        return new ApplicationDbContext(optionsBuilder.Options);
+            var cs = config.GetConnectionString("Default");
+
+            if (string.IsNullOrWhiteSpace(cs))
+                throw new InvalidOperationException(
+                    $"Missing ConnectionStrings:Default. BasePath='{basePath}', ENV='{env}'."
+                );
+
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlServer(cs)
+                .Options;
+
+            return new ApplicationDbContext(options);
+        }
     }
 }

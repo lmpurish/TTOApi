@@ -17,52 +17,58 @@ public class PayrollConfigsController : ControllerBase
     }
 
     // GET: api/PayrollConfigs?warehouseId=3&includeRules=false
-    // [HttpGet]
-    // public async Task<ActionResult<IEnumerable<PayrollConfigDto>>> GetAll(
-    //     [FromQuery] int? warehouseId,
-    //     [FromQuery] bool includeRules = false
-    // )
-    // {
-    //     IQueryable<PayrollConfig> q = _context.PayrollConfigs.AsNoTracking();
+     [HttpGet]
+     public async Task<ActionResult<IEnumerable<PayrollConfigDto>>> GetAll(
+         [FromQuery] int? warehouseId,
+        [FromQuery] bool includeRules = false
+   )
+     {
+        IQueryable<PayrollConfig> q = _context.PayrollConfigs.AsNoTracking();
 
-    //     if (warehouseId.HasValue)
-    //         q = q.Where(x => x.WarehouseId == warehouseId.Value);
+        if (warehouseId.HasValue)
+           q = q.Where(x => x.WarehouseId == warehouseId.Value);
 
-    //     if (includeRules)
-    //     {
-    //         q = q.Include(x => x.WeightRules)
-    //              .Include(x => x.PenaltyRules)
-    //              .Include(x => x.BonusRules);
-    //     }
+        if (includeRules)
+      {
+             q = q.Include(x => x.WeightRules)
+                  .Include(x => x.PenaltyRules)
+                  .Include(x => x.BonusRules);
+        }
 
-    //     var data = await q
-    //         .OrderByDescending(x => x.IsActive)
-    //         .ThenBy(x => x.WarehouseId)
-    //         .Select(x => new PayrollConfigDto
-    //         {
-    //             Id = x.Id,
-    //             WarehouseId = x.WarehouseId,
-    //             EnableWeightExtra = x.EnableWeightExtra,
-    //             EnablePenalties = x.EnablePenalties,
-    //             EnableBonuses = x.EnableBonuses,
-    //             DefaultPenaltyAmount = x.DefaultPenaltyAmount,
-    //             PenaltyCapPerWeek = x.PenaltyCapPerWeek,
-    //             IsActive = x.IsActive,
-    //             CreatedAt = x.CreatedAt,
-    //             UpdatedAt = x.UpdatedAt,
+        var data = await q
+            .OrderByDescending(x => x.IsActive)
+            .ThenBy(x => x.WarehouseId)
+            .Select(x => new PayrollConfigDto
+            {
+                Id = x.Id,
+                WarehouseId = x.WarehouseId,
 
-    //             WeightRulesCount = includeRules ? x.WeightRules.Count : 0,
-    //             PenaltyRulesCount = includeRules ? x.PenaltyRules.Count : 0,
-    //             BonusRulesCount = includeRules ? x.BonusRules.Count : 0
-    //         })
-    //         .ToListAsync();
+                WarehouseName = _context.Warehouses
+                    .Where(w => w.Id == x.WarehouseId)
+                    .Select(w => "(" + (w.Company ?? "") + ") " + w.City)
+                    .FirstOrDefault(),
 
-    //     return Ok(data);
-    // }
+                EnableWeightExtra = x.EnableWeightExtra,
+                EnablePenalties = x.EnablePenalties,
+                EnableBonuses = x.EnableBonuses,
+                DefaultPenaltyAmount = x.DefaultPenaltyAmount,
+                PenaltyCapPerWeek = x.PenaltyCapPerWeek,
+                IsActive = x.IsActive,
+                CreatedAt = x.CreatedAt,
+                UpdatedAt = x.UpdatedAt,
+
+                WeightRulesCount = includeRules ? x.WeightRules.Count : 0,
+                PenaltyRulesCount = includeRules ? x.PenaltyRules.Count : 0,
+                BonusRulesCount = includeRules ? x.BonusRules.Count : 0
+            })
+            .ToListAsync();
+
+        return Ok(data);
+     }
 
     // GET: api/PayrollConfigs/5?includeRules=true
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<PayrollConfig>> GetById(int id, [FromQuery] bool includeRules = false)
+    public async Task<ActionResult<PayrollConfig>> GetById(int? id, [FromQuery] bool includeRules = false)
     {
         IQueryable<PayrollConfig> q = _context.PayrollConfigs.AsNoTracking().Where(x => x.Id == id);
 
@@ -73,7 +79,24 @@ public class PayrollConfigsController : ControllerBase
                  .Include(x => x.BonusRules);
         }
 
-        var entity = await q.FirstOrDefaultAsync();
+        var entity = await q.Select(pc => new
+        {
+            pc.Id,
+            pc.WarehouseId,
+
+            WeightRules = includeRules ? pc.WeightRules : null,
+            PenaltyRules = includeRules ? pc.PenaltyRules : null,
+            BonusRules = includeRules ? pc.BonusRules : null,
+
+            Warehouse = _context.Warehouses
+            .Where(w => w.Id == pc.WarehouseId)
+                .Select(w => new
+                {
+                    w.Id,   // o w.City si quieres
+                    CompanyName ="("+w.Company+")" + w.City // ajusta según tu modelo
+                })
+        .FirstOrDefault()
+        }).FirstOrDefaultAsync();
         if (entity is null) return NotFound($"PayrollConfig {id} no existe.");
 
         // OJO: aquí devolvemos entidad (incluye reglas si pediste). Si prefieres DTO, dímelo y lo mapeo.
@@ -82,7 +105,7 @@ public class PayrollConfigsController : ControllerBase
 
     // GET: api/PayrollConfigs/by-warehouse/3?includeRules=true
     [HttpGet("by-warehouse/{warehouseId:int}")]
-    public async Task<ActionResult<PayrollConfig>> GetByWarehouseId(int warehouseId, [FromQuery] bool includeRules = false)
+    public async Task<ActionResult<PayrollConfig>> GetByWarehouseId(int? warehouseId, [FromQuery] bool includeRules = false)
     {
         IQueryable<PayrollConfig> q = _context.PayrollConfigs.AsNoTracking()
             .Where(x => x.WarehouseId == warehouseId);

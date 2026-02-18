@@ -221,6 +221,7 @@ namespace TToApp.Controllers
             wh.Company = dto.Company;
             wh.City = dto.City;
             wh.Address = dto.Address;
+            wh.SendPayroll = dto.SendPayroll;
             wh.IsHiring = dto.IsHiring;
             wh.UpdatedAt = DateTime.UtcNow;
             wh.OpenTime = ToTimeOnly(dto.OpenTime);

@@ -25,11 +25,11 @@
 
         public DateTime OccurredAtUtc { get; set; }
 
-        public double Latitude { get; set; }
-        public double Longitude { get; set; }
+        public double? Latitude { get; set; }
+        public double ?Longitude { get; set; }
         public double? AccuracyMeters { get; set; }
 
-        public double DistanceMeters { get; set; }
+        public double? DistanceMeters { get; set; }
         public bool IsWithinGeofence { get; set; }
 
         public PunchSource Source { get; set; }

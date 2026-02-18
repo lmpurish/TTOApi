@@ -23,7 +23,7 @@ public class PayrollConfigDto
 {
     public int Id { get; set; }
     public int WarehouseId { get; set; }
-
+    public string WarehouseName { get; set; }
     public bool EnableWeightExtra { get; set; }
     public bool EnablePenalties { get; set; }
     public bool EnableBonuses { get; set; }
@@ -40,3 +40,4 @@ public class PayrollConfigDto
     public int PenaltyRulesCount { get; set; }
     public int BonusRulesCount { get; set; }
 }
+

@@ -2,6 +2,8 @@
 .vs/
 bin/
 obj/
+publish-test/
+wwwroot/uploads/
 
 # Publish
 publish/

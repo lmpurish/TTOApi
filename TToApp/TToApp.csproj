@@ -46,6 +46,9 @@
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 		</Content>
 	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+	</ItemGroup>
 
 	<ItemGroup>
 	  <Folder Include="PrivateFiles\uploads\avatars\" />
@@ -55,6 +58,10 @@
 	  <Folder Include="wwwroot\storage\companies\1\documents\signatures\" />
 	  <Folder Include="wwwroot\uploads\avatares\" />
 	  <Folder Include="wwwroot\uploads\Companylogos\" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <None Include="Model\DesignTime.cs" />
 	</ItemGroup>
 
 	<!-- 👇 Esto se asegura de que los Templates se incluyan en el publish -->

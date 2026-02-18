@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Globalization;
+using System.Security.Claims;
 using System.Text;
 using TToApp.Model;
 using TToApp.Services.Payroll;
@@ -175,12 +176,18 @@ namespace TToApp.Controllers
                 .Distinct()
                 .ToListAsync(); // List<int>
 
+
             var onTracWarehousesWithNullZone = new List<int>();
-            var onTracNullZoneByWarehouse = new List<WarehouseNullZoneSummaryDto>(); 
-            
-            if (warehouseIdsAll.Count > 0)
+            var onTracNullZoneByWarehouse = new List<WarehouseNullZoneSummaryDto>();
+
+            // Si no hay warehouses, no hay nada que procesar
+            if (warehouseIdsAll.Count == 0)
             {
-               var onTracWarehouseIds = await _db.Warehouses
+                return Ok(new { message = "No warehouses to process" });
+            }
+
+            // Clarify if is OnTrac per warehouse
+            var onTracWarehouseIds = await _db.Warehouses
                 .AsNoTracking()
                 .Where(w =>
                     warehouseIdsAll.Contains(w.Id) &&
@@ -189,57 +196,58 @@ namespace TToApp.Controllers
                 )
                 .Select(w => w.Id)
                 .ToListAsync();
-            
-            //
-           
-                if (onTracWarehouseIds.Count > 0)
-                {
-                    onTracWarehousesWithNullZone = await routesQ
-                        .Where(x =>
-                            x.z == null &&
-                            x.r.WarehouseId.HasValue &&
-                            onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
-                        )
-                        .Select(x => x.r.WarehouseId!.Value)
-                        .Distinct()
-                        .ToListAsync();
-                }
 
-                if (onTracWarehousesWithNullZone.Count > 0)
-                {
-                    var flat = await routesQ
-                        .Where(x =>
-                            x.z == null &&
-                            x.r.WarehouseId.HasValue &&
-                            onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
-                        )
-                        .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
-                        .Select(g => new
-                        {
-                            g.Key.WarehouseId,
-                            Date = g.Key.Day,
-                            Count = g.Count()
-                        })
-                        .ToListAsync();
+            // Obtener warehouses OnTrac con rutas que tienen zona null
+            if (onTracWarehouseIds.Count > 0)
+            {
+                onTracWarehousesWithNullZone = await routesQ
+                    .Where(x =>
+                        x.z == null &&
+                        x.r.WarehouseId.HasValue &&
+                        onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
+                    )
+                    .Select(x => x.r.WarehouseId!.Value)
+                    .Distinct()
+                    .ToListAsync();
+            }
 
-                    onTracNullZoneByWarehouse = flat
-                        .GroupBy(x => x.WarehouseId)
-                        .Select(g => new WarehouseNullZoneSummaryDto
-                        {
-                            WarehouseId = g.Key,
-                            NullZoneRoutesByDate = g.ToDictionary(
-                                x => x.Date.ToString("yyyy-MM-dd"),
-                                x => x.Count
-                            )
-                        })
-                        .ToList();
-                          
-                }
+            // Resumen por fecha para warehouses con zona null
+            if (onTracWarehousesWithNullZone.Count > 0)
+            {
+                var flat = await routesQ
+                    .Where(x =>
+                        x.z == null &&
+                        x.r.WarehouseId.HasValue &&
+                        onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+                    )
+                    .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
+                    .Select(g => new
+                    {
+                        g.Key.WarehouseId,
+                        Date = g.Key.Day,
+                        Count = g.Count()
+                    })
+                    .ToListAsync();
+
+                onTracNullZoneByWarehouse = flat
+                    .GroupBy(x => x.WarehouseId)
+                    .Select(g => new WarehouseNullZoneSummaryDto
+                    {
+                        WarehouseId = g.Key,
+                        NullZoneRoutesByDate = g.ToDictionary(
+                            x => x.Date.ToString("yyyy-MM-dd"),
+                            x => x.Count
+                        )
+                    })
+                    .ToList();
+
+                // Excluir del query principal los warehouses OnTrac con null zone
                 routesQ = routesQ.Where(x =>
-                    x.r.WarehouseId.HasValue
-                    && !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+                    x.r.WarehouseId.HasValue &&
+                    !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
                 );
             }
+
 
             var roleFlat = await (
                 from rq in routesQ
@@ -284,6 +292,16 @@ namespace TToApp.Controllers
             // if (warehouseIdsFiltered.Count == 0)
             //      return Ok(new { message = "No Users to process" });
 
+      /*      return Ok(new
+            {
+                debug = "PAYROLL_V62_2026-02-08_ABC",  // cambia esto cada vez
+                count = warehouseIdsAll.Count,
+                warehouses = warehouseIdsAll,
+                start,
+                end,
+                warehouseReq = req.WarehouseId,
+                company = req.CompanyId
+            });*/
 
             // UserIds presentes en routesQ (List<int>)
             var routeUserIdsQ = routesQ
@@ -553,6 +571,7 @@ namespace TToApp.Controllers
         }
 
         /// <summary>Aprueba un PayRun (status: Draft -> Approved).</summary>
+        [Authorize(Roles = "Admin,Manager")]
         [HttpPost("{id}/approve")]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -567,13 +586,43 @@ namespace TToApp.Controllers
             if (run.Status == "Approved")
                 return BadRequest(new { message = "PayRun is already approved." });
 
+            if (run.Status != "Draft")
+                return BadRequest(new { message = "Only draft PayRuns can be approved." });
+
+            var currentUserId = GetCurrentUserId();
+
             run.Status = "Approved";
+            run.ApprovedAt = DateTime.UtcNow;
+            run.ApprovedByUserId = currentUserId;
+
             await _db.SaveChangesAsync();
 
-           _=_payRunApprovedSender.SendLatestPayRunLineAsync(run.DriverId);
+            // Driver
+            var user = await _db.Users
+                .AsNoTracking()
+                .Select(u => new { u.Id, u.WarehouseId })
+                .FirstOrDefaultAsync(u => u.Id == run.DriverId);
 
-            return Ok();
+            if (user is null)
+                return BadRequest(new { message = "Driver does not exist for this PayRun." });
+
+            if (user.WarehouseId is null || user.WarehouseId == 0)
+                return NoContent(); // no warehouse -> no envío
+
+            var sendPayroll = await _db.Warehouses
+                .AsNoTracking()
+                .Where(w => w.Id == user.WarehouseId)
+                .Select(w => w.SendPayroll)
+                .FirstOrDefaultAsync();
+
+            if (sendPayroll==true)
+                await _payRunApprovedSender.SendLatestPayRunLineAsync(run.DriverId);
+
+            return NoContent();
         }
+
+
+
         /// <summary>Devuelve un PayRun con detalle de líneas y ajustes.</summary>
         [HttpGet("runs/{id:long}")]
         public async Task<ActionResult<PayRun>> GetRun(long id)
@@ -743,7 +792,8 @@ namespace TToApp.Controllers
                     RescueStopRate = r.RescueStopRate,
                     NightDeliveryBonus = r.NightDeliveryBonus,
                     EffectiveFrom = r.EffectiveFrom,
-                    EffectiveTo = r.EffectiveTo
+                    EffectiveTo = r.EffectiveTo,
+                    DailyAmount = r.DailyAmount
                 }
             ).ToListAsync();
 
@@ -780,7 +830,7 @@ namespace TToApp.Controllers
             if (body.FailedStopPenalty is < 0) return BadRequest(new { Message = "FailedStopPenalty must be >= 0." });
             if (body.RescueStopRate is < 0) return BadRequest(new { Message = "RescueStopRate must be >= 0." });
             if (body.NightDeliveryBonus is < 0) return BadRequest(new { Message = "NightDeliveryBonus must be >= 0." });
-
+            if (body.DailyAmount is < 0) return BadRequest(new { Message = "Daily Amount must be >= 0." });
             // Fechas (si vienen)
             var effFrom = body.EffectiveFrom ?? entity.EffectiveFrom;
             var effTo = body.EffectiveTo ?? entity.EffectiveTo;
@@ -846,6 +896,7 @@ namespace TToApp.Controllers
             if (body.FailedStopPenalty.HasValue) entity.FailedStopPenalty = body.FailedStopPenalty;
             if (body.RescueStopRate.HasValue) entity.RescueStopRate = body.RescueStopRate;
             if (body.NightDeliveryBonus.HasValue) entity.NightDeliveryBonus = body.NightDeliveryBonus;
+            if (body.DailyAmount.HasValue) entity.DailyAmount = body.DailyAmount.Value;
 
             entity.EffectiveFrom = effFrom;
             entity.EffectiveTo = effTo;
@@ -877,7 +928,8 @@ namespace TToApp.Controllers
                         RescueStopRate = r.RescueStopRate,
                         NightDeliveryBonus = r.NightDeliveryBonus,
                         EffectiveFrom = r.EffectiveFrom,
-                        EffectiveTo = r.EffectiveTo
+                        EffectiveTo = r.EffectiveTo,
+                        DailyAmount = r.DailyAmount,
                     }
                 ).FirstAsync(ct);
 
@@ -975,7 +1027,7 @@ namespace TToApp.Controllers
                 .Where(u =>
                          (u.UserRole == global::User.Role.Driver ||
                          u.UserRole == global::User.Role.Manager)
-                        && u.WarehouseId == warehouseId
+                        && u.WarehouseId == warehouseId && u.IsActive
                     )
                 .Where(u => !_db.DriverRates.Any(dr => dr.DriverId == u.Id))
                 .Select(u => (long)u.Id)
@@ -1194,7 +1246,11 @@ namespace TToApp.Controllers
         .ToList();
 
             return Ok(result);
-        }  
+        }
+        private int GetCurrentUserId()
+        {
+            return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+        }
     }
 
      
@@ -1219,6 +1275,7 @@ namespace TToApp.Controllers
                 string.Join(" ", new[] { DriverName, DriverLastName }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
             public int? WarehouseId { get; set; }
+            public decimal? DailyAmount { get; set; }
         }
 
         public sealed class UpdateDriverRateRequest
@@ -1237,6 +1294,7 @@ namespace TToApp.Controllers
 
             public DateOnly? EffectiveFrom { get; set; }   // opcional en update
             public DateOnly? EffectiveTo { get; set; }     // opcional en update
+            public decimal? DailyAmount { get; set; }
         }
     }
 

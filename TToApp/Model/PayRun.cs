@@ -16,5 +16,7 @@
         public PayPeriod PayPeriod { get; set; } = null!;
         public ICollection<PayRunLine> Lines { get; set; } = new List<PayRunLine>();
         public ICollection<PayrollAdjustment> AdjustmentsList { get; set; } = new List<PayrollAdjustment>();
+        public int? ApprovedByUserId { get; set; }
+        public DateTime? ApprovedAt { get; set; }
     }
 }

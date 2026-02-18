@@ -9,100 +9,115 @@ namespace TToApp.Services.Payroll
     {
         private readonly ApplicationDbContext _db;
         private readonly EmailService _emailService;
+        private readonly ILogger<PayRunApprovedSender> _logger;
 
-        public PayRunApprovedSender(ApplicationDbContext db, EmailService emailService)
+        public PayRunApprovedSender(ApplicationDbContext db, EmailService emailService, ILogger<PayRunApprovedSender> logger)
         {
             _db = db;
             _emailService = emailService;
+            _logger = logger;
         }
 
         public async Task SendLatestPayRunLineAsync(long driverId)
         {
-            // 1) Usuario (email)
-            var user = await _db.Set<User>()
-                .AsNoTracking()
-                .Where(u => u.Id == driverId)
-                .Select(u => new
-                {
-                    u.Id,
-                    u.Email,
-                    Name = u.Name,
-                    LastName = u.LastName
-                })
-                .FirstOrDefaultAsync();
-
-            if (user == null) throw new InvalidOperationException($"User {driverId} no existe.");
-            if (string.IsNullOrWhiteSpace(user.Email))
-                throw new InvalidOperationException($"User {driverId} no tiene Email.");
-
-            // 2) Último PayRun Approved
-            var payRun = await _db.Set<PayRun>()
-                .AsNoTracking()
-                .Where(pr => pr.DriverId == driverId && pr.Status == "Draft")
-                .Join(
-                    _db.Set<PayPeriod>().AsNoTracking(),
-                    pr => pr.PayPeriodId,
-                    pp => pp.Id,
-                    (pr, pp) => new
+            try
+            {
+                // 1) Usuario (email)
+                var user = await _db.Set<User>()
+                    .AsNoTracking()
+                    .Where(u => u.Id == driverId)
+                    .Select(u => new
                     {
-                        pr.Id,
-                       // pr.PayPeriodId,
-                        pr.GrossAmount,
-                       // pr.Adjustments,
-                        pr.NetAmount,
-                        pr.CalculatedAt,
-                        pr.Status,
-                        PeriodStartDate = pp.StartDate,
-                        PeriodEndDate = pp.EndDate
-                    }
-                )
-                .OrderByDescending(x => x.CalculatedAt)
-                .ThenByDescending(x => x.Id)
-                .FirstOrDefaultAsync();
+                        u.Id,
+                        u.Email,
+                        u.Name,
+                        u.LastName
+                    })
+                    .FirstOrDefaultAsync();
 
-            if (payRun == null)
-                throw new InvalidOperationException($"No existe PayRun Approved para DriverId={driverId}.");
-
-            // 3) Líneas
-            var lines = await _db.Set<PayRunLine>()
-                .AsNoTracking()
-                .Where(l => l.PayRunId == payRun.Id)
-                .OrderBy(l => l.RouteDate)
-                .ThenBy(l => l.Id)
-                .Select(l => new
+                if (user is null)
                 {
-                    //l.RouteDate,
-                    l.SourceType,
-                    l.Description,
-                    l.Qty,
-                    l.Rate,
-                    l.Amount,
-                    //l.ZoneId,
-                    //l.Tags
-                })
-                .ToListAsync();
+                    _logger.LogWarning("PayRunApproved email: User {DriverId} not found.", driverId);
+                    return;
+                }
 
-            var htmlTabla = BuildPayRunLinesHtml(lines, payRun);
-
-            // 4) Enviar (igual que tu método actual)
-            await _emailService.SendEmailAsync(
-                toEmail: user.Email!,
-                subject: $"PayRun Approved #{payRun.Id}",
-                templateFileName: "PayRunApproved.cshtml",
-                placeholders: new Dictionary<string, string>
+                if (string.IsNullOrWhiteSpace(user.Email))
                 {
-                    { "driverName", $"{user.Name} {user.LastName}".Trim() },
-                   // { "payRunId", payRun.Id.ToString() },
-                    { "payPeriod",$"{payRun.PeriodStartDate:MMM dd yyyy} - {payRun.PeriodEndDate:MMM dd yyyy}"},
-                    { "calculatedAt", payRun.CalculatedAt?.ToString("MMM dd yyyy", CultureInfo.InvariantCulture) ?? "" },
-                    { "gross", payRun.GrossAmount.ToString("0.00") },
-                    //{ "adjustments", payRun.Adjustments.ToString("0.00") },
-                    { "status", payRun.Status.Trim()},
-                    { "tablaPayRun", htmlTabla }
-                },
-                copy: false
-            );
+                    _logger.LogWarning("PayRunApproved email: User {DriverId} has no email.", driverId);
+                    return;
+                }
+
+                // 2) Último PayRun Approved
+                var payRun = await _db.Set<PayRun>()
+                    .AsNoTracking()
+                    .Where(pr => pr.DriverId == driverId && pr.Status == "Approved")
+                    .Join(
+                        _db.Set<PayPeriod>().AsNoTracking(),
+                        pr => pr.PayPeriodId,
+                        pp => pp.Id,
+                        (pr, pp) => new
+                        {
+                            pr.Id,
+                            pr.GrossAmount,
+                            pr.NetAmount,
+                            pr.CalculatedAt,
+                            pr.Status,
+                            PeriodStartDate = pp.StartDate,
+                            PeriodEndDate = pp.EndDate
+                        }
+                    )
+                    .OrderByDescending(x => x.CalculatedAt ?? DateTime.MinValue)
+                    .ThenByDescending(x => x.Id)
+                    .FirstOrDefaultAsync();
+
+                if (payRun is null)
+                {
+                    _logger.LogWarning("PayRunApproved email: No Approved PayRun for DriverId={DriverId}.", driverId);
+                    return;
+                }
+
+                // 3) Líneas
+                var lines = await _db.Set<PayRunLine>()
+                    .AsNoTracking()
+                    .Where(l => l.PayRunId == payRun.Id)
+                    .OrderBy(l => l.RouteDate)
+                    .ThenBy(l => l.Id)
+                    .Select(l => new
+                    {
+                        l.SourceType,
+                        l.Description,
+                        l.Qty,
+                        l.Rate,
+                        l.Amount
+                    })
+                    .ToListAsync();
+
+                var htmlTabla = BuildPayRunLinesHtml(lines, payRun);
+
+                // 4) Enviar
+                await _emailService.SendEmailAsync(
+                    toEmail: user.Email!,
+                    subject: $"PayRun Approved #{payRun.Id}",
+                    templateFileName: "PayRunApproved.cshtml",
+                    placeholders: new Dictionary<string, string>
+                    {
+                { "driverName", $"{user.Name} {user.LastName}".Trim() },
+                { "payPeriod", $"{payRun.PeriodStartDate:MMM dd yyyy} - {payRun.PeriodEndDate:MMM dd yyyy}" },
+                { "calculatedAt", payRun.CalculatedAt?.ToString("MMM dd yyyy", CultureInfo.InvariantCulture) ?? "" },
+                { "gross", payRun.GrossAmount.ToString("0.00") },
+                { "status", (payRun.Status ?? "").Trim() },
+                { "tablaPayRun", htmlTabla }
+                    },
+                    copy: false
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "PayRunApproved email failed for DriverId={DriverId}.", driverId);
+                // no throw: es fire-and-forget
+            }
         }
+
 
         private static string BuildPayRunLinesHtml<T>(List<T> lines, dynamic payRun)
         {

@@ -223,8 +223,32 @@ namespace TToApp.Services.Payroll
                 _db.PayrollAdjustments.RemoveRange(oldAdjs);
 
                 // si ya habías aplicado repayments en otro cálculo, bórralos también
-                var oldRepayments = _db.LoanRepayments.Where(r => r.PayRunId == payRun.Id && r.Status == "Applied");
+               var oldRepayments = await _db.LoanRepayments
+                    .Where(r => r.PayRunId == payRun.Id && r.Status == "Applied")
+                    .ToListAsync();
+
+                var grouped = oldRepayments
+                    .GroupBy(r => r.LoanId)
+                    .Select(g => new
+                    {
+                        LoanId = g.Key,
+                        TotalAmount = g.Sum(x => x.Amount)
+                    })
+                    .ToList();
+
+                foreach (var item in grouped)
+                {
+                    var loan = await _db.EmployeeLoans
+                        .FirstOrDefaultAsync(l => l.Id == item.LoanId);
+
+                    if (loan != null)
+                    {
+                        loan.Balance += item.TotalAmount;
+                    }
+                }
+
                 _db.LoanRepayments.RemoveRange(oldRepayments);
+
                 await _db.SaveChangesAsync();
                 payRun.AdjustmentsList.Clear();
             }
@@ -414,25 +438,6 @@ namespace TToApp.Services.Payroll
             await ApplyLoanDeductionsAsync(payRun, userId);
             await _db.SaveChangesAsync();
 
-            // var pendingAll = _db.ChangeTracker.Entries<PayrollAdjustment>()
-            // .Where(e => e.State == EntityState.Added)
-            // .Select(e => new { e.Entity.PayRunId, e.Entity.Amount, e.Entity.Type, e.Entity.Reason })
-            // .ToList();
-
-        // Console.WriteLine($"Pending Added PayrollAdjustments: {pendingAll.Count}");
-        // foreach (var p in pendingAll)
-        //     Console.WriteLine($"  PayRunId={p.PayRunId} Amount={p.Amount} Type={p.Type} Reason={p.Reason}");
-        //    // await _db.SaveChangesAsync();
-        //    var dbSum = await _db.PayrollAdjustments
-        //         .Where(a => a.PayRunId == payRun.Id)
-        //         .SumAsync(a => (decimal?)a.Amount) ?? 0m;
-
-        //     var pendingSum = _db.ChangeTracker.Entries<PayrollAdjustment>()
-        //         .Where(e => e.State == EntityState.Added && e.Entity.PayRunId == payRun.Id)
-        //         .Sum(e => e.Entity.Amount);
-                
-           // payRun.Adjustments = dbSum + pendingSum;
-
         //2) recalcula Adjustments total (incluye loan deductions)
             payRun.Adjustments = await _db.PayrollAdjustments
                 .Where(a => a.PayRunId == payRun.Id)
@@ -504,6 +509,7 @@ namespace TToApp.Services.Payroll
 
                 // 3) reduce saldo
                 loan.Balance -= amount;
+
                 if (loan.Balance == 0)
                     loan.Status = "Completed";
 
@@ -515,7 +521,7 @@ namespace TToApp.Services.Payroll
                         payRun.DriverId.ToString(),
                         $"Loan Deduction for Loan #{loan.Id}" ,
                         1m,
-                        amount,
+                        -amount,
                         "LOAN_DEDUCTION",
                         null
                     );

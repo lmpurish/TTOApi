@@ -3,7 +3,8 @@ namespace TToApp.DTOs
     public class LoanDto
     {
         public long Id { get; set; }
-        public long DriverId { get; set; }
+        public int DriverId { get; set; }
+        public string Driver { get; set; }
         public decimal Principal { get; set; }
         public decimal Balance { get; set; }
         public decimal? InstallmentAmount { get; set; }

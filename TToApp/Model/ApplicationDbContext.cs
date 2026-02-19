@@ -252,6 +252,25 @@ namespace TToApp.Model
                 // Si agregaste RefType/RefId, no hace falta nada extra.
                 e.HasIndex(x => new { x.PayRunId, x.Type });
             });
+
+            modelBuilder.Entity<EmployeeLoan>(e =>
+            {
+                e.HasOne(x => x.Driver)
+                    .WithMany()
+                    .HasForeignKey(x => x.DriverId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                e.HasOne(x => x.CreatedByUser)
+                    .WithMany()
+                    .HasForeignKey(x => x.CreatedBy)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                e.HasOne(x => x.ApprovedByUser)
+                    .WithMany()
+                    .HasForeignKey(x => x.ApprovedBy)
+                    .OnDelete(DeleteBehavior.Restrict);
+            });
+
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
 

@@ -27,14 +27,14 @@ namespace TToApp.Controllers
 
             var loan = new EmployeeLoan
             {
-                DriverId = req.DriverId,
+                DriverId = (int)req.DriverId,
                 Principal = req.Principal,
                 Balance = req.Principal,
                 InstallmentAmount = req.InstallmentAmount,
                 MaxDeductionPerPayRun = req.MaxDeductionPerPayRun,
                 Notes = req.Notes,
                 Status = "Draft",
-                CreatedBy = userId,
+                CreatedBy = (int)userId,
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -56,7 +56,7 @@ namespace TToApp.Controllers
                 return BadRequest($"No se puede aprobar un préstamo en estado {loan.Status}.");
 
             loan.Status = "Active";
-            loan.ApprovedBy = userId;
+            loan.ApprovedBy = (int?)userId;
             loan.ApprovedAt = DateTime.UtcNow;
 
             await _db.SaveChangesAsync();
@@ -114,6 +114,7 @@ namespace TToApp.Controllers
         {
             var loan = await _db.EmployeeLoans
                 .AsNoTracking()
+                .Include(l => l.Driver)
                 .Include(l => l.Repayments)
                 .FirstOrDefaultAsync(l => l.Id == id);
 
@@ -136,6 +137,33 @@ namespace TToApp.Controllers
                     })
             });
         }
+        [HttpGet]
+        public async Task<ActionResult<IEnumerable<object>>> GetAll()
+        {
+            var loans = await _db.EmployeeLoans
+                .AsNoTracking()
+                .Include(l => l.Driver) // 👈 relación con User/Employee
+                .Include(l => l.Repayments)
+                .ToListAsync();
+
+            return Ok(loans.Select(loan => new
+            {
+                Loan = ToDto(loan),
+                Repayments = loan.Repayments
+                    .OrderByDescending(r => r.AppliedAt)
+                    .Select(r => new
+                    {
+                        r.Id,
+                        r.PayRunId,
+                        r.Amount,
+                        r.Status,
+                        r.AppliedAt,
+                        r.ReversedAt,
+                        r.Reason
+                    })
+            }));
+        }
+
 
         [HttpGet("driver/{driverId:long}")]
         public async Task<ActionResult<IEnumerable<LoanDto>>> GetByDriver(long driverId)
@@ -247,19 +275,24 @@ namespace TToApp.Controllers
 
 
 
-        private static LoanDto ToDto(EmployeeLoan l) => new()
-        {
-            Id = l.Id,
-            DriverId = l.DriverId,
-            Principal = l.Principal,
-            Balance = l.Balance,
-            InstallmentAmount = l.InstallmentAmount,
-            MaxDeductionPerPayRun = l.MaxDeductionPerPayRun,
-            Status = l.Status,
-            Notes = l.Notes,
-            CreatedAt = l.CreatedAt,
-            ApprovedAt = l.ApprovedAt
-        };
+           private static LoanDto ToDto(EmployeeLoan l) => new()
+           {
+               Id = l.Id,
+               // 🔹 Nombre del driver
+               DriverId = l.DriverId,
+               Driver = l.Driver != null
+        ? $"{l.Driver.Name} {l.Driver.LastName}".Trim()
+        : null,
+
+               Principal = l.Principal,
+               Balance = l.Balance,
+               InstallmentAmount = l.InstallmentAmount,
+               MaxDeductionPerPayRun = l.MaxDeductionPerPayRun,
+               Status = l.Status,
+               Notes = l.Notes,
+               CreatedAt = l.CreatedAt,
+               ApprovedAt = l.ApprovedAt
+           };
 
         private long GetUserId()
         {

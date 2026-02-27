@@ -233,7 +233,7 @@ public class PayrollFinesController : ControllerBase
             var tracking = row.Cell("A").GetString()?.Trim(); // Tracking Numbe                 
             var type = row.Cell("F").GetString()?.Trim();;         // Claim Category
             decimal amount;
-            var amountStr = row.Cell("C").GetString()?.Trim();
+            var amountStr = row.Cell("B").GetString()?.Trim();
             if (!decimal.TryParse(amountStr, out amount) && !row.Cell(2).TryGetValue(out amount))
             {
                 errors.Add(new { Row = rowNum, Tracking = tracking, Error = "Amount inválido" });

@@ -9,6 +9,18 @@ using System.Security.Claims;
 using System.Text;
 using TToApp.Model;
 using TToApp.Services.Payroll;
+using iText.Kernel.Pdf;
+using iText.Layout;
+using iText.Layout.Element;
+using iText.Layout.Properties;
+using iText.IO.Font.Constants;
+using iText.Kernel.Font;
+using PdfTable = iText.Layout.Element.Table;
+using PdfCell = iText.Layout.Element.Cell;
+using iText.IO.Image;
+using iText.Kernel.Colors;
+using PdfColor = iText.Kernel.Colors.Color;
+using iText.Layout.Borders;
 
 namespace TToApp.Controllers
 {
@@ -20,9 +32,11 @@ namespace TToApp.Controllers
         private readonly PayrollService _service;
         private readonly ILogger<PayRollController> _logger;
         private readonly PayRunApprovedSender _payRunApprovedSender;
-        public PayRollController(ApplicationDbContext db, PayrollService service, ILogger<PayRollController> logger, PayRunApprovedSender sender)
+        private readonly IWebHostEnvironment _env;
+        public PayRollController(ApplicationDbContext db, PayrollService service, ILogger<PayRollController> logger, PayRunApprovedSender sender, IWebHostEnvironment env)
         {
             _db = db;
+            _env = env;
             _service = service;
             _logger = logger;
             _payRunApprovedSender = sender;
@@ -674,7 +688,7 @@ namespace TToApp.Controllers
         /// <summary>
         /// Exporta un PayRun en CSV (líneas + ajustes). Parámetro opcional: ?filename=...
         /// </summary>
-        [HttpGet("runs/{id:long}/export")]
+        [HttpGet("runs/{id:long}/export/csv")]
         public async Task<IActionResult> ExportRun(long id, [FromQuery] string? filename = null)
         {
             var run = await _db.PayRuns
@@ -684,37 +698,90 @@ namespace TToApp.Controllers
                 .FirstOrDefaultAsync(r => r.Id == id);
 
             if (run is null) return NotFound("PayRun no existe.");
+            
+            var driver = await _db.Users
+                .AsNoTracking()
+                .Where(u => u.Id == run.DriverId)
+                .Select(u => new { u.Name, u.LastName })   // ajusta nombres de campos si difieren
+                .FirstOrDefaultAsync();
+
+            var driverName = driver != null
+                ? $"{driver.Name} {driver.LastName}".Trim()
+                : $"ID {run.DriverId}";
+
 
             var sb = new StringBuilder();
-            sb.AppendLine("Section,SourceType,SourceId,Description,Qty,Rate,Amount");
 
-            // Líneas
-            foreach (var l in run.Lines.OrderBy(l => l.SourceType).ThenBy(l => l.Id))
+            sb.AppendLine("TTO Logistics - Pay Statement");
+            sb.AppendLine($"Driver: {driverName}");
+            sb.AppendLine($"Gross: {run.GrossAmount.ToString(CultureInfo.InvariantCulture)}");
+            sb.AppendLine($"Net: {run.NetAmount.ToString(CultureInfo.InvariantCulture)}");
+            sb.AppendLine("----------------------------------------------------");
+            sb.AppendLine("Category,Description,Qty,Rate,Amount");
+
+            // Earnings (líneas positivas)
+            foreach (var l in run.Lines.Where(l => l.Amount > 0)
+                                    .OrderBy(l => l.SourceType))
             {
-                sb.Append("Lines,")
-                  .Append(Escape(l.SourceType)).Append(',')
-                  .Append(Escape(l.SourceId)).Append(',')
-                  .Append(Escape(l.Description)).Append(',')
-                  .Append(l.Qty.ToString(CultureInfo.InvariantCulture)).Append(',')
-                  .Append(l.Rate.ToString(CultureInfo.InvariantCulture)).Append(',')
-                  .Append(l.Amount.ToString(CultureInfo.InvariantCulture)).AppendLine();
+                sb.Append("Earnings,")
+                .Append(Escape(l.Description)).Append(',')
+                .Append(l.Qty.ToString(CultureInfo.InvariantCulture)).Append(',')
+                .Append(l.Rate.ToString(CultureInfo.InvariantCulture)).Append(',')
+                .Append(l.Amount.ToString(CultureInfo.InvariantCulture)).AppendLine();
             }
 
-            // Ajustes
-            foreach (var a in run.AdjustmentsList.OrderBy(a => a.Id))
+            // Deductions (líneas negativas)
+            foreach (var l in run.Lines.Where(l => l.Amount < 0)
+                                    .OrderBy(l => l.SourceType))
+            {
+                sb.Append("Deductions,")
+                .Append(Escape(l.Description)).Append(',')
+                .Append(l.Qty.ToString(CultureInfo.InvariantCulture)).Append(',')
+                .Append(l.Rate.ToString(CultureInfo.InvariantCulture)).Append(',')
+                .Append(l.Amount.ToString(CultureInfo.InvariantCulture)).AppendLine();
+            }
+
+            // Ajustes si quieres mostrarlos separados
+            foreach (var a in run.AdjustmentsList)
             {
                 sb.Append("Adjustments,")
-                  .Append(Escape(a.Type)).Append(',')
-                  .Append(Escape(run.Id.ToString())).Append(',')
-                  .Append(Escape(a.Reason)).Append(',')
-                  .Append("1,")
-                  .Append(a.Amount.ToString(CultureInfo.InvariantCulture)).Append(',')
-                  .Append(a.Amount.ToString(CultureInfo.InvariantCulture)).AppendLine();
+                .Append(Escape(a.Reason)).Append(',')
+                .Append("1,")
+                .Append(a.Amount.ToString(CultureInfo.InvariantCulture)).Append(',')
+                .Append(a.Amount.ToString(CultureInfo.InvariantCulture)).AppendLine();
             }
 
-            // Totales
-            sb.AppendLine();
-            sb.AppendLine($"Totals,,DriverId,{run.DriverId},Gross,{run.GrossAmount.ToString(CultureInfo.InvariantCulture)},Net,{run.NetAmount.ToString(CultureInfo.InvariantCulture)}");
+
+            // var sb = new StringBuilder();
+            // //sb.AppendLine("Section,SourceType,SourceId,Description,Qty,Rate,Amount");
+            // sb.AppendLine("Section,SourceType,Description,Qty,Rate,Amount");
+            // // Líneas
+            // foreach (var l in run.Lines.OrderBy(l => l.SourceType).ThenBy(l => l.Id))
+            // {
+            //     sb.Append("Lines,")
+            //       .Append(Escape(l.SourceType)).Append(',')
+            //       //.Append(Escape(l.SourceId)).Append(',')
+            //       .Append(Escape(l.Description)).Append(',')
+            //       .Append(l.Qty.ToString(CultureInfo.InvariantCulture)).Append(',')
+            //       .Append(l.Rate.ToString(CultureInfo.InvariantCulture)).Append(',')
+            //       .Append(l.Amount.ToString(CultureInfo.InvariantCulture)).AppendLine();
+            // }
+
+            // // Ajustes
+            // foreach (var a in run.AdjustmentsList.OrderBy(a => a.Id))
+            // {
+            //     sb.Append("Adjustments,")
+            //       .Append(Escape(a.Type)).Append(',')
+            //       ///.Append(Escape(run.Id.ToString())).Append(',')
+            //       .Append(Escape(a.Reason)).Append(',')
+            //       .Append("1,")
+            //       .Append(a.Amount.ToString(CultureInfo.InvariantCulture)).Append(',')
+            //       .Append(a.Amount.ToString(CultureInfo.InvariantCulture)).AppendLine();
+            // }
+
+            // // Totales
+            // sb.AppendLine();
+            // sb.AppendLine($"Totals,,DriverId,{run.DriverId},Gross,{run.GrossAmount.ToString(CultureInfo.InvariantCulture)},Net,{run.NetAmount.ToString(CultureInfo.InvariantCulture)}");
 
             var bytes = Encoding.UTF8.GetBytes(sb.ToString());
             var name = string.IsNullOrWhiteSpace(filename)
@@ -731,75 +798,542 @@ namespace TToApp.Controllers
                 return s;
             }
         }
-
-        // -------------------------
-        // NUEVO: Materializar período (crea/actualiza PayRuns) y devolver summary
-        // -------------------------
-        /// <summary>
-        /// Crea/obtiene el PayPeriod y calcula PayRuns de todos los drivers con rutas COMPLETED en ese rango.
-        /// Filtra por ZoneId si se envía; si tu Zone tiene WarehouseId, filtra por almacén.
-        /// </summary>
-        /// 
-
-        [HttpGet("driverRates")]
-        public async Task<ActionResult<List<DriverRateDto>>> GetDriverRates(
-            [FromQuery] long? driverId = null,
-            [FromQuery] string? rateType = null,
-            [FromQuery] bool onlyActive = false,
-            [FromQuery] DateOnly? from = null,
-            [FromQuery] DateOnly? to = null)
+        [HttpGet("payruns/{id:long}/export/pdf")]
+        public async Task<IActionResult> ExportRunPdf(long id, [FromQuery] string? filename = null)
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            var run = await _db.PayRuns
+                .AsNoTracking()
+                .Include(r => r.Lines)
+                .Include(r => r.AdjustmentsList)
+                .FirstOrDefaultAsync(r => r.Id == id);
 
-            var q = _db.Set<DriverRate>().AsNoTracking().AsQueryable();
+            if (run is null) return NotFound("PayRun no existe.");
 
-            if (driverId is not null)
-                q = q.Where(r => r.DriverId == driverId);
+            var period = await _db.PayPeriods
+                .AsNoTracking()
+                .Where(p => p.Id == run.PayPeriodId)
+                .Select(p => new { p.EndDate, p.StartDate })
+                .FirstOrDefaultAsync();
 
-            if (!string.IsNullOrWhiteSpace(rateType))
-                q = q.Where(r => r.RateType == rateType);
+            // Week range (si tienes Start/End en PayRun, usa eso; aquí ejemplo con null-safe)
+            var weekText = (period.StartDate != null && period.EndDate != null)
+                ? $"{period.StartDate:yyyy-MM-dd} to {period.EndDate:yyyy-MM-dd}"
+                : "";
 
-            if (onlyActive)
-                q = q.Where(r => r.EffectiveFrom <= today &&
-                                 (r.EffectiveTo == null || r.EffectiveTo >= today));
+            var data = await _db.Users
+                .AsNoTracking()
+                .Where(u => u.Id == run.DriverId)
+                .Select(u => new
+                {
+                    DriverName = u.Name + " " + u.LastName,
+                    CompanyLogo = u.Warehouse.Companie.LogoUrl,
+                    CompanyName = u.Warehouse.Companie.Name
+                })
+                .FirstOrDefaultAsync();
+            var driverName = data != null ? data.DriverName : $"ID {run.DriverId}";
+            var logoPath = data?.CompanyLogo;
+            var companyName = data?.CompanyName ?? "TTO Logistics";
 
-            if (from is not null || to is not null)
+            // Totales user-friendly
+            var earningsTotal = run.Lines.Where(x => x.Amount > 0).Sum(x => x.Amount);
+            var deductionsTotal = run.Lines.Where(x => x.Amount < 0).Sum(x => x.Amount); // negativo
+            var adjustmentsTotal = run.AdjustmentsList.Sum(x => x.Amount);
+
+            using var ms = new MemoryStream();
+            using var writer = new PdfWriter(ms);
+            using var pdf = new PdfDocument(writer);
+            using var doc = new Document(pdf);
+
+            var normalFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+            var boldFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
+
+          Image? logoImg = null;
+
+           if (!string.IsNullOrWhiteSpace(logoPath))
             {
-                var start = from ?? DateOnly.MinValue;
-                var end = to ?? DateOnly.MaxValue;
-                q = q.Where(r => r.EffectiveFrom <= end &&
-                                 (r.EffectiveTo == null || r.EffectiveTo >= start));
+                try
+                {
+                    // 1) Si es URL absoluta -> descargar bytes
+                    if (Uri.TryCreate(logoPath, UriKind.Absolute, out var uri) &&
+                        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                    {
+                        // Mejor si inyectas IHttpClientFactory, pero esto funciona para probar:
+                        using var http = new HttpClient();
+                        var bytess = await http.GetByteArrayAsync(uri);
+
+                        var imgData = ImageDataFactory.Create(bytess);
+                        logoImg = new Image(imgData);
+                    }
+                    else
+                    {
+                        // 2) Si es path relativo (ej: /uploads/CompanyLogos/xxx.png) -> buscar en wwwroot
+                        var localPath = Path.Combine(_env.WebRootPath, logoPath.TrimStart('/', '\\'));
+
+                        if (System.IO.File.Exists(localPath))
+                        {
+                            var imgData = ImageDataFactory.Create(localPath);
+                            logoImg = new Image(imgData);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[PDF-LOGO] No se pudo cargar logo. logoPath={logoPath}. Error: {ex.Message}");
+                }
             }
 
-            var items = await (
-                from r in q
-                join u in _db.Set<User>() on r.DriverId equals u.Id into gj
-                from u in gj.DefaultIfEmpty()
-                orderby r.EffectiveFrom descending, r.Id descending
-                select new DriverRateDto
-                {
-                    Id = r.Id,
-                    DriverId = r.DriverId,                // ← incluye DriverId
-                    DriverName = u != null ? u.Name : null,
-                    DriverLastName = u != null ? u.LastName : null,
-                    WarehouseId = u.WarehouseId,
-                    RateType = r.RateType,
-                    BaseAmount = r.BaseAmount,
-                    MinPayPerRoute = r.MinPayPerRoute,
-                    OverStopBonusThreshold = r.OverStopBonusThreshold,
-                    OverStopBonusPerStop = r.OverStopBonusPerStop,
-                    FailedStopPenalty = r.FailedStopPenalty,
-                    RescueStopRate = r.RescueStopRate,
-                    NightDeliveryBonus = r.NightDeliveryBonus,
-                    EffectiveFrom = r.EffectiveFrom,
-                    EffectiveTo = r.EffectiveTo,
-                    DailyAmount = r.DailyAmount
-                }
-            ).ToListAsync();
+            // Header
+            doc.Add(new Paragraph("TTO Logistics - Pay Statement")
+                .SetFont(boldFont).SetFontSize(16));
 
-            return Ok(items);
+            doc.Add(new Paragraph($"Driver: {driverName}")
+                .SetFont(normalFont).SetFontSize(11));
+
+            if (!string.IsNullOrWhiteSpace(weekText))
+            {
+                doc.Add(new Paragraph($"Period: {weekText}")
+                    .SetFont(normalFont).SetFontSize(11));
+            }
+
+            doc.Add(new Paragraph(" "));
+
+            // Table
+            var table = new PdfTable(UnitValue.CreatePercentArray(new float[] { 18, 52, 10, 10, 10 }))
+                .UseAllAvailableWidth();
+
+            void AddHeader(string text) =>
+                table.AddHeaderCell(new PdfCell().Add(new Paragraph(text).SetFont(boldFont)));
+
+            AddHeader("Category");
+            AddHeader("Description");
+            AddHeader("Qty");
+            AddHeader("Rate");
+            AddHeader("Amount");
+
+            foreach (var l in run.Lines.OrderBy(x => x.Amount < 0).ThenBy(x => x.SourceType).ThenBy(x => x.Id))
+            {
+                var category = l.Amount >= 0 ? "Earnings" : "Deductions";
+                var qtyText = l.Qty % 1 == 0? ((int)l.Qty).ToString(): l.Qty.ToString("0.##", CultureInfo.InvariantCulture);
+                var rateValue = Math.Abs(l.Rate);
+                var amountValue = l.Amount;
+
+                table.AddCell(new Paragraph(category).SetFont(normalFont));
+                table.AddCell(new Paragraph(l.Description ?? "").SetFont(normalFont));
+                //table.AddCell(new Paragraph(qtyText).SetFont(normalFont));
+                table.AddCell(
+                new PdfCell()
+                    .Add(new Paragraph(qtyText).SetFont(normalFont))
+                    .SetTextAlignment(TextAlignment.RIGHT)
+                );
+
+                table.AddCell(
+                    new PdfCell()
+                        .Add(new Paragraph($"${rateValue:0.00}").SetFont(normalFont))
+                        .SetTextAlignment(TextAlignment.RIGHT)
+                );
+
+                table.AddCell(
+                    new PdfCell()
+                        .Add(new Paragraph($"${amountValue:0.00}").SetFont(normalFont))
+                        .SetTextAlignment(TextAlignment.RIGHT)
+                );
+
+                // table.AddCell(new Paragraph($"${rateValue:0.00}").SetFont(normalFont));
+                // table.AddCell(new Paragraph($"${amountValue:0.00}").SetFont(normalFont));
+            }
+
+            // (Opcional) Adjustments como líneas aparte
+            foreach (var a in run.AdjustmentsList.OrderBy(x => x.Id))
+            {
+                table.AddCell(new Paragraph("Adjustments").SetFont(normalFont));
+                table.AddCell(new Paragraph(a.Reason ?? a.Type ?? "").SetFont(normalFont));
+                table.AddCell(new Paragraph("1").SetFont(normalFont));
+                table.AddCell(new Paragraph(a.Amount.ToString("0.00", CultureInfo.InvariantCulture)).SetFont(normalFont));
+                table.AddCell(new Paragraph(a.Amount.ToString("0.00", CultureInfo.InvariantCulture)).SetFont(normalFont));
+            }
+
+            doc.Add(table);
+
+            doc.Add(new Paragraph(" "));
+            var summary = new PdfTable(UnitValue.CreatePercentArray(new float[] { 70, 30 }))
+                .UseAllAvailableWidth();
+            var darkGreen = new DeviceRgb(0, 70, 32); 
+            void AddSummaryRow(string label, decimal value, bool bold = false)
+            {
+                var lf = bold ? boldFont : normalFont;
+                
+                var color = value < 0 ? ColorConstants.RED :
+                                    value > 0 ? darkGreen :
+                                    ColorConstants.BLACK;
+
+                // Formato contable
+                var abs = Math.Abs(value);
+                var money = abs.ToString("C", new CultureInfo("en-US"));
+                var formatted = value < 0 ? $"({money})" : money;
+
+                summary.AddCell(new PdfCell()
+                    .Add(new Paragraph(label).SetFont(lf))
+                    .SetBorder(iText.Layout.Borders.Border.NO_BORDER));
+
+                summary.AddCell(new PdfCell()
+                    .Add(new Paragraph(formatted).SetFont(lf).SetFontColor(color))
+                    .SetTextAlignment(TextAlignment.RIGHT)
+                    .SetBorder(iText.Layout.Borders.Border.NO_BORDER));
+            }
+            AddSummaryRow("Total Earnings", earningsTotal);
+            AddSummaryRow("Total Deductions", deductionsTotal); // negativo
+            AddSummaryRow("Adjustments", adjustmentsTotal);
+            AddSummaryRow("Gross", run.GrossAmount, bold: true);
+            AddSummaryRow("Net", run.NetAmount, bold: true);
+
+            doc.Add(new Paragraph(" "));
+
+            var netText = run.NetAmount < 0
+                ? $"({Math.Abs(run.NetAmount).ToString("C", new CultureInfo("en-US"))})"
+                : run.NetAmount.ToString("C", new CultureInfo("en-US"));
+
+            doc.Add(new Paragraph($"NET PAY: {netText}")
+                .SetFont(boldFont)
+                .SetFontSize(16)
+                .SetTextAlignment(TextAlignment.RIGHT)
+                .SetFontColor(run.NetAmount < 0 ? ColorConstants.RED : darkGreen));
+
+            doc.Add(summary);
+            doc.Close();
+            var bytes = ms.ToArray();
+            var name = string.IsNullOrWhiteSpace(filename)
+                ? $"pay_statement_{run.DriverId}_{DateTime.UtcNow:yyyyMMddHHmmss}.pdf"
+                : filename.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? filename : filename + ".pdf";
+
+            return File(bytes, "application/pdf", name);
         }
 
+
+       [HttpGet("warehouses/{warehouseId:long}/payperiods/{payPeriodId:long}/payruns/export/pdf/summary-details")]
+        public async Task<IActionResult> ExportWarehousePayRunsSummaryAndDetailsPdf(long warehouseId, long payPeriodId, [FromQuery] string? filename = null)
+        {
+            // 1) Validar payperiod pertenece al warehouse + datos company/logo
+           var period = await (
+                from p in _db.PayPeriods.AsNoTracking()
+                join w in _db.Warehouses.AsNoTracking() on p.WarehouseId equals w.Id
+                join c in _db.Companies.AsNoTracking() on w.CompanyId equals c.Id
+                where p.Id == payPeriodId && p.WarehouseId == warehouseId
+                select new
+                {
+                    p.StartDate,
+                    p.EndDate,
+                    CompanyName = c.Name,
+                    LogoUrl = c.LogoUrl
+                }
+            ).FirstOrDefaultAsync();
+
+            if (period is null)
+                return NotFound("PayPeriod no existe o no pertenece a ese Warehouse.");
+
+            var periodText = $"{period.StartDate:yyyy-MM-dd} to {period.EndDate:yyyy-MM-dd}";
+            var companyName = period.CompanyName ?? "TTO Logistics";
+            var logoPath = period.LogoUrl;
+
+            // 2) PayRuns del período
+            var runs = await _db.PayRuns
+                .AsNoTracking()
+                .Include(r => r.Lines)
+                .Include(r => r.AdjustmentsList)
+                .Where(r => r.PayPeriodId == payPeriodId)
+                .ToListAsync();
+
+            if (runs.Count == 0)
+                return NotFound("No hay PayRuns para ese PayPeriod.");
+
+            // 3) Nombres de drivers
+            var driverIds = runs.Select(r =>(int) r.DriverId).Distinct().ToList();
+            var drivers = await _db.Users
+                .AsNoTracking()
+                .Where(u => driverIds.Contains(u.Id))
+                .Select(u => new { u.Id, DriverName = (u.Name + " " + u.LastName).Trim() })
+                .ToDictionaryAsync(x => x.Id, x => x.DriverName);
+
+            // 4) Resumen por driver (para portada + para cada detalle)
+            var rows = runs
+                .Select(r =>
+                {
+                    var driverIdInt = (int)r.DriverId;
+                    var earnings    = r.Lines.Where(x => x.Amount > 0).Sum(x => x.Amount);
+                    var deductions  = r.Lines.Where(x => x.Amount < 0).Sum(x => x.Amount); // negativo
+                    var adjustments = r.AdjustmentsList.Sum(x => x.Amount);
+
+                    return new
+                    {
+                        Run = r,
+                        DriverName = drivers.TryGetValue(driverIdInt, out var dn) ? dn : $"Driver #{r.DriverId}",
+                        Earnings = earnings,
+                        Deductions = deductions,
+                        Adjustments = adjustments,
+                        Gross = r.GrossAmount,
+                        Net = r.NetAmount
+                    };
+                })
+                .OrderBy(x => x.DriverName)
+                .ToList();
+
+            // Helpers
+            string Money(decimal v)
+            {
+                var abs = Math.Abs(v);
+                var m = abs.ToString("C", new CultureInfo("en-US"));
+                return v < 0 ? $"({m})" : m;
+            }
+
+            var darkGreen = new DeviceRgb(0, 50, 0);
+
+            // 5) Preparar logo una sola vez (ImageData reusable)
+            ImageData? logoData = null;
+            if (!string.IsNullOrWhiteSpace(logoPath))
+            {
+                try
+                {
+                    if (Uri.TryCreate(logoPath, UriKind.Absolute, out var uri) &&
+                        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                    {
+                        using var http = new HttpClient();
+                        var bytes = await http.GetByteArrayAsync(uri);
+                        logoData = ImageDataFactory.Create(bytes);
+                    }
+                    else
+                    {
+                        var localPath = Path.Combine(_env.WebRootPath, logoPath.TrimStart('/', '\\'));
+                        if (System.IO.File.Exists(localPath))
+                            logoData = ImageDataFactory.Create(localPath);
+                    }
+                }
+                catch { /* opcional: log */ }
+            }
+
+            // 6) Crear PDF
+            using var ms = new MemoryStream();
+            using var writer = new PdfWriter(ms);
+            using var pdf = new PdfDocument(writer);
+            using var doc = new Document(pdf);
+
+            var normalFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+            var boldFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
+
+            // ============================
+            // PAGE 1: SUMMARY (PORTADA)
+            // ============================
+            if (logoData != null)
+            {
+                var logo = new Image(logoData);
+                logo.ScaleToFit(120, 60);
+                doc.Add(logo);
+            }
+
+            doc.Add(new Paragraph($"{companyName} - PayRuns Summary")
+                .SetFont(boldFont).SetFontSize(16));
+
+            doc.Add(new Paragraph($"Warehouse: {warehouseId}   |   Period: {periodText}")
+                .SetFont(normalFont).SetFontSize(11));
+
+            doc.Add(new Paragraph($"Drivers: {rows.Count}   |   Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC")
+                .SetFont(normalFont).SetFontSize(10));
+
+            doc.Add(new Paragraph(" "));
+
+            var summaryTable = new PdfTable(UnitValue.CreatePercentArray(new float[] { 30, 14, 14, 14, 14, 14 }))
+                .UseAllAvailableWidth();
+
+            void SH(string t) => summaryTable.AddHeaderCell(new PdfCell().Add(new Paragraph(t).SetFont(boldFont)));
+
+            SH("Driver");
+            SH("Earnings");
+            SH("Deductions");
+            SH("Adjustments");
+            SH("Gross");
+            SH("Net");
+
+            foreach (var r in rows)
+            {
+                summaryTable.AddCell(new Paragraph(r.DriverName).SetFont(normalFont));
+
+                summaryTable.AddCell(new PdfCell().Add(new Paragraph(Money(r.Earnings)).SetFont(normalFont).SetFontColor(darkGreen))
+                    .SetTextAlignment(TextAlignment.RIGHT));
+
+                summaryTable.AddCell(new PdfCell().Add(new Paragraph(Money(r.Deductions)).SetFont(normalFont).SetFontColor(ColorConstants.RED))
+                    .SetTextAlignment(TextAlignment.RIGHT));
+
+                var adjColor = r.Adjustments < 0 ? ColorConstants.RED : r.Adjustments > 0 ? darkGreen : ColorConstants.BLACK;
+                summaryTable.AddCell(new PdfCell().Add(new Paragraph(Money(r.Adjustments)).SetFont(normalFont).SetFontColor(adjColor))
+                    .SetTextAlignment(TextAlignment.RIGHT));
+
+                summaryTable.AddCell(new PdfCell().Add(new Paragraph(Money(r.Gross)).SetFont(normalFont))
+                    .SetTextAlignment(TextAlignment.RIGHT));
+
+                var netColor = r.Net < 0 ? ColorConstants.RED : r.Net > 0 ? darkGreen : ColorConstants.BLACK;
+                summaryTable.AddCell(new PdfCell().Add(new Paragraph(Money(r.Net)).SetFont(normalFont).SetFontColor(netColor))
+                    .SetTextAlignment(TextAlignment.RIGHT));
+            }
+
+            doc.Add(summaryTable);
+
+            // Totales generales en portada
+            doc.Add(new Paragraph(" "));
+            doc.Add(new Paragraph("Totals (All Drivers)")
+                .SetFont(boldFont).SetFontSize(12));
+
+            var totalE = rows.Sum(x => x.Earnings);
+            var totalD = rows.Sum(x => x.Deductions);
+            var totalA = rows.Sum(x => x.Adjustments);
+            var totalG = rows.Sum(x => x.Gross);
+            var totalN = rows.Sum(x => x.Net);
+
+            var totalsTable = new PdfTable(UnitValue.CreatePercentArray(new float[] { 70, 30 }))
+                .UseAllAvailableWidth();
+
+            void AddTotal(string label, decimal value, PdfColor? color = null)
+            {
+                totalsTable.AddCell(new PdfCell().Add(new Paragraph(label).SetFont(normalFont))
+                    .SetBorder(null));
+
+                var p = new Paragraph(Money(value)).SetFont(boldFont);
+                if (color != null) p.SetFontColor(color);
+
+                totalsTable.AddCell(new PdfCell().Add(p)
+                    .SetTextAlignment(TextAlignment.RIGHT)
+                    .SetBorder(null));
+            }
+
+            AddTotal("Total Earnings", totalE, darkGreen);
+            AddTotal("Total Deductions", totalD, ColorConstants.RED);
+            AddTotal("Total Adjustments", totalA, totalA < 0 ? ColorConstants.RED : totalA > 0 ? darkGreen : ColorConstants.BLACK);
+            AddTotal("Total Gross", totalG);
+            AddTotal("Total Net", totalN, totalN < 0 ? ColorConstants.RED : totalN > 0 ? darkGreen : ColorConstants.BLACK);
+
+            doc.Add(totalsTable);
+
+            // Saltar a detalles
+            doc.Add(new AreaBreak(AreaBreakType.NEXT_PAGE));
+
+            // ============================
+            // DETAILS: 1 PAGE PER DRIVER
+            // ============================
+            for (int i = 0; i < rows.Count; i++)
+            {
+                var r = rows[i];
+                var run = r.Run;
+
+                // Header por driver
+                if (logoData != null)
+                {
+                    var logo = new Image(logoData);
+                    logo.ScaleToFit(120, 60);
+                    doc.Add(logo);
+                }
+
+                doc.Add(new Paragraph($"{companyName} - Pay Statement")
+                    .SetFont(boldFont).SetFontSize(16));
+
+                doc.Add(new Paragraph($"Driver: {r.DriverName}")
+                    .SetFont(normalFont).SetFontSize(11));
+
+                doc.Add(new Paragraph($"Period: {periodText}")
+                    .SetFont(normalFont).SetFontSize(11));
+
+                doc.Add(new Paragraph(" "));
+
+                // Tabla de detalles
+                var table = new PdfTable(UnitValue.CreatePercentArray(new float[] { 18, 52, 10, 10, 10 }))
+                    .UseAllAvailableWidth();
+
+                void DH(string t) => table.AddHeaderCell(new PdfCell().Add(new Paragraph(t).SetFont(boldFont)));
+
+                DH("Category");
+                DH("Description");
+                DH("Qty");
+                DH("Rate");
+                DH("Amount");
+
+                foreach (var l in run.Lines.OrderBy(x => x.Amount < 0).ThenBy(x => x.SourceType).ThenBy(x => x.Id))
+                {
+                    var category = l.Amount >= 0 ? "Earnings" : "Deductions";
+                    var qtyText = l.Qty % 1 == 0 ? ((int)l.Qty).ToString() : l.Qty.ToString("0.##", CultureInfo.InvariantCulture);
+                    var rateValue = Math.Abs(l.Rate);
+                    var amountValue = l.Amount;
+
+                    table.AddCell(new Paragraph(category).SetFont(normalFont));
+                    table.AddCell(new Paragraph(l.Description ?? "").SetFont(normalFont));
+
+                    table.AddCell(new PdfCell().Add(new Paragraph(qtyText).SetFont(normalFont))
+                        .SetTextAlignment(TextAlignment.RIGHT));
+
+                    table.AddCell(new PdfCell().Add(new Paragraph($"${rateValue:0.00}").SetFont(normalFont))
+                        .SetTextAlignment(TextAlignment.RIGHT));
+
+                    table.AddCell(new PdfCell().Add(new Paragraph($"${amountValue:0.00}").SetFont(normalFont))
+                        .SetTextAlignment(TextAlignment.RIGHT));
+                }
+
+                foreach (var a in run.AdjustmentsList.OrderBy(x => x.Id))
+                {
+                    table.AddCell(new Paragraph("Adjustments").SetFont(normalFont));
+                    table.AddCell(new Paragraph(a.Reason ?? a.Type ?? "").SetFont(normalFont));
+                    table.AddCell(new PdfCell().Add(new Paragraph("1").SetFont(normalFont)).SetTextAlignment(TextAlignment.RIGHT));
+                    table.AddCell(new PdfCell().Add(new Paragraph($"${Math.Abs(a.Amount):0.00}").SetFont(normalFont)).SetTextAlignment(TextAlignment.RIGHT));
+                    table.AddCell(new PdfCell().Add(new Paragraph($"${a.Amount:0.00}").SetFont(normalFont)).SetTextAlignment(TextAlignment.RIGHT));
+                }
+
+                doc.Add(table);
+
+                // Summary + NET PAY por driver
+                doc.Add(new Paragraph(" "));
+
+                var summary = new PdfTable(UnitValue.CreatePercentArray(new float[] { 70, 30 }))
+                    .UseAllAvailableWidth();
+
+                void AddSummaryRow(string label, decimal value, bool bold = false)
+                {
+                    var lf = bold ? boldFont : normalFont;
+                    var color = value < 0 ? ColorConstants.RED : value > 0 ? darkGreen : ColorConstants.BLACK;
+
+                    summary.AddCell(new PdfCell()
+                        .Add(new Paragraph(label).SetFont(lf))
+                        .SetBorder(null));
+
+                    summary.AddCell(new PdfCell()
+                        .Add(new Paragraph(Money(value)).SetFont(lf).SetFontColor(color))
+                        .SetTextAlignment(TextAlignment.RIGHT)
+                        .SetBorder(null));
+                }
+
+                AddSummaryRow("Total Earnings", r.Earnings);
+                AddSummaryRow("Total Deductions", r.Deductions);
+                AddSummaryRow("Adjustments", r.Adjustments);
+                AddSummaryRow("Gross", r.Gross, bold: true);
+                AddSummaryRow("Net", r.Net, bold: true);
+
+                doc.Add(summary);
+
+                doc.Add(new Paragraph(" "));
+
+                var netColor = r.Net < 0 ? ColorConstants.RED : darkGreen;
+                doc.Add(new Paragraph($"NET PAY: {Money(r.Net)}")
+                    .SetFont(boldFont)
+                    .SetFontSize(16)
+                    .SetTextAlignment(TextAlignment.RIGHT)
+                    .SetFontColor(netColor));
+
+                // Page break para el próximo driver (excepto el último)
+                if (i < rows.Count - 1)
+                    doc.Add(new AreaBreak(AreaBreakType.NEXT_PAGE));
+            }
+
+            doc.Close();
+
+            var outName = string.IsNullOrWhiteSpace(filename)
+                ? $"warehouse_{warehouseId}_payperiod_{payPeriodId}_summary_details_{DateTime.UtcNow:yyyyMMddHHmmss}.pdf"
+                : filename.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? filename : filename + ".pdf";
+
+            return File(ms.ToArray(), "application/pdf", outName);
+        }
 
         [HttpPut("driverRates/{id:long}")]
         public async Task<ActionResult<DriverRateDto>> UpdateDriverRate(

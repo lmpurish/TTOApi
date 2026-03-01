@@ -297,9 +297,41 @@ namespace TToApp.Services.Payroll
                     effectivePerStop = driverPerStop;
                     stopTag = (route.Zone == null) ? "WARN_NO_ZONE" : "WARN_ZONE_PRICE_FALLBACK";
                 }
-
+                // ✅ 6.1) EXTRA POR PESO (por paquete)
+                
                 decimal routeSubtotal = 0m;
+                var qtyExtraWeigth = 0m;
 
+                if (delivered > 0)
+                {
+                    if (weightRules.Count > 0 && weightsByRoute.TryGetValue(route.Id, out var weightsForRoute))
+                    {
+                        var extraByRule = ComputeWeightExtras(weightsForRoute, weightRules);
+
+                        foreach (var item in extraByRule)
+                        {
+                            // item: (rule, count, amountTotal)
+                            var rule = item.Rule;
+                            var qty = item.Count;
+                            var rateExtra = rule.ExtraAmount;
+                            qtyExtraWeigth += qty;
+
+                            // Línea por regla (agregado) => qty * rateExtra = total
+                            routeSubtotal += AddLine(
+                                payRun,
+                                "WeightExtra",
+                                route.Id.ToString(),
+                                $"Extra por peso [{rule.MinWeight}-{(rule.MaxWeight.HasValue ? rule.MaxWeight.Value.ToString() : "∞")}]",
+                                qty,
+                                rateExtra + effectivePerStop,
+                                "WEIGHT_EXTRA",
+                                route.Date,
+                                route.Zone?.Id, route.Zone?.Area
+                            );
+                        }
+                    }
+                }
+                 
                 // ✅ PAYMENT TYPE (ENUM)
                 switch (route.PaymentType)
                 {
@@ -326,9 +358,10 @@ namespace TToApp.Services.Payroll
                         {
                             if (delivered > 0)
                             {
+                                
                                 routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
                                     $"Stops entregados {(route.ZoneId == null ? "(sin zona)" : $"(zona {route.ZoneId})")} (PerStop)",
-                                    delivered, effectivePerStop, stopTag,route.Date, route.Zone?.Id, route.Zone?.Area);
+                                     (delivered - qtyExtraWeigth) > 0 ? (delivered - qtyExtraWeigth) : 0m, effectivePerStop, stopTag, route.Date, route.Zone?.Id, route.Zone?.Area);
                             }
                             else
                             {
@@ -355,35 +388,6 @@ namespace TToApp.Services.Payroll
                             break;
                         }
                 }
-
-
-                // ✅ 6.1) EXTRA POR PESO (por paquete)
-                if (weightRules.Count > 0 && weightsByRoute.TryGetValue(route.Id, out var weightsForRoute))
-                {
-                    var extraByRule = ComputeWeightExtras(weightsForRoute, weightRules);
-
-                    foreach (var item in extraByRule)
-                    {
-                        // item: (rule, count, amountTotal)
-                        var rule = item.Rule;
-                        var qty = item.Count;
-                        var rateExtra = rule.ExtraAmount;
-
-                        // Línea por regla (agregado) => qty * rateExtra = total
-                        routeSubtotal += AddLine(
-                            payRun,
-                            "WeightExtra",
-                            route.Id.ToString(),
-                            $"Extra por peso [{rule.MinWeight}-{(rule.MaxWeight.HasValue ? rule.MaxWeight.Value.ToString() : "∞")}]",
-                            qty,
-                            rateExtra,
-                            "WEIGHT_EXTRA",
-                            route.Date,
-                            route.Zone?.Id, route.Zone?.Area
-                        );
-                    }
-                }
-
 
                 // Penalidad CNL (si aplica)
                 if (failed > 0 && rate.FailedStopPenalty.GetValueOrDefault() > 0)

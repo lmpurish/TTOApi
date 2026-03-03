@@ -21,6 +21,7 @@ namespace TToApp.DTOs
         public RouteDto? Route { get; set; }
         public int? RSP { get; set; }
         public int? warehouseID { get; set; }
+        public decimal? Weight { get; set; }
     }
 
     public class RouteDto

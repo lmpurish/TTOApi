@@ -2331,7 +2331,8 @@ public class UserController : ControllerBase
                     AddrLat = p != null ? p.AddrLat : null,
                     AddrLon = p != null ? p.AddrLon : null,
                     DaysElapsed = (int?)(p != null ? p.DaysElapsed : null),
-                    RSP = (int?)(p != null ? p.RSP : null)
+                    RSP = (int?)(p != null ? p.RSP : null),
+                    Weight = (decimal?)(p != null ? p.Weight : null)
                 }
             ).ToListAsync();
 
@@ -2385,7 +2386,8 @@ public class UserController : ControllerBase
                             AddrLon = x.AddrLon,
                             DayElapsed = x.DaysElapsed,
                             RSP = x.RSP,
-                            warehouseID = x.WarehouseId
+                            warehouseID = x.WarehouseId,
+                            Weight = x.Weight
                         })
                         .ToList()
                 })

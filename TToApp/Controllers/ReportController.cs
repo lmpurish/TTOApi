@@ -683,7 +683,134 @@ namespace TToApp.Controllers
             }
         }
 
+        [HttpGet("driverIncome/{id:int}/byPayPeriod")]
+        public async Task<IActionResult> GetDriverIncomeByPayPeriod(
+            int id,
+            [FromQuery] int? take = 1,                 // 1=último, 5, 10, 0/take=null=todos
+            [FromQuery] bool includeRoutes = false     // si no quieres devolver el detalle
+        )
+        {
+            var completed = (int)RouteStatus.Completed;
 
+            // Warehouse del usuario
+            var user = await _context.Users
+                .AsNoTracking()
+                .Where(u => u.Id == id)
+                .Select(u => new { u.Id, u.WarehouseId, Name = (u.Name + " " + u.LastName).Trim() })
+                .FirstOrDefaultAsync();
+
+            if (user is null)
+                return NotFound(new { message = "Usuario no existe." });
+
+            // 1) PayPeriods del warehouse (ordenados por el más reciente)
+            var periodsQ = _context.PayPeriods
+                .AsNoTracking()
+                .Where(p => p.WarehouseId == user.WarehouseId)
+                .OrderByDescending(p => p.EndDate);
+
+            if (take.HasValue && take.Value > 0)
+                periodsQ = (IOrderedQueryable<PayPeriod>)periodsQ.Take(take.Value);
+
+            var periods = await periodsQ
+                .Select(p => new { p.Id, p.StartDate, p.EndDate })
+                .ToListAsync();
+
+            if (periods.Count == 0)
+                return NotFound(new { message = "No hay PayPeriods para el warehouse." });
+
+            var periodIds = periods.Select(p => p.Id).ToList();
+
+            // 2) Rutas dentro de esos payperiods (por rango de fechas)
+            var q =
+                from r in _context.Routes.AsNoTracking()
+                join p in _context.PayPeriods.AsNoTracking() on 1 equals 1
+                where r.UserId == id
+                    && r.Volumen > 1
+                    && r.routeStatus.HasValue
+                    && (int)r.routeStatus.Value == completed
+                    && p.WarehouseId == user.WarehouseId
+                    && periodIds.Contains(p.Id)
+                    && DateOnly.FromDateTime(r.Date) >= p.StartDate
+                    && DateOnly.FromDateTime(r.Date) <= p.EndDate
+                select new
+                {
+                    PayPeriodId = p.Id,
+                    p.StartDate,
+                    p.EndDate,
+                    RouteId = r.Id,
+                    r.Date,
+                    r.Volumen,
+                    r.DeliveryStops,
+                    PriceStop = r.Zone != null ? r.Zone.PriceStop : 0m,
+                    Income = (r.Zone != null ? r.Zone.PriceStop : 0m) * r.DeliveryStops
+                };
+
+            var grouped = await q
+                .GroupBy(x => new { x.PayPeriodId, x.StartDate, x.EndDate })
+                .Select(g => new
+                {
+                    g.Key.PayPeriodId,
+                    g.Key.StartDate,
+                    g.Key.EndDate,
+                    EstimatedIncome = g.Sum(x => x.Income),
+                    TotalStops = g.Sum(x => x.DeliveryStops),
+                    RoutesCount = g.Count(),
+                    Routes = includeRoutes
+                        ? g.OrderBy(x => x.Date).Select(x => new
+                        {
+                            Id = x.RouteId,
+                            x.Date,
+                            x.Volumen,
+                            x.DeliveryStops,
+                            x.PriceStop,
+                            x.Income
+                        }).ToList()
+                        : null
+                })
+                .ToListAsync();
+
+            // 3) PayRuns reales (pagado) de esos payperiods
+            var payRuns = await _context.PayRuns
+                .AsNoTracking()
+                .Where(pr => pr.DriverId == id
+                            //&& pr.WarehouseId == user.WarehouseId
+                            && periodIds.Contains(pr.PayPeriodId))
+                .Select(pr => new { pr.PayPeriodId, pr.GrossAmount, pr.NetAmount })
+                .ToListAsync();
+
+            var payRunByPeriod = payRuns.ToDictionary(x => x.PayPeriodId, x => x);
+
+            // 4) Ensamblar resultado en el mismo orden de "periods" (más reciente primero)
+            var summaryByPeriod = grouped.ToDictionary(x => x.PayPeriodId, x => x);
+
+            var result = periods.Select(p =>
+            {
+                summaryByPeriod.TryGetValue(p.Id, out var s);
+                payRunByPeriod.TryGetValue(p.Id, out var pr);
+
+                return new
+                {
+                    DriverId = user.Id,
+                    Driver = user.Name,
+                    user.WarehouseId,
+
+                    PayPeriodId = p.Id,
+                    p.StartDate,
+                    p.EndDate,
+
+                    EstimatedIncome = s?.EstimatedIncome ?? 0m,
+                    PaidGross = pr?.GrossAmount ?? 0m,
+                    PaidNet = pr?.NetAmount ?? 0m,
+
+                    TotalStops = s?.TotalStops ?? 0,
+                    RoutesCount = s?.RoutesCount ?? 0,
+                    Routes = includeRoutes ? s?.Routes : null
+                };
+            });
+
+            // Si take=1 y quieres devolver SOLO el primero como objeto (no lista), lo puedes hacer aquí.
+            return Ok(result);
+        }
 
         [HttpGet("runPayroll")]
         public async Task<IActionResult> EnviarCorreosResumenAsync(DateTime? startDate, DateTime? endDate)

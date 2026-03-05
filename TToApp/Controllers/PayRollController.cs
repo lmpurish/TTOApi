@@ -640,14 +640,32 @@ namespace TToApp.Controllers
         /// <summary>Devuelve un PayRun con detalle de líneas y ajustes.</summary>
         [HttpGet("runs/{id:long}")]
         public async Task<ActionResult<PayRun>> GetRun(long id)
-        {
+{
             var run = await _db.PayRuns
                 .AsNoTracking()
                 .Include(r => r.Lines)
                 .Include(r => r.AdjustmentsList)
                 .FirstOrDefaultAsync(r => r.Id == id);
 
-            if (run is null) return NotFound("PayRun no existe.");
+            if (run is null)
+                return NotFound("PayRun no existe.");
+
+            run.Lines = run.Lines
+                .OrderBy(l => l.RouteDate == null)   // null al final
+                .ThenBy(l => l.RouteDate)            // ordenar por fecha
+                .ThenBy(l => l.SourceId)             // luego por SourceId
+                .ThenByDescending(l => l.Id)
+                .ToList();
+
+            foreach (var line in run.Lines)
+            {
+                if (line.RouteDate.HasValue)
+                {
+                    var date = line.RouteDate.Value.ToString("yyyy-MM-dd");
+                    line.Description = $"{date} - {line.Description}";
+                }
+            }
+
             return Ok(run);
         }
 
@@ -656,6 +674,7 @@ namespace TToApp.Controllers
         public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummary(long id)
         {
             var period = await _db.PayPeriods.FindAsync(id);
+            
             if (period is null) return NotFound("PayPeriod no existe.");
 
             var runs = await (

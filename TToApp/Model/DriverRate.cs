@@ -22,6 +22,7 @@
         public decimal? RescueStopRate { get; set; }
         public decimal? NightDeliveryBonus { get; set; }
         public decimal? DailyAmount { get; set; }
+        public decimal? ExtraAmount { get; set; }
         public DateOnly EffectiveFrom { get; set; }
         public DateOnly? EffectiveTo { get; set; }
         public DateTime? UpdatedAt { get; set; }

@@ -1384,6 +1384,7 @@ namespace TToApp.Controllers
             if (body.RescueStopRate is < 0) return BadRequest(new { Message = "RescueStopRate must be >= 0." });
             if (body.NightDeliveryBonus is < 0) return BadRequest(new { Message = "NightDeliveryBonus must be >= 0." });
             if (body.DailyAmount is < 0) return BadRequest(new { Message = "Daily Amount must be >= 0." });
+            if (body.ExtraAmount is < 0) return BadRequest(new { Message = "Extra Amount must be >= 0." });
             // Fechas (si vienen)
             var effFrom = body.EffectiveFrom ?? entity.EffectiveFrom;
             var effTo = body.EffectiveTo ?? entity.EffectiveTo;
@@ -1450,6 +1451,7 @@ namespace TToApp.Controllers
             if (body.RescueStopRate.HasValue) entity.RescueStopRate = body.RescueStopRate;
             if (body.NightDeliveryBonus.HasValue) entity.NightDeliveryBonus = body.NightDeliveryBonus;
             if (body.DailyAmount.HasValue) entity.DailyAmount = body.DailyAmount.Value;
+            if (body.ExtraAmount.HasValue) entity.ExtraAmount = body.ExtraAmount.Value;
 
             entity.EffectiveFrom = effFrom;
             entity.EffectiveTo = effTo;
@@ -1483,6 +1485,7 @@ namespace TToApp.Controllers
                         EffectiveFrom = r.EffectiveFrom,
                         EffectiveTo = r.EffectiveTo,
                         DailyAmount = r.DailyAmount,
+                        ExtraAmount = r.ExtraAmount
                     }
                 ).FirstAsync(ct);
 
@@ -1498,7 +1501,49 @@ namespace TToApp.Controllers
                 return StatusCode(500, new { Message = "Unexpected error." });
             }
         }
+        [HttpGet("driverRates")]
+        public async Task<ActionResult<IEnumerable<DriverRateDto>>> GetDriverRates(
+    [FromQuery] int? warehouseId,
+    CancellationToken ct)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
+            var result = await (
+                from r in _db.DriverRates.AsNoTracking()
+                join u in _db.Users.AsNoTracking()
+                    on r.DriverId equals (long)u.Id
+                where u.IsActive
+                      && (u.UserRole == global::User.Role.Driver || u.UserRole == global::User.Role.Manager)
+                      && r.EffectiveFrom <= today
+                      && (r.EffectiveTo == null || r.EffectiveTo >= today)
+                      && (!warehouseId.HasValue || warehouseId == 0 || u.WarehouseId == warehouseId)
+                select new DriverRateDto
+                {
+                    Id = r.Id,
+                    DriverId = r.DriverId,
+                    DriverName = u.Name,
+                    DriverLastName = u.LastName,
+                    RateType = r.RateType,
+                    BaseAmount = r.BaseAmount,
+                    MinPayPerRoute = r.MinPayPerRoute,
+                    OverStopBonusThreshold = r.OverStopBonusThreshold,
+                    OverStopBonusPerStop = r.OverStopBonusPerStop,
+                    FailedStopPenalty = r.FailedStopPenalty,
+                    RescueStopRate = r.RescueStopRate,
+                    NightDeliveryBonus = r.NightDeliveryBonus,
+                    EffectiveFrom = r.EffectiveFrom,
+                    EffectiveTo = r.EffectiveTo,
+                    DailyAmount = r.DailyAmount,
+                    ExtraAmount = r.ExtraAmount,
+                    WarehouseId = u.WarehouseId
+                }
+            )
+            .OrderBy(x => x.DriverName)
+            .ThenBy(x => x.DriverLastName)
+            .ToListAsync(ct);
+
+            return Ok(result);
+        }
         [HttpPut("driverRates/bulk")]
         public async Task<IActionResult> BulkUpdateDriverRates([FromBody] List<UpdateDriverRateRequest> items, CancellationToken ct)
         {
@@ -1606,7 +1651,7 @@ namespace TToApp.Controllers
                 EffectiveFrom = today,
                 EffectiveTo = null,
                 UpdatedAt = now,
-
+                ExtraAmount = 0,
                 // opcional: defaults
                 MinPayPerRoute = null,
                 OverStopBonusThreshold = null,
@@ -1829,6 +1874,7 @@ namespace TToApp.Controllers
 
             public int? WarehouseId { get; set; }
             public decimal? DailyAmount { get; set; }
+            public decimal? ExtraAmount { get; set; }
         }
 
         public sealed class UpdateDriverRateRequest
@@ -1848,6 +1894,7 @@ namespace TToApp.Controllers
             public DateOnly? EffectiveFrom { get; set; }   // opcional en update
             public DateOnly? EffectiveTo { get; set; }     // opcional en update
             public decimal? DailyAmount { get; set; }
+            public decimal? ExtraAmount { get; set; }
         }
     }
 

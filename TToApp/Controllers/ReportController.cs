@@ -929,6 +929,8 @@ namespace TToApp.Controllers
             }
         }
 
+        
+
 
 
     }
@@ -937,6 +939,8 @@ namespace TToApp.Controllers
         public string PhoneNumber { get; set; } // Solo números con código de país, ej: 521234567890
         public string Message { get; set; }
     }
+
+   
 }
 
 

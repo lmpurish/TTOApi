@@ -7,6 +7,7 @@ using Microsoft.VisualStudio.Web.CodeGenerators.Mvc.Templates.Blazor;
 using Microsoft.VisualStudio.Web.CodeGenerators.Mvc.Templates.BlazorIdentity.Pages.Manage;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using System.Globalization;
 using System.IO.Packaging;
@@ -1304,7 +1305,7 @@ namespace TToApp.Controllers
 
                 var tracking = S(row, "TrackingNo");
                 var routeCode = S(row, "Route");
-                var planDate = D(row, "planDeliveryDate");
+                var planDate = D(row, "CompleteTime");
 
                 if (string.IsNullOrWhiteSpace(tracking) ||
                     string.IsNullOrWhiteSpace(routeCode) ||
@@ -1445,13 +1446,37 @@ namespace TToApp.Controllers
                     }
                     else
                     {
-                        driverNotFound.Add(new
+                        // 🔹 intentar quitando middle name
+                        var withoutMiddle = NormName(RemoveMiddleName(driverRaw));
+
+                        if (userMap.TryGetValue(withoutMiddle, out var ids2))
                         {
-                            Date = date,
-                            RouteCode = routeCode,
-                            DriverName = driverRaw,
-                            Normalized = driverKey
-                        });
+                            if (ids2.Count == 1)
+                            {
+                                driverId = ids2[0];
+                            }
+                            else
+                            {
+                                driverAmbiguous.Add(new
+                                {
+                                    Date = date,
+                                    RouteCode = routeCode,
+                                    DriverName = driverRaw,
+                                    Normalized = withoutMiddle,
+                                    CandidateUserIds = ids2
+                                });
+                            }
+                        }
+                        else
+                        {
+                            driverNotFound.Add(new
+                            {
+                                Date = date,
+                                RouteCode = routeCode,
+                                DriverName = driverRaw,
+                                Normalized = driverKey
+                            });
+                        }
                     }
                 }
                 else
@@ -1529,30 +1554,50 @@ namespace TToApp.Controllers
                 .Where(r => r.WarehouseId == warehouseId && r.RouteCode != null)
                 .ToDictionary(r => (r.RouteCode!, r.Date.Date), r => r.Id);
 
-            var trackings = rawRows.Select(x => x.Tracking)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var routeIds = routeLookup.Values.Distinct().ToList();
 
-            var existingTrackings = await _context.Packages
-                .Where(p => trackings.Contains(p.Tracking))
-                .Select(p => p.Tracking)
+            var existingPackages = await _context.Packages
+                .Where(p => routeIds.Contains((int)p.RoutesId))
                 .ToListAsync(ct);
 
-            var trackingSet = existingTrackings.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var existingPackageMap = existingPackages.ToDictionary(
+                p => $"{p.RoutesId}|{p.Tracking}".ToUpperInvariant(),
+                p => p
+            );
 
             var packagesAdded = 0;
+            var packagesUpdated = 0;
+            var skippedNoRoute = 0;
 
             foreach (var x in rawRows)
             {
                 if (!routeLookup.TryGetValue((x.RouteCode, x.Date), out var routeId))
+                {
+                    skippedNoRoute++;
                     continue;
+                }
 
-                if (trackingSet.Contains(x.Tracking))
+                var fullAddress = string.IsNullOrWhiteSpace(x.Unit)
+                    ? x.Address
+                    : $"{x.Address} #{x.Unit}";
+
+                var packageKey = $"{routeId}|{x.Tracking}".ToUpperInvariant();
+
+                if (existingPackageMap.TryGetValue(packageKey, out var existingPackage))
+                {
+                    existingPackage.Address = fullAddress;
+                    existingPackage.City = x.City;
+                    existingPackage.State = x.State;
+                    existingPackage.ZipCode = x.Zip;
+                    existingPackage.IncidentDate = x.Date;
+                    existingPackage.Weight = x.Weight;
+                    existingPackage.Status = x.Status;
+
+                    packagesUpdated++;
                     continue;
+                }
 
-                var fullAddress = string.IsNullOrWhiteSpace(x.Unit) ? x.Address : $"{x.Address} #{x.Unit}";
-
-                _context.Packages.Add(new Packages
+                var newPackage = new Packages
                 {
                     RoutesId = routeId,
                     Tracking = x.Tracking,
@@ -1561,16 +1606,15 @@ namespace TToApp.Controllers
                     State = x.State,
                     ZipCode = x.Zip,
                     IncidentDate = x.Date,
-
-                    // ✅ Peso guardado (NO weightType)
                     Weight = x.Weight,
-
                     Status = x.Status,
                     DaysElapsed = 0,
                     Notified = false,
                     ReviewStatus = ReviewStatus.Open
-                });
+                };
 
+                _context.Packages.Add(newPackage);
+                existingPackageMap[packageKey] = newPackage;
                 packagesAdded++;
             }
 
@@ -1590,6 +1634,19 @@ namespace TToApp.Controllers
                 DriverNotFound = driverNotFound.Take(50),
                 DriverAmbiguous = driverAmbiguous.Take(50)
             });
+        }
+
+        string RemoveMiddleName(string fullName)
+        {
+            if (string.IsNullOrWhiteSpace(fullName))
+                return "";
+
+            var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length <= 2)
+                return fullName;
+
+            return $"{parts.First()} {parts.Last()}";
         }
 
         // Métodos auxiliares para parsear valores de forma segura
@@ -1720,6 +1777,132 @@ namespace TToApp.Controllers
             return NormName(raw);
         }
 
+        [Authorize]
+        [HttpPost("routes/{routeId}/bonus")]
+        public async Task<IActionResult> AddRouteBonus(int routeId, [FromBody] AddRouteBonusDto dto)
+        {
+            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+            var userRole = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
+
+            if (!int.TryParse(userIdClaim, out int userId))
+                return Unauthorized();
+
+            if (userRole != "Admin" && userRole != "Manager")
+                return Forbid();
+
+            var route = await _context.Routes.FindAsync(routeId);
+            if (route == null)
+                return NotFound(new { Message = "Route not found." });
+
+            var bonus = new RouteBonus
+            {
+                RouteId = routeId,
+                Type = dto.Type,
+                Amount = dto.Amount,
+                Note = dto.Note,
+                AssignedByUserId = userId,
+                AssignedAt = route.Date,
+                IsActive = true
+            };
+
+            _context.RouteBonuses.Add(bonus);
+            await _context.SaveChangesAsync();
+
+            return Ok(bonus);
+        }
+
+        [HttpGet("users/find-similar-import-name")]
+        public async Task<IActionResult> FindSimilarImportName([FromQuery] string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return BadRequest("Name is required.");
+
+            var parts = name
+                .Trim()
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length == 0)
+                return Ok(new List<object>());
+
+            var firstName = parts.First().Trim().ToLower();
+            var lastName = parts.Length > 1 ? parts.Last().Trim().ToLower() : "";
+
+            var users = await _context.Users
+                .AsNoTracking()
+                .Where(u => u.IsActive && u.Name != null && u.LastName != null)
+                .Select(u => new
+                {
+                    u.Id,
+                    Name = u.Name!,
+                    LastName = u.LastName!,
+                    FullName = ((u.Name ?? "") + " " + (u.LastName ?? "")).Trim()
+                })
+                .ToListAsync();
+
+            var matches = users
+                .Where(u =>
+                    u.Name.Trim().ToLower() == firstName ||
+                    u.LastName.Trim().ToLower() == lastName ||
+                    (u.Name.Trim().ToLower() == firstName && u.LastName.Trim().ToLower() == lastName) ||
+                    u.FullName.ToLower().Contains(firstName) ||
+                    (!string.IsNullOrWhiteSpace(lastName) && u.FullName.ToLower().Contains(lastName))
+                )
+                .OrderByDescending(u => u.Name.Trim().ToLower() == firstName && u.LastName.Trim().ToLower() == lastName)
+                .ThenBy(u => u.FullName)
+                .Take(10)
+                .ToList();
+
+            return Ok(matches);
+        }
+        [HttpPost("users/save-import-match")]
+        public async Task<IActionResult> SaveImportMatch([FromBody] SaveImportMatchDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.ImportedName) || dto.UserId <= 0)
+                return BadRequest("ImportedName and UserId are required.");
+
+            var user = await _context.Users.FirstOrDefaultAsync(x => x.Id == dto.UserId);
+            if (user == null)
+                return NotFound("User not found.");
+
+            var normalized = dto.ImportedName.Trim().ToLower();
+
+            var existing = await _context.Set<UserImportMatch>()
+                .FirstOrDefaultAsync(x => x.ImportedNameNormalized == normalized);
+
+            if (existing != null)
+            {
+                existing.UserId = dto.UserId;
+                existing.ImportedName = dto.ImportedName.Trim();
+            }
+            else
+            {
+                _context.Set<UserImportMatch>().Add(new UserImportMatch
+                {
+                    UserId = dto.UserId,
+                    ImportedName = dto.ImportedName.Trim(),
+                    ImportedNameNormalized = normalized,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Match saved successfully." });
+        }
+
+        public class SaveImportMatchDto
+        {
+            public string ImportedName { get; set; } = string.Empty;
+            public int UserId { get; set; }
+        }
+        public class AddRouteBonusDto
+        {
+            public RouteBonusType Type { get; set; }
+
+            [Column(TypeName = "decimal(18,2)")]
+            public decimal Amount { get; set; }
+
+            public string? Note { get; set; }
+        }
         private sealed class RouteParcelRow
         {
             public string Tracking { get; set; } = "";

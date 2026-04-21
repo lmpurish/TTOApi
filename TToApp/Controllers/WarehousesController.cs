@@ -87,6 +87,7 @@ namespace TToApp.Controllers
                         CompanyId = (int)w.CompanyId,
                         ZipCode = w.ZipCode,
                         DriveRate = w.DriveRate,
+                        FacilityCode = w.FacilityCode,
                         OpenTime = w.OpenTime.HasValue
             ? new TimeDto { Hours = w.OpenTime.Value.Hour, Minutes = w.OpenTime.Value.Minute }
             : null,
@@ -228,6 +229,7 @@ namespace TToApp.Controllers
             wh.ZipCode = dto.ZipCode;
             wh.MetroId = dto.MetroId;
             wh.DriveRate = dto.DriveRate;
+            wh.FacilityCode = dto.FacilityCode;
 
             // 1. Ids que deben quedar autorizados (lo que manda el front)
             var dtoIds = (dto.AuthorizedPersons ?? new List<AuthorizedPersonDto>())
@@ -380,6 +382,72 @@ namespace TToApp.Controllers
             var metros = _context.Metro.Where(m => m.CompanyId == companyId).ToList();
 
             return Ok(metros);
+        }
+
+        [Authorize]
+        [HttpPost("metros/add")]
+        public async Task<ActionResult<Metro>> PostMetro([FromBody] Metro metro)
+        {
+            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+            var userRole = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
+
+            if (!int.TryParse(userIdClaim, out int userId))
+                return Unauthorized();
+
+            if (userRole != "CompanyOwner" && userRole != "Admin")
+                return Forbid();
+
+            if (metro == null)
+                return BadRequest(new { Message = "Invalid metro data." });
+
+            if (string.IsNullOrWhiteSpace(metro.City))
+                return BadRequest(new { Message = "City is required." });
+
+            try
+            {
+                int? companyId = null;
+
+                if (userRole == "CompanyOwner")
+                {
+                    companyId = await _context.Companies
+                        .Where(c => c.OwnerId == userId)
+                        .Select(c => (int?)c.Id)
+                        .FirstOrDefaultAsync();
+                }
+                else if (userRole == "Admin")
+                {
+                    companyId = await _context.Users
+                        .Where(u => u.Id == userId)
+                        .Select(u => u.CompanyId)
+                        .FirstOrDefaultAsync();
+                }
+
+                if (!companyId.HasValue)
+                    return BadRequest(new { Message = "No associated company found for this user." });
+
+                metro.CompanyId = companyId.Value;
+
+                _context.Metro.Add(metro);
+                await _context.SaveChangesAsync();
+
+                return CreatedAtAction(nameof(GetMetro), new { id = metro.Id }, metro);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = "Error saving metro", Error = ex.Message });
+            }
+        }
+        [Authorize]
+        [HttpGet("getMetro/{id}")]
+        public async Task<ActionResult<Metro>> GetMetro(int id)
+        {
+            var metro = await _context.Metro.FirstOrDefaultAsync(x => x.Id == id);
+
+            if (metro == null)
+                return NotFound();
+
+            var metroDTO = _mapper.Map<Metro>(metro);
+            return Ok(metroDTO);
         }
     }
     public class WarehouseWithRspDto

@@ -82,6 +82,8 @@ namespace TToApp.Controllers
             public decimal Gross { get; set; }
             public decimal Adjustments { get; set; }
             public decimal Net { get; set; }
+            public long Run { get; set; }
+            public string Status { get; set; }
         }
 
          public sealed class UserMissingRateDto
@@ -536,6 +538,7 @@ namespace TToApp.Controllers
         }
 
         /// <summary>
+        /// 
         /// Crea u obtiene un PayPeriod para el rango dado. Devuelve el período resultante.
         /// </summary>
         [HttpPost("periods")]
@@ -662,7 +665,7 @@ namespace TToApp.Controllers
                 if (line.RouteDate.HasValue)
                 {
                     var date = line.RouteDate.Value.ToString("yyyy-MM-dd");
-                    line.Description = $"{date} - {line.Description}";
+                    line.Description = $"{line.Description}";
                 }
             }
 
@@ -689,7 +692,9 @@ namespace TToApp.Controllers
                      DriverName = u != null ? u.Name + " " + u.LastName : "Unknown",
                      Gross = r.GrossAmount,
                      Adjustments = r.Adjustments,
-                     Net = r.NetAmount
+                     Net = r.NetAmount,
+                     Run = r.Id,
+                     Status = r.Status
                  }
                     ).ToListAsync();
 
@@ -1045,7 +1050,17 @@ namespace TToApp.Controllers
                     LogoUrl = c.LogoUrl
                 }
             ).FirstOrDefaultAsync();
+            var warehouse = await _db.Warehouses
+                .Where(w => w.Id == warehouseId)
+                .Select(w => new
+                {
+                    w.City,
+                    w.Company
+                })
+                .FirstOrDefaultAsync();
 
+            if (warehouse == null)
+                return NotFound("Warehouse not found");
             if (period is null)
                 return NotFound("PayPeriod no existe o no pertenece a ese Warehouse.");
 
@@ -1150,8 +1165,9 @@ namespace TToApp.Controllers
             doc.Add(new Paragraph($"{companyName} - PayRuns Summary")
                 .SetFont(boldFont).SetFontSize(16));
 
-            doc.Add(new Paragraph($"Warehouse: {warehouseId}   |   Period: {periodText}")
-                .SetFont(normalFont).SetFontSize(11));
+            doc.Add(new Paragraph($"Warehouse: {warehouse.Company} ({warehouse.City})   |   Period: {periodText}")
+                .SetFont(normalFont)
+                .SetFontSize(11));
 
             doc.Add(new Paragraph($"Drivers: {rows.Count}   |   Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC")
                 .SetFont(normalFont).SetFontSize(10));
@@ -1849,9 +1865,168 @@ namespace TToApp.Controllers
         {
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
         }
+
+        [HttpGet("periods/by-range")]
+        public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
+    [FromQuery] long companyId,
+    [FromQuery] long? warehouseId,
+    [FromQuery] string startDate,
+    [FromQuery] string endDate)
+        {
+            var start = ParseDateOnly(startDate);
+            var end = ParseDateOnly(endDate);
+
+            var period = await _db.PayPeriods
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p =>
+                    p.CompanyId == companyId &&
+                    p.WarehouseId == warehouseId &&
+                    p.StartDate == start &&
+                    p.EndDate == end);
+
+            if (period is null)
+                return NotFound("No existing PayPeriod found for that date range.");
+
+            var runs = await (
+                from r in _db.PayRuns.AsNoTracking()
+                join u in _db.Users.AsNoTracking()
+                    on r.DriverId equals u.Id into gj
+                from u in gj.DefaultIfEmpty()
+                where r.PayPeriodId == period.Id
+                select new PeriodSummaryRow
+                {
+                    DriverId = r.DriverId,
+                    DriverName = u != null ? (u.Name + " " + u.LastName).Trim() : "Unknown",
+                    Gross = r.GrossAmount,
+                    Adjustments = r.Adjustments,
+                    Net = r.NetAmount,
+                    Run = r.Id
+                }
+            ).ToListAsync();
+
+            var dto = new PeriodSummaryDto
+            {
+                PayPeriodId = period.Id,
+                StartDate = period.StartDate.ToString("yyyy-MM-dd"),
+                EndDate = period.EndDate.ToString("yyyy-MM-dd"),
+                Drivers = runs
+            };
+
+            return Ok(dto);
+        }
+        [HttpPost("runs/{id:long}/adjustments")]
+        public async Task<ActionResult> AddAdjustment(long id, [FromBody] CreateAdjustmentRequest req)
+        {
+            var run = await _db.PayRuns
+                .Include(x => x.Lines)
+                .FirstOrDefaultAsync(x => x.Id == id);
+
+            if (run is null)
+                return NotFound("PayRun not found.");
+
+            if (string.Equals(run.Status, "Approved", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { message = "Approved PayRuns cannot be modified." });
+
+            var now = DateTime.UtcNow;
+
+            // 1️⃣ Guardar adjustment
+            var adjustment = new PayrollAdjustment
+            {
+                PayRunId = run.Id,
+                Type = req.Type ?? "Manual",
+                Reason = req.Reason,
+                Amount = req.Amount,
+                CreatedAt = now,
+                CreatedBy = GetCurrentUserId()
+            };
+
+            _db.PayrollAdjustments.Add(adjustment);
+
+            // 2️⃣ Crear línea visible en el PayRun
+            var line = new PayRunLine
+            {
+                PayRunId = run.Id,
+                SourceType = "Adjustment",
+                SourceId = adjustment.Id.ToString(),
+                Description = $"{adjustment.Type} - {adjustment.Reason}",
+                Qty = 1,
+                Rate = req.Amount,
+                Tags = "MANUAL_ADJUSTMENT",
+                RouteDate = now
+            };
+
+            _db.PayRunLines.Add(line);
+
+            // 3️⃣ Recalcular adjustments
+            run.Adjustments = await _db.PayrollAdjustments
+                .Where(a => a.PayRunId == run.Id)
+                .SumAsync(a => (decimal?)a.Amount) ?? 0m;
+
+            run.NetAmount = run.GrossAmount + run.Adjustments;
+
+            await _db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Adjustment added successfully.",
+                payRunId = run.Id,
+                grossAmount = run.GrossAmount,
+                adjustments = run.Adjustments,
+                netAmount = run.NetAmount
+            });
+        }
+
+        [Authorize(Roles = "Admin,Manager")]
+        [HttpDelete("adjustments/{adjustmentId:long}")]
+        public async Task<ActionResult> DeleteAdjustment(long adjustmentId)
+        {
+            var adjustment = await _db.PayrollAdjustments
+                .FirstOrDefaultAsync(a => a.Id == adjustmentId);
+
+            if (adjustment is null)
+                return NotFound(new { message = "Adjustment not found." });
+
+            var run = await _db.PayRuns
+                .FirstOrDefaultAsync(x => x.Id == adjustment.PayRunId);
+
+            if (run is null)
+                return NotFound(new { message = "PayRun not found." });
+
+            if (string.Equals(run.Status, "Approved", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { message = "Approved PayRuns cannot be modified." });
+
+            _db.PayrollAdjustments.Remove(adjustment);
+
+            await _db.SaveChangesAsync();
+
+            run.Adjustments = await _db.PayrollAdjustments
+                .Where(a => a.PayRunId == run.Id)
+                .SumAsync(a => (decimal?)a.Amount) ?? 0m;
+
+            run.NetAmount = run.GrossAmount + run.Adjustments;
+
+            await _db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Adjustment deleted successfully.",
+                payRunId = run.Id,
+                grossAmount = run.GrossAmount,
+                adjustments = run.Adjustments,
+                netAmount = run.NetAmount
+            });
+        }
+
+
     }
 
-     
+    public sealed class CreateAdjustmentRequest
+    {
+        public long PayRunId { get; set; }
+        public string Type { get; set; } = "Manual";
+        public string Reason { get; set; } = null!;
+        public decimal Amount { get; set; }
+    }
 
     public class DriverRateDto
         {

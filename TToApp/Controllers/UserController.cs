@@ -514,131 +514,189 @@ public class UserController : ControllerBase
         return Ok(userDto);
     }
 
+    [Authorize]
     [HttpGet("driversByRol")]
-    public async Task<ActionResult<List<User>>> GetEmployees()
+    public async Task<IActionResult> GetEmployees()
     {
         var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst("id");
         if (userIdClaim == null)
-            return Unauthorized(new { Message = "Invalid token" });
+            return Unauthorized(new { message = "Invalid token" });
 
-        int userId = int.Parse(userIdClaim.Value);
-        // Obtener el usuario que solicita la información
+        if (!int.TryParse(userIdClaim.Value, out int userId))
+            return Unauthorized(new { message = "Invalid user id" });
+
         var user = await _authContext.Users
+            .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Id == userId);
 
         if (user == null)
+            return NotFound(new { message = "User not found." });
+
+        IQueryable<User> query = _authContext.Users.AsNoTracking();
+
+        // Admin / CompanyOwner / Assistant => ven todos los usuarios de la compañía excepto Applicant
+        if (user.UserRole.HasValue &&
+            (user.UserRole.Value == global::User.Role.Admin ||
+             user.UserRole.Value == global::User.Role.CompanyOwner ||
+             user.UserRole.Value == global::User.Role.Assistant))
         {
-            return NotFound(new { message = "Usuario no encontrado." });
+            query = query.Where(u =>
+                u.CompanyId == user.CompanyId &&
+                u.UserRole != global::User.Role.Applicant);
         }
-
-        // Si el usuario es Admin, devolver todos los usuarios
-        if (user.UserRole.HasValue && (user.UserRole.Value == global::User.Role.Admin || user.UserRole.Value == global::User.Role.CompanyOwner || user.UserRole.Value == global::User.Role.Assistant))
-        {
-            var allUsers = await _authContext.Users
-                   .AsNoTracking()
-                   .Where(u => u.CompanyId == user.CompanyId && u.UserRole != global::User.Role.Applicant)
-                   .Select(u => new
-                   {
-                       // Campos del usuario
-                       u.Id,
-                       u.Name,
-                       u.LastName,
-                       u.Email,
-                       u.IsActive,
-                       u.UserRole,
-                       u.IdentificationNumber,
-                       u.WarehouseId,
-                       u.AvatarUrl,
-                       // Campos del warehouse
-                       Warehouse = u.Warehouse != null ? new
-                       {
-                           u.Warehouse.City,
-                           u.Warehouse.Company
-                       } : null,
-
-                       // Campos del profile
-                       Profile = u.Profile != null ? new
-                       {
-                           PhoneNumber = u.Profile.PhoneNumber,
-                           ssn = u.Profile.SsnLast4,
-                           ssnUrl = u.Profile.SocialSecurityUrl,
-                           address = u.Profile.Address,
-                           city = u.Profile.City,
-                           zipcode = u.Profile.ZipCode,
-                           state=u.Profile.State,
-                       } : null,
-                       Account = u.Accounts
-                            .Where(a => a.IsDefault)
-                            .Select(a => new
-                            {
-                                a.Id,
-                                accountNumber = a.AccountNumber,
-                                routingNumber = a.RoutingNumber
-                            })
-                            .FirstOrDefault()
-                   })
-                .ToListAsync();
-
-            return Ok(allUsers);
-        }
-
-        // Si el usuario es Manager, devolver solo los Drivers del mismo Warehouse
-        if (user.UserRole.HasValue && user.UserRole.Value == global::User.Role.Manager)
+        // Manager => solo drivers de su warehouse
+        else if (user.UserRole.HasValue && user.UserRole.Value == global::User.Role.Manager)
         {
             if (!user.WarehouseId.HasValue)
-            {
-                return BadRequest(new { message = "El Manager no tiene un almacén asignado." });
-            }
+                return BadRequest(new { message = "Manager does not have an assigned warehouse." });
 
-            var drivers = await _authContext.Users
-                   .AsNoTracking()
-                   .Where(u => u.WarehouseId == user.WarehouseId && u.UserRole == global::User.Role.Driver)
-                   .Select(u => new
-                   {
-                       // Campos del usuario
-                       u.Id,
-                       u.Name,
-                       u.LastName,
-                       u.Email,
-                       u.IsActive,
-                       u.UserRole,
-                       u.IdentificationNumber,
-                       u.WarehouseId,
-                       u.AvatarUrl,
-                       // Campos del warehouse
-                       Warehouse = u.Warehouse != null ? new
-                       {
-                           u.Warehouse.City,
-                           u.Warehouse.Company
-                       } : null,
-
-                       // Campos del profile
-                       Profile = u.Profile != null ? new
-                       {
-                           PhoneNumber = u.Profile.PhoneNumber,
-                           ssn = u.Profile.SsnLast4,
-                           address = u.Profile.Address,
-                           city = u.Profile.City,
-                           zipcode = u.Profile.ZipCode,
-                           state = u.Profile.State,
-                       } : null,
-                       Account = u.Accounts
-                            .Where(a => a.IsDefault)
-                            .Select(a => new
-                            {
-                                a.Id,
-                                accountNumber = a.AccountNumber,
-                                routingNumber = a.RoutingNumber
-                            })
-                            .FirstOrDefault()
-                   })
-                .ToListAsync();
-
-            return Ok(drivers);
+            query = query.Where(u =>
+                u.WarehouseId == user.WarehouseId &&
+                u.UserRole == global::User.Role.Driver);
+        }
+        else
+        {
+            return Forbid();
         }
 
-        // Si el usuario es Assistant o cualquier otro, no tiene permisos
-        return Forbid();
+        var result = await query
+            .Select(u => new
+            {
+                u.Id,
+                u.Name,
+                u.LastName,
+                u.Email,
+                u.IsActive,
+                u.UserRole,
+                u.IdentificationNumber,
+                u.WarehouseId,
+                u.AvatarUrl,
+
+                Warehouse = u.Warehouse != null ? new
+                {
+                    u.Warehouse.City,
+                    u.Warehouse.Company
+                } : null,
+
+                Profile = u.Profile != null ? new
+                {
+                    PhoneNumber = u.Profile.PhoneNumber,
+                    ssn = u.Profile.SsnLast4,
+                    ssnUrl = u.Profile.SocialSecurityUrl,
+                    address = u.Profile.Address,
+                    city = u.Profile.City,
+                    zipcode = u.Profile.ZipCode,
+                    state = u.Profile.State
+                } : null,
+
+                Account = u.Accounts
+                    .Where(a => a.IsDefault)
+                    .Select(a => new
+                    {
+                        a.Id,
+                        accountNumber = a.AccountNumber,
+                        routingNumber = a.RoutingNumber
+                    })
+                    .FirstOrDefault()
+            })
+            .ToListAsync();
+
+        return Ok(result);
+    }
+
+    [Authorize]
+    [HttpGet("active-by-warehouse")]
+    public async Task<IActionResult> GetActiveUsersByWarehouse([FromQuery] int? warehouseId)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst("id");
+        if (userIdClaim == null)
+            return Unauthorized(new { message = "Invalid token" });
+
+        if (!int.TryParse(userIdClaim.Value, out int userId))
+            return Unauthorized(new { message = "Invalid user id" });
+
+        var currentUser = await _authContext.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (currentUser == null)
+            return NotFound(new { message = "User not found." });
+
+        int targetWarehouseId;
+
+        // Manager => usa su propio warehouse
+        if (currentUser.UserRole.HasValue && currentUser.UserRole.Value == global::User.Role.Manager)
+        {
+            if (!currentUser.WarehouseId.HasValue)
+                return BadRequest(new { message = "Manager does not have an assigned warehouse." });
+
+            targetWarehouseId = currentUser.WarehouseId.Value;
+        }
+        // Admin / CompanyOwner / Assistant => warehouseId es obligatorio
+        else if (currentUser.UserRole.HasValue &&
+            (currentUser.UserRole.Value == global::User.Role.Admin ||
+             currentUser.UserRole.Value == global::User.Role.CompanyOwner ||
+             currentUser.UserRole.Value == global::User.Role.Assistant))
+        {
+            if (!warehouseId.HasValue)
+                return BadRequest(new { message = "warehouseId is required for Admin, CompanyOwner, or Assistant." });
+
+            targetWarehouseId = warehouseId.Value;
+        }
+        else
+        {
+            return Forbid();
+        }
+
+        var users = await _authContext.Users
+            .AsNoTracking()
+            .Where(u =>
+                u.WarehouseId == targetWarehouseId &&
+                u.IsActive &&
+                u.UserRole != global::User.Role.Applicant)
+            .Select(u => new
+            {
+                u.Id,
+                u.Name,
+                u.LastName,
+                u.Email,
+                u.IsActive,
+                u.UserRole,
+                u.IdentificationNumber,
+                u.WarehouseId,
+                u.AvatarUrl,
+
+                Warehouse = u.Warehouse != null ? new
+                {
+                    u.Warehouse.Id,
+                    u.Warehouse.City,
+                    u.Warehouse.Company
+                } : null,
+
+                Profile = u.Profile != null ? new
+                {
+                    PhoneNumber = u.Profile.PhoneNumber,
+                    ssn = u.Profile.SsnLast4,
+                    ssnUrl = u.Profile.SocialSecurityUrl,
+                    address = u.Profile.Address,
+                    city = u.Profile.City,
+                    zipcode = u.Profile.ZipCode,
+                    state = u.Profile.State
+                } : null,
+
+                Account = u.Accounts
+                    .Where(a => a.IsDefault)
+                    .Select(a => new
+                    {
+                        a.Id,
+                        accountNumber = a.AccountNumber,
+                        routingNumber = a.RoutingNumber
+                    })
+                    .FirstOrDefault()
+            })
+            .ToListAsync();
+
+        return Ok(users);
     }
     [Authorize]
     [HttpGet("applicantByRol")]
@@ -1347,53 +1405,96 @@ public class UserController : ControllerBase
 
     [Authorize]
     [HttpPost("sendMessageApplicant")]
-    public async Task<IActionResult> SendMessageApplicant([FromBody] SendMessageApplicantDto dto)
+    public async Task<IActionResult> SendMessageApplicant([FromBody] List<SendMessageApplicantDto> dtos)
     {
-        if (dto == null || dto.Id <= 0)
-            return BadRequest(new { Message = "Invalid payload" });
+        if (dtos == null || !dtos.Any())
+            return BadRequest(new { message = "Invalid payload" });
 
-        var userInDb = await _authContext.Users
-            .Include(u => u.Profile)
-            .Include(u => u.Warehouse)
-            .FirstOrDefaultAsync(u => u.Id == dto.Id);
-        if (userInDb == null) return NotFound(new { Message = "User not found." });
+        int sent = 0;
+        int skipped = 0;
 
-        var warehouseId = dto.WarehouseId ?? userInDb.WarehouseId;
-        if (!warehouseId.HasValue) return BadRequest(new { Message = "Warehouse is required." });
-
-        var wmt = await _authContext.WarehouseMessageTemplates
-            .AsNoTracking()
-            .FirstOrDefaultAsync(w => w.WarehouseId == warehouseId && w.IsDefault);
-        if (wmt == null) return BadRequest(new { Message = "Message template not found." });
-
-        var warehouse = await _authContext.Warehouses
-            .AsNoTracking()
-            .FirstOrDefaultAsync(w => w.Id == warehouseId);
-        if (warehouse == null) return BadRequest(new { Message = "Warehouse not found." });
-
-        userInDb.WasContacted = true;
-        userInDb.IsActive = true;
-        userInDb.UpdatedAt = DateTime.UtcNow;
-
-        // WhatsApp (si hay teléfono)
-        var phone = userInDb.Profile?.PhoneNumber;
-        if (!string.IsNullOrWhiteSpace(phone))
-            _whatsAppService.EnviarMensaje(phone, wmt.MessageBody);
-
-        // Email (si hay email)
-        if (!string.IsNullOrWhiteSpace(userInDb.Email))
+        foreach (var dto in dtos)
         {
-            await _emailService.SendEmailAsync(
-                toEmail: userInDb.Email!,
-                subject: "Thank you!!",
-                "FirstContact.cshtml",
-                placeholders: new() { ["body"] = wmt.MessageBody, ["city"] = warehouse.City },
-                copy: true
-            );
+            if (dto.Id <= 0)
+            {
+                skipped++;
+                continue;
+            }
+
+            var userInDb = await _authContext.Users
+                .Include(u => u.Profile)
+                .Include(u => u.Warehouse)
+                .FirstOrDefaultAsync(u => u.Id == dto.Id);
+
+            if (userInDb == null)
+            {
+                skipped++;
+                continue;
+            }
+
+            var warehouseId = dto.WarehouseId ?? userInDb.WarehouseId;
+            if (!warehouseId.HasValue)
+            {
+                skipped++;
+                continue;
+            }
+
+            var wmt = await _authContext.WarehouseMessageTemplates
+                .AsNoTracking()
+                .FirstOrDefaultAsync(w => w.WarehouseId == warehouseId && w.IsDefault);
+
+            if (wmt == null)
+            {
+                skipped++;
+                continue;
+            }
+
+            var warehouse = await _authContext.Warehouses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(w => w.Id == warehouseId);
+
+            if (warehouse == null)
+            {
+                skipped++;
+                continue;
+            }
+
+            userInDb.WasContacted = true;
+            userInDb.IsActive = true;
+            userInDb.UpdatedAt = DateTime.UtcNow;
+
+            var phone = userInDb.Profile?.PhoneNumber;
+
+            if (!string.IsNullOrWhiteSpace(phone))
+            {
+                _whatsAppService.EnviarMensaje(phone, wmt.MessageBody);
+            }
+
+            if (!string.IsNullOrWhiteSpace(userInDb.Email))
+            {
+                await _emailService.SendEmailAsync(
+                    toEmail: userInDb.Email!,
+                    subject: "Thank you!!",
+                    "FirstContact.cshtml",
+                    placeholders: new()
+                    {
+                        ["body"] = wmt.MessageBody,
+                        ["city"] = warehouse.City
+                    },
+                    copy: true
+                );
+            }
+
+            sent++;
         }
 
         await _authContext.SaveChangesAsync();
-        return Ok(new { Message = "Applicant contacted successfully." });
+
+        return Ok(new
+        {
+            sent,
+            skipped
+        });
     }
 
 
@@ -2556,6 +2657,7 @@ public class WarehouseDto
     public List<AuthorizedPersonDto>? AuthorizedPersons { get; set; }
     public Metro? Metro { get; set; }
     public decimal? DriveRate { get; set; }
+    public string? FacilityCode { get; set; }
     public string? Manager { get; set; }
 }
 public sealed class WarehouseUpsertDto
@@ -2573,6 +2675,7 @@ public sealed class WarehouseUpsertDto
     public List<AuthorizedPersonDto>? AuthorizedPersons { get; set; }
     public int? MetroId { get; set; }
     public decimal? DriveRate { get; set; }
+    public string? FacilityCode { get; set; }
 
 }
 public class AuthorizedPersonDto

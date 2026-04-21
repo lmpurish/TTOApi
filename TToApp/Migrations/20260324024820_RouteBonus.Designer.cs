@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TToApp.Model;
 
@@ -11,9 +12,11 @@ using TToApp.Model;
 namespace TToApp.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260324024820_RouteBonus")]
+    partial class RouteBonus
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -943,9 +946,6 @@ namespace TToApp.Migrations
                         .HasPrecision(10, 2)
                         .HasColumnType("decimal(10,2)");
 
-                    b.Property<DateTime?>("ChargedAt")
-                        .HasColumnType("datetime2");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
@@ -955,12 +955,6 @@ namespace TToApp.Migrations
 
                     b.Property<int>("PackageId")
                         .HasColumnType("int");
-
-                    b.Property<int?>("PayRunId")
-                        .HasColumnType("int");
-
-                    b.Property<long?>("PayRunId1")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("Tracking")
                         .HasMaxLength(100)
@@ -980,8 +974,6 @@ namespace TToApp.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("PackageId");
-
-                    b.HasIndex("PayRunId1");
 
                     b.HasIndex("Tracking");
 
@@ -1083,123 +1075,6 @@ namespace TToApp.Migrations
                     b.HasIndex("WarehouseId");
 
                     b.ToTable("Permits");
-                });
-
-            modelBuilder.Entity("TToApp.Model.RentalVehicle", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Color")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<int>("CompanyId")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<decimal>("DailyPrice")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<bool>("DashCamInstalled")
-                        .HasColumnType("bit");
-
-                    b.Property<decimal>("DepositAmount")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<string>("DisplayName")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("nvarchar(120)");
-
-                    b.Property<string>("FacilityLocation")
-                        .HasMaxLength(150)
-                        .HasColumnType("nvarchar(150)");
-
-                    b.Property<string>("FuelType")
-                        .HasMaxLength(30)
-                        .HasColumnType("nvarchar(30)");
-
-                    b.Property<bool>("GpsInstalled")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("MainImageUrl")
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<string>("Make")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("nvarchar(80)");
-
-                    b.Property<int>("MetroId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Model")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("nvarchar(80)");
-
-                    b.Property<string>("Notes")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<string>("Plate")
-                        .HasMaxLength(30)
-                        .HasColumnType("nvarchar(30)");
-
-                    b.Property<int?>("SeatingCapacity")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("nvarchar(30)");
-
-                    b.Property<string>("StockNumber")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<string>("Transmission")
-                        .HasMaxLength(30)
-                        .HasColumnType("nvarchar(30)");
-
-                    b.Property<string>("Trim")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<string>("TrunkNotes")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Vin")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<decimal>("WeeklyPrice")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<int>("Year")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CompanyId");
-
-                    b.HasIndex("MetroId");
-
-                    b.ToTable("RentalVehicles");
                 });
 
             modelBuilder.Entity("TToApp.Model.RouteBonus", b =>
@@ -1566,56 +1441,6 @@ namespace TToApp.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("Vehicles");
-                });
-
-            modelBuilder.Entity("TToApp.Model.VehicleImage", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("CompanyId")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("FileName")
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<string>("ImageType")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<string>("ImageUrl")
-                        .IsRequired()
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<bool>("IsCover")
-                        .HasColumnType("bit");
-
-                    b.Property<int?>("RentalVehicleId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("int");
-
-                    b.Property<int>("VehicleId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CompanyId");
-
-                    b.HasIndex("RentalVehicleId");
-
-                    b.HasIndex("VehicleId");
-
-                    b.ToTable("VehicleImage");
                 });
 
             modelBuilder.Entity("TToApp.Model.Warehouse", b =>
@@ -2086,10 +1911,6 @@ namespace TToApp.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("TToApp.Model.PayRun", "PayRun")
-                        .WithMany()
-                        .HasForeignKey("PayRunId1");
-
                     b.HasOne("User", "User")
                         .WithMany("PayrollFines")
                         .HasForeignKey("UserId")
@@ -2097,8 +1918,6 @@ namespace TToApp.Migrations
                         .IsRequired();
 
                     b.Navigation("Package");
-
-                    b.Navigation("PayRun");
 
                     b.Navigation("User");
                 });
@@ -2142,25 +1961,6 @@ namespace TToApp.Migrations
                     b.Navigation("User");
 
                     b.Navigation("Warehouse");
-                });
-
-            modelBuilder.Entity("TToApp.Model.RentalVehicle", b =>
-                {
-                    b.HasOne("TToApp.Model.Company", "Company")
-                        .WithMany()
-                        .HasForeignKey("CompanyId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.HasOne("TToApp.Model.Metro", "Metro")
-                        .WithMany()
-                        .HasForeignKey("MetroId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("Company");
-
-                    b.Navigation("Metro");
                 });
 
             modelBuilder.Entity("TToApp.Model.RouteBonus", b =>
@@ -2253,29 +2053,6 @@ namespace TToApp.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
-                });
-
-            modelBuilder.Entity("TToApp.Model.VehicleImage", b =>
-                {
-                    b.HasOne("TToApp.Model.Company", "Company")
-                        .WithMany()
-                        .HasForeignKey("CompanyId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("TToApp.Model.RentalVehicle", null)
-                        .WithMany("Images")
-                        .HasForeignKey("RentalVehicleId");
-
-                    b.HasOne("TToApp.Model.Vehicle", "Vehicle")
-                        .WithMany()
-                        .HasForeignKey("VehicleId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Company");
-
-                    b.Navigation("Vehicle");
                 });
 
             modelBuilder.Entity("TToApp.Model.Warehouse", b =>
@@ -2380,11 +2157,6 @@ namespace TToApp.Migrations
                     b.Navigation("PenaltyRules");
 
                     b.Navigation("WeightRules");
-                });
-
-            modelBuilder.Entity("TToApp.Model.RentalVehicle", b =>
-                {
-                    b.Navigation("Images");
                 });
 
             modelBuilder.Entity("TToApp.Model.Warehouse", b =>

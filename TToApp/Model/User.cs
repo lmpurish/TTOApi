@@ -14,7 +14,8 @@ public class User
         Rsp,
         Applicant,
         CompanyOwner,
-        Recruiter
+        Recruiter,
+        RentalDriver
     }
 
     public enum HiringStage

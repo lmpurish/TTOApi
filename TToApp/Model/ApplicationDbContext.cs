@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using TToApp.Migrations;
 using TToApp.Model;
 using static TToApp.Configurations.ModelConf;
 
@@ -35,11 +36,13 @@ namespace TToApp.Model
         public DbSet<DriverPunch> DriverPunches => Set<DriverPunch>();
         public DbSet<PayrollFine> PayrollFines { get; set; }
         public DbSet<PayrollBonusRule> PayrollBonusRules { get; set; } = null!;
-
+        public DbSet<RouteBonus> RouteBonuses { get; set; } = null!;
         public DbSet<PayrollPenaltyRule> PayrollPenaltyRules { get; set; } = null!;
         //public DbSet<PayrollConfig> PayrollConfigs { get; set; } = null!;
         public DbSet<EmployeeLoan> EmployeeLoans => Set<EmployeeLoan>();
         public DbSet<LoanRepayment> LoanRepayments => Set<LoanRepayment>();
+        public DbSet<RentalVehicle> RentalVehicles => Set<RentalVehicle>();
+
 
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -270,7 +273,17 @@ namespace TToApp.Model
                     .HasForeignKey(x => x.ApprovedBy)
                     .OnDelete(DeleteBehavior.Restrict);
             });
+            modelBuilder.Entity<RentalVehicle>()
+               .HasOne(v => v.Metro)
+               .WithMany()
+               .HasForeignKey(v => v.MetroId)
+               .OnDelete(DeleteBehavior.NoAction);
 
+            modelBuilder.Entity<RentalVehicle>()
+                .HasOne(v => v.Company)
+                .WithMany()
+                .HasForeignKey(v => v.CompanyId)
+                .OnDelete(DeleteBehavior.NoAction);
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
 

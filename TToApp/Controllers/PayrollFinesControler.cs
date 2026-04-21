@@ -202,9 +202,9 @@ public class PayrollFinesController : ControllerBase
     [HttpPost("import/details")]
     public async Task<ActionResult> ImportFromExcelDetails([FromForm] PayrollFineImportRequest request)
     {
-         var file = request.File;
+        var file = request.File;
         if (file == null || file.Length == 0)
-            return BadRequest("File no found");
+            return BadRequest("File not found.");
 
         using var stream = new MemoryStream();
         await file.CopyToAsync(stream);
@@ -213,15 +213,15 @@ public class PayrollFinesController : ControllerBase
         using var workbook = new XLWorkbook(stream);
 
         if (!workbook.Worksheets.Any(w => w.Name == "Details"))
-            return BadRequest("La hoja 'Details' no existe.");
+            return BadRequest("Worksheet 'Details' does not exist.");
 
         var ws = workbook.Worksheet("Details");
         var used = ws.RangeUsed();
 
         if (used == null)
-            return BadRequest("La hoja 'Details' está vacía.");
+            return BadRequest("Worksheet 'Details' is empty.");
 
-        var rows = used.RowsUsed().Skip(1); // saltar headers
+        var rows = used.RowsUsed().Skip(1); // skip headers
 
         var created = 0;
         var errors = new List<object>();
@@ -230,72 +230,75 @@ public class PayrollFinesController : ControllerBase
         {
             var rowNum = row.RowNumber();
 
-            var tracking = row.Cell("A").GetString()?.Trim(); // Tracking Numbe                 
-            var type = row.Cell("F").GetString()?.Trim();;         // Claim Category
+            var tracking = row.Cell("A").GetString()?.Trim(); // Tracking Number
+            var type = row.Cell("F").GetString()?.Trim();      // Claim Category
+
             decimal amount;
             var amountStr = row.Cell("B").GetString()?.Trim();
+
             if (!decimal.TryParse(amountStr, out amount) && !row.Cell(2).TryGetValue(out amount))
             {
-                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "Amount inválido" });
+                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "Invalid amount." });
                 continue;
             }
+
             var description = $"Imported from Excel row {rowNum}";
 
             if (string.IsNullOrWhiteSpace(tracking))
             {
-                errors.Add(new { Row = rowNum, Error = "Tracking vacío." });
+                errors.Add(new { Row = rowNum, Error = "Tracking is empty." });
                 continue;
             }
-            // 🔍 Buscar package por Tracking
+
             var package = await _context.Packages
                 .AsNoTracking()
                 .Include(p => p.Routes)
                 .FirstOrDefaultAsync(p => p.Tracking == tracking);
 
-
             if (package is null)
             {
-                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "Package no existe." });
+                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "Package not found." });
                 continue;
             }
 
             int? userIdNullable = package.Routes?.UserId;
+
             if (!userIdNullable.HasValue)
             {
-                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "No se pudo determinar UserId desde Route." });
+                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "UserId could not be determined from the route." });
                 continue;
             }
 
             int userId = userIdNullable.Value;
 
             var userExists = await _context.Users.AnyAsync(u => u.Id == userId);
+
             if (!userExists)
             {
-                errors.Add(new { Row = rowNum, Tracking = tracking, UserId = userId, Error = "UserId no existe." });
+                errors.Add(new { Row = rowNum, Tracking = tracking, UserId = userId, Error = "UserId does not exist." });
                 continue;
             }
 
-            // 🚫 Evitar duplicados (Tracking + Type)
             var exists = await _context.PayrollFines.AnyAsync(x =>
                 x.Tracking == tracking &&
                 x.Type == type);
 
             if (exists)
             {
-                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "PayrollFine duplicado." });
+                errors.Add(new { Row = rowNum, Tracking = tracking, Error = "Duplicate PayrollFine detected." });
                 continue;
             }
 
             var entity = new PayrollFine
             {
-                UserId      = userId,
-                PackageId   = package.Id,
-                Tracking    = tracking,
-                Amount      = amount,
-                Type        = type,
+                UserId = userId,
+                PackageId = package.Id,
+                Tracking = tracking,
+                Amount = amount,
+                Type = type,
                 Description = description,
-                CreatedAt   = DateTime.UtcNow,
-                UpdatedAt   = null
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = null
             };
 
             _context.PayrollFines.Add(entity);

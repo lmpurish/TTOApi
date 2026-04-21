@@ -61,6 +61,8 @@ namespace TToApp.Model
         public double? Longitude { get; set; }
         public int GeofenceRadiusMeters { get; set; } = 200;
 
+        public string? FacilityCode { get; set; }
+
 
     }
 

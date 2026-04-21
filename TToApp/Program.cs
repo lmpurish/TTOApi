@@ -12,10 +12,11 @@ using TToApp.Helpers;
 using TToApp.Model;
 using TToApp.Services;
 using TToApp.Services.Auth;
+using TToApp.Services.Notifications;
 using TToApp.Services.Payroll;
 using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
-using TToApp.Services.Notifications;
+using TToApp.Services.Vehicle;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -114,6 +115,7 @@ builder.Services.AddSingleton<ISensitiveDataProtector, SensitiveDataProtector>()
 builder.Services.AddScoped<IUserUiSettingsService, UserUiSettingsService>();
 builder.Services.AddScoped<PayrollService>();
 builder.Services.AddScoped<PayRunApprovedSender>();
+builder.Services.AddScoped<IVehicleService, VehicleService>();
 
 
 // Auth / JWT

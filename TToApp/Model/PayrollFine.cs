@@ -41,8 +41,10 @@ public class PayrollFine
     public string? Description { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
-   // public PayrollFineType Type { get; set; } = PayrollFineType.Other;
-
+    // public PayrollFineType Type { get; set; } = PayrollFineType.Other;
+    public DateTime? ChargedAt { get; set; }
+    public int? PayRunId { get; set; }
+    public PayRun? PayRun { get; set; }
     public User User { get; set; } = null!;
     public Packages Package { get; set; } = null!;
 }

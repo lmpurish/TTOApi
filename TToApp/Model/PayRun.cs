@@ -8,7 +8,7 @@
         public long DriverId { get; set; }
         public decimal GrossAmount { get; set; }
         public decimal Adjustments { get; set; }
-        public decimal NetAmount { get; private set; } // Computada
+        public decimal NetAmount { get;  set; } // Computada
         public string Status { get; set; } = "Draft";   // Draft|Approved (sugerido)
         public DateTime? CalculatedAt { get; set; }
         public long? CalculatedBy { get; set; }

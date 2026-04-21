@@ -1,6 +1,7 @@
-﻿using Microsoft.EntityFrameworkCore;
-using TToApp.Model;
+﻿using Microsoft.AspNetCore.Routing;
+using Microsoft.EntityFrameworkCore;
 using TToApp.DTOs;
+using TToApp.Model;
 
 namespace TToApp.Services.Payroll
 {
@@ -147,6 +148,8 @@ namespace TToApp.Services.Payroll
                 .Include(r => r.Zone)
                 .ToListAsync();
 
+            var hasRoutesInThisPayRun = routes.Any();
+
             // 5) Precargar pesos por ruta (solo si weightRules aplica)
             var routeIds = routes.Select(r => r.Id).Distinct().ToList(); // Id de Routes (int)
 
@@ -178,7 +181,7 @@ namespace TToApp.Services.Payroll
                     );
 
             }
-            Dictionary<int, FineSummary> finesByRoute = new();
+     /*       Dictionary<int, FineSummary> finesByRoute = new();
 
             if(penaltyRules.Count > 0 && routeIds.Count > 0)
             {
@@ -209,7 +212,7 @@ namespace TToApp.Services.Payroll
                     );
                 }
             }
- 
+ */
 
             // 7) Crear / limpiar PayRun
             var payRun = await _db.PayRuns.FirstOrDefaultAsync(x => x.PayPeriodId == period.Id && x.DriverId == driverId);
@@ -230,12 +233,14 @@ namespace TToApp.Services.Payroll
             {
                 var oldLines = _db.PayRunLines.Where(l => l.PayRunId == payRun.Id);
                 _db.PayRunLines.RemoveRange(oldLines);
-                 // borra ajustes anteriores (bonus/penalty/loan/etc)
-                var oldAdjs = _db.PayrollAdjustments.Where(a => a.PayRunId == payRun.Id);
+                // borra ajustes anteriores (bonus/penalty/loan/etc)
+                var oldAdjs = _db.PayrollAdjustments
+                .Where(a => a.PayRunId == payRun.Id && a.Type != "Manual" && a.Type != "Bonus" && a.Type != "Penalty");
+
                 _db.PayrollAdjustments.RemoveRange(oldAdjs);
 
                 // si ya habías aplicado repayments en otro cálculo, bórralos también
-               var oldRepayments = await _db.LoanRepayments
+                var oldRepayments = await _db.LoanRepayments
                     .Where(r => r.PayRunId == payRun.Id && r.Status == "Applied")
                     .ToListAsync();
 
@@ -268,6 +273,45 @@ namespace TToApp.Services.Payroll
             decimal gross = 0m;
             var warnings = new List<string>();
 
+            if (hasRoutesInThisPayRun)
+            {
+                var pendingFines = await _db.PayrollFines
+                    .Where(f =>
+                        f.UserId == driverId &&
+                        f.Amount > 0 &&
+                        f.ChargedAt == null &&
+                        f.PayRunId == null)
+                    .OrderBy(f => f.CreatedAt)
+                    .ToListAsync();
+
+                var totalPendingFines = pendingFines.Sum(f => f.Amount);
+
+                if (totalPendingFines > 0)
+                {
+                    foreach (var fine in pendingFines)
+                    {
+                        gross += AddLine(
+                            payRun,
+                            "Fine",
+                            fine.PackageId.ToString(),
+                            $"Fine {fine.Type} - {fine.Tracking}",
+                            1m,
+                            -fine.Amount,
+                            "FINE",
+                            weekEnd.ToDateTime(TimeOnly.MinValue)
+                        );
+                    }
+
+                    var now = DateTime.UtcNow;
+                    foreach (var fine in pendingFines)
+                    {
+                        fine.ChargedAt = now;
+                        fine.PayRunId = (int)payRun.Id;
+                        fine.UpdatedAt = now;
+                    }
+                }
+            }
+
             foreach (var route in routes)
             {
                 var delivered = Math.Max(0, route.DeliveryStops - route.CNL);
@@ -289,7 +333,15 @@ namespace TToApp.Services.Payroll
 
                 if (zonePerStop > 0 )
                 {
-                    effectivePerStop = Math.Max(driverPerStop, zonePerStop);
+                    if (isOnTrac)
+                    {
+                        effectivePerStop = Math.Max(driverPerStop, zonePerStop);
+                       
+                    }
+                    else
+                    {
+
+                    }
                     stopTag = (driverPerStop > zonePerStop) ? "USE_DRIVER_BASE" : "USE_ZONE_RATE";
                 }
                 else
@@ -313,17 +365,17 @@ namespace TToApp.Services.Payroll
                             // item: (rule, count, amountTotal)
                             var rule = item.Rule;
                             var qty = item.Count;
-                            var rateExtra = rule.ExtraAmount;
+                            var rateExtra = Math.Max((rule.ExtraAmount + (rate.ExtraAmount ?? 0m))+ driverPerStop, zonePerStop) ;
                             qtyExtraWeigth += qty;
 
                             // Línea por regla (agregado) => qty * rateExtra = total
                             routeSubtotal += AddLine(
                                 payRun,
-                                "WeightExtra",
+                                "Earning",
                                 route.Id.ToString(),
-                                $"Extra por peso [{rule.MinWeight}-{(rule.MaxWeight.HasValue ? rule.MaxWeight.Value.ToString() : "∞")}]",
+                                $"{route.Date:MMM dd, yyyy} - More than 1lb",
                                 qty,
-                                rateExtra + effectivePerStop,
+                                rateExtra ,
                                 "WEIGHT_EXTRA",
                                 route.Date,
                                 route.Zone?.Id, route.Zone?.Area
@@ -343,12 +395,12 @@ namespace TToApp.Services.Payroll
                             {
                                 warnings.Add($"Ruta {route.Id}: PaymentType=PerRoute pero PriceRoute inválido ({priceRoute}); se pagó 0." );
                                 AddLine(payRun, "Route", route.Id.ToString(),
-                                    $"Ruta {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute, sin precio)", 1m, 0m, "WARN_NO_ROUTE_PRICE",route.Date,route.Zone.Id, route.Zone.Area);
+                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute, sin precio)", 1m, 0m, "WARN_NO_ROUTE_PRICE",route.Date,route.Zone.Id, route.Zone.Area);
                             }
                             else
                             {
                                 routeSubtotal += AddLine(payRun, "Route", route.Id.ToString(),
-                                    $"Ruta {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute)", 1m, (decimal)priceRoute, "PAY_PER_ROUTE",route.Date, route.Zone.Id, route.Zone.Area);
+                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute)", 1m, (decimal)priceRoute, "PAY_PER_ROUTE",route.Date, route.Zone.Id, route.Zone.Area);
                             }
 
                             break;
@@ -358,15 +410,24 @@ namespace TToApp.Services.Payroll
                         {
                             if (delivered > 0)
                             {
-                                
-                                routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
-                                    $"Stops entregados {(route.ZoneId == null ? "(sin zona)" : $"(zona {route.ZoneId})")} (PerStop)",
-                                     (delivered - qtyExtraWeigth) > 0 ? (delivered - qtyExtraWeigth) : 0m, effectivePerStop, stopTag, route.Date, route.Zone?.Id, route.Zone?.Area);
+
+                                routeSubtotal += AddLine(
+                                payRun,
+                                "Earning",
+                                route.Id.ToString(), 
+                                $"{route.Date:MMM dd, yyyy}  {(route.Zone != null ? $"Zone {route.Zone.ZoneCode} " : "")} - Less than 1lb",
+                                (delivered - qtyExtraWeigth) > 0 ? (delivered - qtyExtraWeigth) : 0m,
+                                effectivePerStop,
+                                stopTag,
+                                route.Date,
+                                route.Zone?.Id,
+                                route.Zone?.Area
+                            );
                             }
                             else
                             {
                                 AddLine(payRun, "Stop", route.Id.ToString(),
-                                    "Stops entregados 0 (PerStop)", 0m, effectivePerStop, "INFO_ZERO_DELIVERED",route.Date, route.Zone?.Id, route.Zone?.Area);
+                                    "Delivered Stops 0 (PerStop)", 0m, effectivePerStop, "INFO_ZERO_DELIVERED",route.Date, route.Zone?.Id, route.Zone?.Area);
                             }
 
                             break;
@@ -379,11 +440,11 @@ namespace TToApp.Services.Payroll
 
                             if (priceRoute > 0)
                                 routeSubtotal += AddLine(payRun, "Route", route.Id.ToString(),
-                                    $"Ruta {route.Id} - {route.Date:yyyy-MM-dd} (Mixed-Route)", 1m, (decimal)priceRoute, "PAY_MIXED_ROUTE",route.Date, route.Zone?.Id, route.Zone?.Area);
+                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (Mixed-Route)", 1m, (decimal)priceRoute, "PAY_MIXED_ROUTE",route.Date, route.Zone?.Id, route.Zone?.Area);
 
                             if (delivered > 0)
                                 routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
-                                    "Stops entregados (Mixed-Stop)", delivered, effectivePerStop, "PAY_MIXED_STOP",route.Date, route.Zone?.Id, route.Zone?.Area);
+                                    "Delivered Stops (Mixed-Stop)", delivered, effectivePerStop, "PAY_MIXED_STOP",route.Date, route.Zone?.Id, route.Zone?.Area);
 
                             break;
                         }
@@ -393,7 +454,7 @@ namespace TToApp.Services.Payroll
                 if (failed > 0 && rate.FailedStopPenalty.GetValueOrDefault() > 0)
                 {
                     routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
-                        "Penalidad CNL", failed, -rate.FailedStopPenalty!.Value, "CNL_PENALTY",route.Date, route.Zone?.Id, route.Zone?.Area);
+                        "CNL Penalty", failed, -rate.FailedStopPenalty!.Value, "CNL_PENALTY",route.Date, route.Zone?.Id, route.Zone?.Area);
                 }
 
                 // Mínimo por ruta (si aplica)
@@ -401,14 +462,14 @@ namespace TToApp.Services.Payroll
                 {
                     var diff = rate.MinPayPerRoute.Value - routeSubtotal;
                     routeSubtotal += AddLine(payRun, "Bonus", route.Id.ToString(),
-                        "Ajuste mínimo por ruta", 1m, diff, "MIN_ROUTE_ADJUST",route.Date, route.Zone?.Id, route.Zone?.Area);
+                        "Minimum adjustment per route", 1m, diff, "MIN_ROUTE_ADJUST",route.Date, route.Zone?.Id, route.Zone?.Area);
                 }
 
                 gross += routeSubtotal;
                 
                 // Penalidades por multas asociadas a la ruta 
 
-                if (penaltyRules?.Count > 0 && finesByRoute.TryGetValue(route.Id, out var fine))
+                /*if (penaltyRules?.Count > 0 && finesByRoute.TryGetValue(route.Id, out var fine))
                 {
                     var penaltyRule = penaltyRules[0]; 
                     var packagesWithFine = fine.PackagesCount;
@@ -424,7 +485,7 @@ namespace TToApp.Services.Payroll
                             payRun,
                             "Fine",
                             route.Id.ToString(),
-                            "Penalidades aplicadas",
+                            "Penalties applied",
                             1m,
                             -penaltyAmount,
                             "FINE_APPLIED",
@@ -432,16 +493,8 @@ namespace TToApp.Services.Payroll
                             route.Zone?.Id,
                             route.Zone?.Area
                         );
-//                         var added = AddLine(
-//     payRun, "Fine", route.Id.ToString(), "Penalidades aplicadas",
-//     1m, -penaltyAmount, "FINE_APPLIED", route.Date, route.Zone?.Id, route.Zone?.Area
-// );
-
-// Console.WriteLine($"[PENALTY] penaltyAmount={penaltyAmount} AddLineReturned={added} grossBefore={gross} ");
-// gross += added;
-// Console.WriteLine($"[PENALTY] grossAfter={gross}");
                     }
-                }
+                }*/
             }
 
             if (rate.RateType == "Mixed" && rate.DailyAmount > 0) {
@@ -464,7 +517,7 @@ namespace TToApp.Services.Payroll
                         payRun,
                         "DailyAmount",
                         driverId.ToString(),
-                        $"Daily Amount on: {day:MMM dd yyyy}" ,
+                        $"Daily Amount on: {day:MMM dd, yyyy}" ,
                         1m,
                         dailyRate,
                         "DAILY_AMOUNT",

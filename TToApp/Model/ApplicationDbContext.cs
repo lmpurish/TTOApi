@@ -42,6 +42,8 @@ namespace TToApp.Model
         public DbSet<EmployeeLoan> EmployeeLoans => Set<EmployeeLoan>();
         public DbSet<LoanRepayment> LoanRepayments => Set<LoanRepayment>();
         public DbSet<RentalVehicle> RentalVehicles => Set<RentalVehicle>();
+        public DbSet<VehicleRental> VehicleRentals { get; set; }
+        public DbSet<RentalRenter> RentalRenters { get; set; }
 
 
 
@@ -284,6 +286,25 @@ namespace TToApp.Model
                 .WithMany()
                 .HasForeignKey(v => v.CompanyId)
                 .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<RentalRenter>()
+                .HasOne(x => x.User)
+                .WithOne(x => x.RentalRenterProfile)
+                .HasForeignKey<RentalRenter>(x => x.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<VehicleRental>()
+                .HasOne(x => x.RentalRenter)
+                .WithMany(x => x.VehicleRentals)
+                .HasForeignKey(x => x.RentalRenterId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<VehicleRental>()
+                .HasOne(x => x.RentalVehicle)
+                .WithMany(x => x.Rentals)
+                .HasForeignKey(x => x.RentalVehicleId)
+                .OnDelete(DeleteBehavior.Restrict);
+                    
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
 

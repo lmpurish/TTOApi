@@ -98,5 +98,7 @@ public class User
     public DateOnly? ConfirmationDate { get; set; }
     public string? ConfirmationToken { get; set; }
     public ICollection<UserDocumentSignature> DocumentSignatures { get; set; } = [];
+    [JsonIgnore]
+    public RentalRenter? RentalRenterProfile { get; set; }
 
 }

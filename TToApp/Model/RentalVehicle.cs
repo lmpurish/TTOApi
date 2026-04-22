@@ -81,7 +81,7 @@ namespace TToApp.Model
         [StringLength(1000)]
         public string? Notes { get; set; }
 
-        public bool GpsInstalled { get; set; }
+         public bool GpsInstalled { get; set; }
 
         public bool DashCamInstalled { get; set; }
 
@@ -92,5 +92,6 @@ namespace TToApp.Model
         public DateTime? UpdatedAt { get; set; }
 
         public ICollection<VehicleImage> Images { get; set; } = new List<VehicleImage>();
+        public ICollection<VehicleRental> Rentals { get; set; } = new List<VehicleRental>();
     }
 }

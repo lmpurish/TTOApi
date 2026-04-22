@@ -32,6 +32,7 @@ namespace TToApp.Model
         // Stripe
         public string? StripeSubscriptionId { get; set; }
         public string? StripePriceId { get; set; }
+        [JsonIgnore]
         public ICollection<Metro>? Metros { get; set; } = new List<Metro>();
 
         // Relaciones

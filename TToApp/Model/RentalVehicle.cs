@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
 
 namespace TToApp.Model
 {
@@ -92,6 +93,7 @@ namespace TToApp.Model
         public DateTime? UpdatedAt { get; set; }
 
         public ICollection<VehicleImage> Images { get; set; } = new List<VehicleImage>();
-        public ICollection<VehicleRental> Rentals { get; set; } = new List<VehicleRental>();
+        
+        [JsonIgnore] public ICollection<VehicleRental> Rentals { get; set; } = new List<VehicleRental>();
     }
 }

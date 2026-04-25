@@ -169,15 +169,15 @@ namespace TToApp.Model
             modelBuilder.Entity<UserDocumentSignature>()
                 .HasIndex(s => new { s.CompanyId, s.UserId, s.CompanyDocumentTemplateId });
             modelBuilder.Entity<Metro>()
-    .HasOne(m => m.Company)
-    .WithMany(c => c.Metros)      // asegúrate de tener ICollection<Metro> Metros en Company
-    .HasForeignKey(m => m.CompanyId)
-    .OnDelete(DeleteBehavior.Cascade);
+                .HasOne(m => m.Company)
+                .WithMany(c => c.Metros)      // asegúrate de tener ICollection<Metro> Metros en Company
+                .HasForeignKey(m => m.CompanyId)
+                .OnDelete(DeleteBehavior.Cascade);
             modelBuilder.Entity<Warehouse>()
-        .HasOne(w => w.PayrollConfig)
-        .WithOne(pc => pc.Warehouse)
-        .HasForeignKey<PayrollConfig>(pc => pc.WarehouseId)
-        .OnDelete(DeleteBehavior.Cascade);
+                .HasOne(w => w.PayrollConfig)
+                .WithOne(pc => pc.Warehouse)
+                .HasForeignKey<PayrollConfig>(pc => pc.WarehouseId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<PayrollConfig>()
                 .HasMany(x => x.WeightRules)
@@ -304,6 +304,26 @@ namespace TToApp.Model
                 .WithMany(x => x.Rentals)
                 .HasForeignKey(x => x.RentalVehicleId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<RentalVehicle>(entity =>
+                {
+                    entity.Property(x => x.Mileage)
+                        .HasDefaultValue(0);
+                });
+
+            modelBuilder.Entity<VehicleRental>(entity =>
+                {
+                    entity.Property(x => x.StartMileage)
+                        .HasDefaultValue(0);
+
+                    entity.Property(x => x.EndMileage)
+                        .IsRequired(false);
+
+                    entity.HasCheckConstraint(
+                        "CK_VehicleRentals_Mileage",
+                        "[EndMileage] IS NULL OR [EndMileage] >= [StartMileage]"
+                    );
+                });
                     
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

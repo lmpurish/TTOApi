@@ -69,6 +69,8 @@ namespace TToApp.Controllers
                 TotalAmount = totalAmount,
                 Notes = dto.Notes,
                 Status = "Reserved",
+                StartMileage = vehicle.Mileage,
+                EndMileage = null,
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -98,39 +100,48 @@ namespace TToApp.Controllers
             return Ok(rental);
         }
 
-        [HttpPut("{id:long}/complete")]
-        public async Task<IActionResult> CompleteRental(long id)
+        [HttpPut ("complete") ]
+        public async Task<IActionResult> CompleteRental([FromBody] CloseVehicleRentalDto dto)
         {
             var rental = await _context.VehicleRentals
                 .Include(r => r.RentalVehicle)
-                .FirstOrDefaultAsync(r => r.Id == id);
+                .FirstOrDefaultAsync(r => r.Id ==  dto.RentalId);
 
             if (rental is null)
-                return NotFound("La renta no existe.");
+                return NotFound("Bad parameter");
 
             if (rental.Status == "Completed")
-                return BadRequest("La renta ya fue completada.");
+                return BadRequest("The rental is already completed.");
 
             if (rental.Status == "Cancelled")
-                return BadRequest("No se puede completar una renta cancelada.");
+                return BadRequest("The rental is cancelled and cannot be completed.");
 
-            rental.Status = "Completed";
+            if (dto.EndMileage < rental.StartMileage)
+                return BadRequest("the end mileage cannot be less than the start mileage.");
+
+            rental.Status       = "Completed";
+            rental.EndMileage   = dto.EndMileage;
+            rental.EndDate      = DateOnly.FromDateTime(dto.EndDate);     
             rental.UpdatedAt = DateTime.UtcNow;
 
             if (rental.RentalVehicle is not null)
             {
                 rental.RentalVehicle.Status = "Available";
                 rental.RentalVehicle.UpdatedAt = DateTime.UtcNow;
+                rental.RentalVehicle.Mileage   = rental.EndMileage ?? rental.RentalVehicle.Mileage;
+
             }
 
             await _context.SaveChangesAsync();
 
             return Ok(new
-            {
-                message = "Renta completada correctamente.",
-                rental.Id,
-                rental.Status
-            });
+                {
+                    rental.Id,
+                    rental.StartMileage,
+                    rental.EndMileage,
+                    MilesUsed = rental.EndMileage - rental.StartMileage,
+                    VehicleMileage = rental.RentalVehicle.Mileage
+                });
         }
     }
 }

@@ -95,5 +95,7 @@ namespace TToApp.Model
         public ICollection<VehicleImage> Images { get; set; } = new List<VehicleImage>();
         
         [JsonIgnore] public ICollection<VehicleRental> Rentals { get; set; } = new List<VehicleRental>();
+
+        public int Mileage { get; set; } = 0;
     }
 }

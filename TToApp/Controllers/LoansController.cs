@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TToApp.DTOs;
@@ -5,6 +6,7 @@ using TToApp.Model;
 
 namespace TToApp.Controllers
 {
+    [Authorize]
     [ApiController]
     [Route("api/loans")]
     public class LoansController : ControllerBase
@@ -23,7 +25,19 @@ namespace TToApp.Controllers
             // var hasActive = await _db.EmployeeLoans.AnyAsync(l => l.DriverId == req.DriverId && l.Status == "Active" && l.Balance > 0);
             // if (hasActive) return BadRequest("El driver ya tiene un préstamo activo.");
 
-            var userId = GetUserId(); // implementa tu forma real (claims)
+            long userId;
+            try
+            {
+                userId = GetUserId();
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(ex.Message);
+            }
+
+            // Opcional: Verificar que el usuario existe en DB para evitar el error FK si borraste al usuario
+            var userExists = await _db.Users.AnyAsync(u => u.Id == userId);
+            if (!userExists) return BadRequest("El usuario que intenta crear el préstamo no existe en el sistema.");
 
             var loan = new EmployeeLoan
             {
@@ -296,9 +310,18 @@ namespace TToApp.Controllers
 
         private long GetUserId()
         {
-            // Ajusta a tu auth real. Ejemplo:
-            // return long.Parse(User.FindFirst("id")!.Value);
-            return 1; // placeholder
+            // Intentamos obtener el ID del claim estándar de NameIdentifier
+            var claim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)
+                        ?? User.FindFirst("nameid");
+
+            if (claim != null && long.TryParse(claim.Value, out long id))
+            {
+                return id;
+            }
+
+            // Si llegas aquí, el token no es válido o no tiene ID
+            // Es mejor lanzar una excepción para que el middleware de error la capture
+            throw new UnauthorizedAccessException("El token no contiene un ID de usuario válido.");
         }
     }
 }

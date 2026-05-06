@@ -449,6 +449,94 @@ namespace TToApp.Controllers
             var metroDTO = _mapper.Map<Metro>(metro);
             return Ok(metroDTO);
         }
+
+        public class FlowDto
+        {
+            public string Date { get; set; } = string.Empty;
+            public int Received { get; set; }
+            public int Delivered { get; set; }
+        }
+
+        [Authorize]
+        [HttpGet("flow")]
+        public async Task<IActionResult> GetWarehouseFlow(string period = "week")
+        {
+            try
+            {
+                var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+                var userRole = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
+
+                if (!int.TryParse(userIdClaim, out int userId))
+                    return Unauthorized();
+
+                int? companyId = null;
+
+                if (userRole == "CompanyOwner")
+                {
+                    companyId = await _context.Companies
+                        .Where(c => c.OwnerId == userId)
+                        .Select(c => (int?)c.Id)
+                        .FirstOrDefaultAsync();
+                }
+                else if (userRole == "Admin" || userRole == "Manager" || userRole == "Assistant")
+                {
+                    companyId = await _context.Users
+                        .Where(u => u.Id == userId)
+                        .Select(u => u.CompanyId)
+                        .FirstOrDefaultAsync();
+                }
+
+                if (!companyId.HasValue)
+                    return BadRequest(new { Message = "No associated company found for this user." });
+
+                // ✅ FIX: Fechas exactas
+                DateTime today = DateTime.UtcNow.Date;
+                DateTime fromDate = period.ToLower() == "month"
+                    ? today.AddDays(-29)   // 30 días exactos
+                    : today.AddDays(-6);    // 7 días exactos
+
+                var flowData = await _context.Routes
+                    .AsNoTracking()
+                    .Where(r => r.Date >= fromDate
+                        && r.Date <= today.AddDays(1)  // Incluir todo el día de hoy
+                        && r.Zone != null
+                        && r.Zone.Warehouse != null
+                        && r.Zone.Warehouse.CompanyId == companyId.Value)
+                    .GroupBy(r => r.Date.Date)
+                    .Select(g => new
+                    {
+                        Date = g.Key,
+                        Received = g.Sum(r => (int?)r.Volumen) ?? 0,
+                        Delivered = g.Sum(r => (int?)r.DeliveryStops) ?? 0
+                    })
+                    .OrderBy(x => x.Date)
+                    .ToListAsync();
+
+                // ✅ FIX: Rango exacto de días
+                int totalDays = period.ToLower() == "month" ? 30 : 7;
+                var allDates = Enumerable.Range(0, totalDays)
+                    .Select(offset => fromDate.AddDays(offset))
+                    .ToList();
+
+                var result = allDates.Select(date =>
+                {
+                    var dayData = flowData.FirstOrDefault(f => f.Date == date);
+                    return new FlowDto
+                    {
+                        Date = date.ToString("yyyy-MM-dd"),
+                        Received = dayData?.Received ?? 0,
+                        Delivered = dayData?.Delivered ?? 0
+                    };
+                });
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading warehouse flow");
+                return StatusCode(500, $"Server error: {ex.Message}");
+            }
+        }
     }
     public class WarehouseWithRspDto
     {

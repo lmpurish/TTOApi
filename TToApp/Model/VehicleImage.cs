@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
 
 namespace TToApp.Model
 {
@@ -13,7 +14,8 @@ namespace TToApp.Model
             public int VehicleId { get; set; }
 
             [ForeignKey(nameof(VehicleId))]
-            public Vehicle? Vehicle { get; set; }
+            [JsonIgnore]
+            public RentalVehicle? Vehicle { get; set; }
 
             [Required]
             public int CompanyId { get; set; }

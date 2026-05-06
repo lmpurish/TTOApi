@@ -44,6 +44,7 @@ namespace TToApp.Model
         public DbSet<RentalVehicle> RentalVehicles => Set<RentalVehicle>();
         public DbSet<VehicleRental> VehicleRentals { get; set; }
         public DbSet<RentalRenter> RentalRenters { get; set; }
+        public DbSet<VehicleImage> VehicleImages { get; set; }
 
 
 
@@ -324,7 +325,13 @@ namespace TToApp.Model
                         "[EndMileage] IS NULL OR [EndMileage] >= [StartMileage]"
                     );
                 });
-                    
+
+            modelBuilder.Entity<RentalVehicle>()
+            .HasMany(v => v.Images)
+            .WithOne(i => i.Vehicle)
+            .HasForeignKey(i => i.VehicleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
 

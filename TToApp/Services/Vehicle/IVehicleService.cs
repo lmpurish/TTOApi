@@ -32,12 +32,10 @@ namespace TToApp.Services.Vehicle
             _context = context;
         }
 
-        public async Task<List<object>> GetVehiclesAsync(int? companyId, int? metroId, string? status)
+        public async Task<List<RentalVehicleListDto>> GetVehiclesAsync(int? companyId, int? metroId, string? status)
         {
             var query = _context.RentalVehicles
-                .Include(v => v.Company)
-                .Include(v => v.Metro)
-                .Include(v => v.Images)
+                .AsNoTracking()
                 .Where(v => v.IsActive)
                 .AsQueryable();
 
@@ -52,39 +50,32 @@ namespace TToApp.Services.Vehicle
 
             return await query
                 .OrderByDescending(v => v.CreatedAt)
-                .Select(v => new
+                .Select(v => new RentalVehicleListDto
                 {
-                    v.Id,
-                    v.CompanyId,
-                    Company = v.Company != null ? v.Company.Name : null,
-                    v.MetroId,
-                    Metro = v.Metro != null ? v.Metro.City : null,
-                    v.DisplayName,
-                    v.StockNumber,
-                    v.Year,
-                    v.Make,
-                    v.Model,
-                    v.Trim,
-                    v.Color,
-                    v.Transmission,
-                    v.FuelType,
-                    v.SeatingCapacity,
-                    v.DailyPrice,
-                    v.WeeklyPrice,
-                    v.DepositAmount,
-                    v.Status,
-                    v.MainImageUrl,
-                    v.FacilityLocation,
-                    v.GpsInstalled,
-                    v.DashCamInstalled,
-                    ImagesCount = v.Images.Count,
-                    v.CreatedAt,
-                    v.UpdatedAt
+                    Id = v.Id,
+                    CompanyId = v.CompanyId,
+                    MetroId = v.MetroId,
+                    DisplayName = v.DisplayName,
+                    StockNumber = v.StockNumber,
+                    Year = v.Year,
+                    Make = v.Make,
+                    Model = v.Model,
+                    Status = v.Status,
+                    DailyPrice = v.DailyPrice,
+                    WeeklyPrice = v.WeeklyPrice,
+
+                    MainImageUrl = _context.VehicleImages
+                        .Where(i => i.VehicleId == v.Id)
+                        .OrderByDescending(i => i.IsCover)
+                        .ThenBy(i => i.SortOrder)
+                        .Select(i => i.ImageUrl)
+                        .FirstOrDefault(),
+
+                    ImagesCount = _context.VehicleImages
+                        .Count(i => i.VehicleId == v.Id)
                 })
-                .Cast<object>()
                 .ToListAsync();
         }
-
         public async Task<RentalVehicle?> GetVehicleByIdAsync(int id)
         {
             return await _context.RentalVehicles
@@ -247,5 +238,22 @@ namespace TToApp.Services.Vehicle
 
             return (true, "Vehicle archived successfully.");
         }
+    }
+
+    public class RentalVehicleListDto
+    {
+        public int Id { get; set; }
+        public int CompanyId { get; set; }
+        public int MetroId { get; set; }
+        public string? DisplayName { get; set; }
+        public string? StockNumber { get; set; }
+        public int Year { get; set; }
+        public string? Make { get; set; }
+        public string? Model { get; set; }
+        public string? Status { get; set; }
+        public decimal DailyPrice { get; set; }
+        public decimal WeeklyPrice { get; set; }
+        public string? MainImageUrl { get; set; }
+        public int ImagesCount { get; set; }
     }
 }

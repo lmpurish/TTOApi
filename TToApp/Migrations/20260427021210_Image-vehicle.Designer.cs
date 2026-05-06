@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TToApp.Model;
 
@@ -11,9 +12,11 @@ using TToApp.Model;
 namespace TToApp.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260427021210_Image-vehicle")]
+    partial class Imagevehicle
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1690,6 +1693,9 @@ namespace TToApp.Migrations
                     b.Property<bool>("IsCover")
                         .HasColumnType("bit");
 
+                    b.Property<int?>("RentalVehicleId")
+                        .HasColumnType("int");
+
                     b.Property<int>("SortOrder")
                         .HasColumnType("int");
 
@@ -1699,6 +1705,8 @@ namespace TToApp.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CompanyId");
+
+                    b.HasIndex("RentalVehicleId");
 
                     b.HasIndex("VehicleId");
 
@@ -2427,8 +2435,12 @@ namespace TToApp.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("TToApp.Model.RentalVehicle", "Vehicle")
+                    b.HasOne("TToApp.Model.RentalVehicle", null)
                         .WithMany("Images")
+                        .HasForeignKey("RentalVehicleId");
+
+                    b.HasOne("TToApp.Model.Vehicle", "Vehicle")
+                        .WithMany()
                         .HasForeignKey("VehicleId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

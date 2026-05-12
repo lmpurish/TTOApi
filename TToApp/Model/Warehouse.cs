@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using TToApp.DTOs;
 using TToApp.Model;
 using Twilio.TwiML.Voice;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TToApp.Model
 {
@@ -62,6 +63,10 @@ namespace TToApp.Model
         public int GeofenceRadiusMeters { get; set; } = 200;
 
         public string? FacilityCode { get; set; }
+
+        [NotMapped]
+        public string Name => $"{City}, {State}";
+        public ICollection<EarlyWarning> EarlyWarnings { get; set; } = new List<EarlyWarning>();
 
 
     }

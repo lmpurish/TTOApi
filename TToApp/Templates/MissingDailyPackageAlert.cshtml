@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Missing Daily Packages Alert</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f2f4f8;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #f29900; /* naranja/amarillo warning */
+            text-align: center;
+        }
+        p {
+            font-size: 16px;
+            color: #333;
+        }
+        .info {
+            background-color: #fff8e6;
+            padding: 15px;
+            margin-top: 15px;
+            border-left: 5px solid #f29900;
+            border-radius: 5px;
+        }
+        .info p {
+            margin: 8px 0;
+        }
+        .center {
+            text-align: center;
+        }
+        .button {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 12px 20px;
+            background-color: #f29900;
+            color: #ffffff;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            font-size: 14px;
+            color: #777;
+        }
+        .emoji {
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 class="emoji">⚠️ Missing Daily Packages Alert</h2>
+
+        <p>
+            No package data was uploaded for the previous day. This may affect reporting,
+            payroll processing, and operational visibility.
+        </p>
+
+        <div class="info">
+            <p><strong>🏢 Warehouse:</strong> {{Warehouse}}</p>
+            <p><strong>📅 Missing Date:</strong> {{MissingDate}}</p>
+            <p><strong>🏭 Company:</strong> {{Company}}</p>
+            <p><strong>🕒 Detected At:</strong> {{DetectedAt}}</p>
+        </div>
+
+        <p>
+            Please verify that the daily data file has been uploaded correctly.
+            If not, upload the missing data as soon as possible.
+        </p>
+
+        <div class="center">
+            <a href="{{Url}}" class="button">View Details</a>
+        </div>
+
+        <div class="footer">
+            &copy; 2025 TTO Logistics. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

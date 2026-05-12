@@ -45,6 +45,9 @@ namespace TToApp.Model
         public DbSet<VehicleRental> VehicleRentals { get; set; }
         public DbSet<RentalRenter> RentalRenters { get; set; }
         public DbSet<VehicleImage> VehicleImages { get; set; }
+        public DbSet<EarlyWarning> EarlyWarnings { get; set; }
+        public DbSet<EarlyWarningConfig> EarlyWarningConfigs { get; set; }
+        public DbSet<CommunicationRecipientRule> CommunicationRecipientRules { get; set; }
 
 
 
@@ -325,12 +328,43 @@ namespace TToApp.Model
                         "[EndMileage] IS NULL OR [EndMileage] >= [StartMileage]"
                     );
                 });
+            modelBuilder.Entity<EarlyWarning>()
+                .HasIndex(x => new
+                {
+                    x.CompanyId,
+                    x.WarehouseId,
+                    x.Type,
+                    x.ReferenceDate,
+                    x.DaysEvaluated
+                })
+                .IsUnique();
+
+            modelBuilder.Entity<EarlyWarningConfig>()
+                .HasIndex(x => new { x.CompanyId, x.WarehouseId, x.Type })
+                .IsUnique();
 
             modelBuilder.Entity<RentalVehicle>()
             .HasMany(v => v.Images)
             .WithOne(i => i.Vehicle)
             .HasForeignKey(i => i.VehicleId)
             .OnDelete(DeleteBehavior.Cascade);
+            
+            modelBuilder.Entity<EarlyWarning>()
+            .HasOne(e => e.Warehouse)
+            .WithMany(w => w.EarlyWarnings)
+            .HasForeignKey(e => e.WarehouseId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<CommunicationRecipientRule>()
+            .HasIndex(x => new
+            {
+                x.CompanyId,
+                x.WarehouseId,
+                x.EventType,
+                x.Channel,
+                x.Role
+            })
+            .IsUnique();
 
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

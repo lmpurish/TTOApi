@@ -17,6 +17,8 @@ using TToApp.Services.Payroll;
 using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
 using TToApp.Services.Vehicle;
+using TToApp.Services.EarlyWarnings;
+using TToApp.Services.CommunicationRecipient;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -116,6 +118,9 @@ builder.Services.AddScoped<IUserUiSettingsService, UserUiSettingsService>();
 builder.Services.AddScoped<PayrollService>();
 builder.Services.AddScoped<PayRunApprovedSender>();
 builder.Services.AddScoped<IVehicleService, VehicleService>();
+builder.Services.AddScoped<IEarlyWarningService, EarlyWarningService>();
+builder.Services.AddScoped<IEarlyWarningNotificationService, EarlyWarningNotificationService>();
+builder.Services.AddScoped<ICommunicationRecipientService, CommunicationRecipientService>();
 
 
 // Auth / JWT

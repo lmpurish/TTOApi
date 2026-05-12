@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using TToApp.Services.EarlyWarnings;
 
 namespace TToApp.Services.Scheduled
 {
@@ -14,7 +15,8 @@ namespace TToApp.Services.Scheduled
         private readonly IServiceProvider _services;
         private Timer _weeklyTimer;
         private Timer _dailyUnassignedZonesTimer;
-
+        private Timer _earlyWarningsTimer;
+        private Timer _missingDailyPackagesTimer;
 
         public RDMonitorService(IServiceProvider services, ILogger<RDMonitorService> logger)
         {
@@ -29,7 +31,7 @@ namespace TToApp.Services.Scheduled
             var now = DateTime.Now;
             var nextWeeklyRun = now.Date.AddDays(1).AddMinutes(10);
             var weeklyDelay = nextWeeklyRun - now;
-            new Timer(EjecutarResumenSemanal, null, weeklyDelay, TimeSpan.FromDays(1));
+           _weeklyTimer = new Timer(EjecutarResumenSemanal, null, weeklyDelay, TimeSpan.FromDays(1));
             
            var dailyDelay = GetDelayUntil(new TimeSpan(6, 0, 0));
            //var dailyDelay = GetDelayUntil(DateTime.Now.AddMinutes(1).TimeOfDay); // esto es para prrobar futuros cron
@@ -39,6 +41,35 @@ namespace TToApp.Services.Scheduled
                 dailyDelay,
                 TimeSpan.FromDays(1)
             );
+
+            var earlyWarningsDelay = GetDelayUntil(new TimeSpan(6, 0, 0));
+
+            _earlyWarningsTimer = new Timer(
+                EjecuteEarlyWarnings,
+                null,
+                earlyWarningsDelay,
+                TimeSpan.FromDays(1)
+            );
+            //  _earlyWarningsTimer = new Timer(
+            //     EjecuteEarlyWarnings,
+            //     null,
+            //     TimeSpan.FromSeconds(10),
+            //     Timeout.InfiniteTimeSpan // solo una vez
+            // );
+            var missingPackagesDelay = GetDelayUntil(new TimeSpan(11, 30, 0));
+
+            _missingDailyPackagesTimer = new Timer(
+                EjecuteMissingDailyPackages,
+                null,
+                missingPackagesDelay,
+                TimeSpan.FromDays(1)
+            );
+            // _missingDailyPackagesTimer = new Timer(
+            //     EjecuteMissingDailyPackages,
+            //     null,
+            //     TimeSpan.FromSeconds(10),
+            //     Timeout.InfiniteTimeSpan // solo una vez
+            // );
             return Task.CompletedTask;
         }
 
@@ -75,7 +106,7 @@ namespace TToApp.Services.Scheduled
 
                 using var scope = _services.CreateScope();
 
-                var notificationService =
+                var notificationService = 
                     scope.ServiceProvider.GetRequiredService<INotificationService>();
 
                 await notificationService.unassingnedZonesByManagerOntrac();
@@ -88,12 +119,66 @@ namespace TToApp.Services.Scheduled
             }
         }
 
+        private async void EjecuteEarlyWarnings(object state)
+        {
+            try
+            {
+                _logger.LogInformation("⚠️ Running Early Warnings to check hiring capacity...");
+
+                using var scope = _services.CreateScope();
+
+                var earlyWarningService =
+                    scope.ServiceProvider.GetRequiredService<IEarlyWarningService>();
+                var earlyWarningNotificationService =
+                    scope.ServiceProvider.GetRequiredService<IEarlyWarningNotificationService>();
+
+               // var referenceDate = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
+
+                await earlyWarningService.CheckHiringCapacityAsync(null);
+                await earlyWarningNotificationService.NotifyPendingHiringWarningsAsync();
+
+                _logger.LogInformation("✅ Early Warnings processed.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error executing Early Warnings.");
+            }
+        }
+
+        private async void EjecuteMissingDailyPackages(object state)
+        {
+            try
+            {
+                _logger.LogInformation("📦 Checking missing daily packages from the previous day...");
+
+                using var scope = _services.CreateScope();
+
+                var earlyWarningService =
+                    scope.ServiceProvider.GetRequiredService<IEarlyWarningService>();
+
+                var notificationService =
+                    scope.ServiceProvider.GetRequiredService<IEarlyWarningNotificationService>();
+
+                var yesterday = DateOnly.FromDateTime(DateTime.Today.AddDays(-1));
+
+                await earlyWarningService.CheckMissingDailyPackagesAsync(yesterday);
+                await notificationService.NotifyPendingMissingPackagesWarningsAsync();
+
+                _logger.LogInformation("✅ Checking of missing daily packages completed.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error checking missing daily packages.");
+            }
+        }
 
         public Task StopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("🛑 RDMonitorService detenido.");
             _weeklyTimer?.Dispose();
             _dailyUnassignedZonesTimer?.Dispose();
+            _earlyWarningsTimer?.Dispose();
+            _missingDailyPackagesTimer?.Dispose();
             return Task.CompletedTask;
         }
 
@@ -101,6 +186,8 @@ namespace TToApp.Services.Scheduled
         {
             _weeklyTimer?.Dispose();
             _dailyUnassignedZonesTimer?.Dispose();
+            _earlyWarningsTimer?.Dispose();
+            _missingDailyPackagesTimer?.Dispose();
         }
 
         private static TimeSpan GetDelayUntil(TimeSpan targetTime)
@@ -112,6 +199,8 @@ namespace TToApp.Services.Scheduled
                 ? todayTarget - now
                 : todayTarget.AddDays(1) - now;
         }
+
+       
 
     }
 }

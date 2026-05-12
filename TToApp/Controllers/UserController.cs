@@ -794,7 +794,8 @@ public class UserController : ControllerBase
             .Select(v => new
             {
                 v.Make,
-                v.Model
+                v.Model,
+                v.Type,
             })
             .FirstOrDefault(),
 
@@ -907,7 +908,7 @@ public class UserController : ControllerBase
                     } : null,
 
                     Vehicle = u.Vehicles
-                        .Select(v => new { v.Make, v.Model })
+                        .Select(v => new { v.Make, v.Model,v.Type })
                         .FirstOrDefault(),
 
                     Account = u.Accounts

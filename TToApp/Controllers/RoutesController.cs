@@ -218,8 +218,60 @@ namespace TToApp.Controllers
 
                 // 3) RESTO DE CAMPOS
                 if (route.ZoneId != u.ZoneId) { route.ZoneId = u.ZoneId; changed = true; }
-                if (route.CNL != u.CNL) { route.CNL = (int)u.CNL; changed = true; }
+                if (route.CNL != u.CNL)
+                {
+                    route.CNL = (int)u.CNL;
+                    changed = true;
+                }
+                // Payment Type
+                if (!string.IsNullOrWhiteSpace(u.PaymentType))
+                {
+                    var normalizedPaymentType = u.PaymentType.Trim();
 
+                    if (!Enum.TryParse<PaymentType>(normalizedPaymentType, out var paymentTypeEnum))
+                    {
+                        return BadRequest(new
+                        {
+                            message = "Invalid payment type. Allowed values are PerStop or PerRoute.",
+                            routeId = route.Id,
+                            paymentType = u.PaymentType
+                        });
+                    }
+
+                    if (route.PaymentType != paymentTypeEnum)
+                    {
+                        route.PaymentType = paymentTypeEnum;
+                        changed = true;
+                    }
+
+                    if (paymentTypeEnum == PaymentType.PerRoute)
+                    {
+                        if (u.PriceRoute == null || u.PriceRoute < 0)
+                        {
+                            return BadRequest(new
+                            {
+                                message = "PriceRoute is required when PaymentType is PerRoute.",
+                                routeId = route.Id
+                            });
+                        }
+
+                        var priceRoute = Convert.ToDouble(u.PriceRoute.Value);
+
+                        if (route.PriceRoute != priceRoute)
+                        {
+                            route.PriceRoute = priceRoute;
+                            changed = true;
+                        }
+                    }
+                    else
+                    {
+                        if (route.PriceRoute != 0)
+                        {
+                            route.PriceRoute = 0;
+                            changed = true;
+                        }
+                    }
+                }
                 if (changed)
                 {
                     updated.Add(new
@@ -228,7 +280,9 @@ namespace TToApp.Controllers
                         route.ZoneId,
                         route.CNL,
                         route.UserId,
-                        routeStatus = route.routeStatus.ToString()
+                        routeStatus = route.routeStatus.ToString(),
+                        paymentType = route.PaymentType,
+                        priceRoute = route.PriceRoute
                     });
                 }
             }
@@ -2076,5 +2130,8 @@ public class RouteUpdateDto
     public int? CNL { get; set; }          // null permitido
     public int? UserId { get; set; }       // null = desasignar driver
     public string? RouteStatus { get; set; } // 'Available' | 'Assigned' | 'In Progress' | 'Future' | 'Completed'
+
+    public string? PaymentType { get; set; }
+    public decimal? PriceRoute { get; set; }
 }
 

@@ -537,7 +537,7 @@ namespace TToApp.Controllers
                 return StatusCode(500, $"Server error: {ex.Message}");
             }
         }
-
+        [Authorize]
         [HttpGet("performance")]
         public async Task<IActionResult> GetWarehousePerformance(
             [FromQuery] DateOnly? from,

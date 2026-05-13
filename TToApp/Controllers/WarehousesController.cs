@@ -537,6 +537,113 @@ namespace TToApp.Controllers
                 return StatusCode(500, $"Server error: {ex.Message}");
             }
         }
+
+        [HttpGet("performance")]
+        public async Task<IActionResult> GetWarehousePerformance(
+            [FromQuery] DateOnly? from,
+            [FromQuery] DateOnly? to)
+        {
+            var warehouses = await _context.Warehouses
+                .AsNoTracking()
+                .Where(w => w.IsHiring && w.CompanyId != null)
+                .Select(w => new
+                {
+                    w.Id,
+                    w.City,
+                    w.Company
+                })
+                .ToListAsync();
+
+            var result = new List<WarehousePerformanceDto>();
+
+            foreach (var wh in warehouses)
+            {
+                DateOnly startDate;
+                DateOnly endDate;
+
+                if (from.HasValue && to.HasValue)
+                {
+                    startDate = from.Value;
+                    endDate = to.Value;
+                }
+                else
+                {
+                    var lastRouteDate = await _context.Routes
+                        .Where(r =>
+                            r.WarehouseId == wh.Id &&
+                            r.UserId != null &&
+                            r.DeliveryStops > 0)
+                        .OrderByDescending(r => r.Date)
+                        .Select(r => (DateTime?)r.Date)
+                        .FirstOrDefaultAsync();
+
+                    if (lastRouteDate == null)
+                        continue;
+
+                    startDate = DateOnly.FromDateTime(lastRouteDate.Value);
+                    endDate = startDate;
+                }
+
+                var start = startDate.ToDateTime(TimeOnly.MinValue);
+                var endExclusive = endDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+
+                var routes = await _context.Routes
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.WarehouseId == wh.Id &&
+                        r.Date >= start &&
+                        r.Date < endExclusive &&
+                        r.UserId != null &&
+                        r.DeliveryStops > 0)
+                    .ToListAsync();
+
+                if (!routes.Any())
+                {
+                    result.Add(new WarehousePerformanceDto
+                    {
+                        WarehouseId = wh.Id,
+                        Warehouse = $"{wh.Company} {wh.City}",
+                        City = wh.City,
+                        Packages = 0,
+                        Delivered = 0,
+                        Drivers = 0,
+                        Routes = 0,
+                        OnTimePercent = 0,
+                        Status = "No Data"
+                    });
+
+                    continue;
+                }
+
+                var packages = routes.Sum(r => r.DeliveryStops);
+                var delivered = routes.Sum(r => Math.Max(0, r.DeliveryStops - r.CNL));
+                var drivers = routes.Select(r => r.UserId).Distinct().Count();
+                var routeCount = routes.Count;
+                //var onTimePercent = Math.Round((decimal)routes.Average(r => r.CustomerOnTime), 2);
+                decimal onTimePercent = 0;
+                if (packages > 0)
+                {
+                    onTimePercent = Math.Round((decimal)delivered * 100 / packages, 2);
+                }
+
+                result.Add(new WarehousePerformanceDto
+                {
+                    WarehouseId = wh.Id,
+                    Warehouse = $"{wh.Company} {wh.City}",
+                    City = wh.City,
+                    Packages = packages,
+                    Delivered = delivered,
+                    Drivers = drivers,
+                    Routes = routeCount,
+                    OnTimePercent = onTimePercent,
+                    Status = onTimePercent >= 95 ? "Healthy" :  onTimePercent >= 85
+                                                            ? "Needs Attention"
+                                                            : "Critical"
+                });
+            }
+
+            return Ok(result.OrderBy(x => x.Warehouse));
+        }
     }
     public class WarehouseWithRspDto
     {

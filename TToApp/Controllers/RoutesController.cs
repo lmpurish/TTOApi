@@ -1450,6 +1450,7 @@ namespace TToApp.Controllers
                     .Count();
 
                 var delivered = g.Where(x => x.Status == PackageStatus.CL);
+                
                 // ✅ STOPS = tu lógica (NO la cambio): StopKey con BuildStopKey(x)
                 var stopGroups = delivered
                     .Select(x => new { x.Tracking, StopKey = BuildStopKey(x) })
@@ -1469,6 +1470,7 @@ namespace TToApp.Controllers
                 });
 
                 var cnl = g.Count(x => x.Status == PackageStatus.CNL);
+                var attempts = g.Count(x => x.Status == PackageStatus.RTN);
 
                 // DriverName (toma el primero no vacío dentro del grupo)
                 var driverRaw = g.Select(x => x.DriverNameRaw)
@@ -1563,7 +1565,7 @@ namespace TToApp.Controllers
                         CustomerOnTime = 0,
                         BranchOnTime = 0,
 
-                        Attempts = 0,
+                        Attempts = attempts,
                         PaymentType = PaymentType.PerStop,
                         routeStatus = driverId.HasValue ? RouteStatus.Completed: RouteStatus.Pending,
                         UserId = driverId
@@ -1580,6 +1582,7 @@ namespace TToApp.Controllers
                     route.DeliveryStops = stops;
                     route.Volumen = volume; // ✅ NO “stops”
                     route.CNL = cnl;
+                    route.Attempts = attempts;
 
                     if (driverId.HasValue)
                     {

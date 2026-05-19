@@ -67,6 +67,7 @@ namespace TToApp.Model
         [NotMapped]
         public string Name => $"{City}, {State}";
         public ICollection<EarlyWarning> EarlyWarnings { get; set; } = new List<EarlyWarning>();
+        public bool? IsActive { get; set; } = true;
 
 
     }

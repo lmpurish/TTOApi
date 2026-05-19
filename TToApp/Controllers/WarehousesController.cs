@@ -32,49 +32,79 @@ namespace TToApp.Controllers
         }
 
         // GET: api/Warehouses
-        [Authorize]
+        [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]
         [HttpGet]
         public async Task<ActionResult<IEnumerable<WarehouseDto>>> GetWarehouses()
         {
             try
             {
-                var userId = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+                // =========================
+                // Get Current User Id
+                // =========================
+                var userIdClaim = User.Claims
+                    .FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
 
-                if (string.IsNullOrEmpty(userId))
-                    return Unauthorized("User not authenticated");
+                if (!int.TryParse(userIdClaim, out int userId))
+                {
+                    return Unauthorized(new
+                    {
+                        message = "User not authenticated"
+                    });
+                }
 
+                // =========================
+                // Get Current User
+                // =========================
                 var user = await _context.Users
+                    .AsNoTracking()
                     .Include(u => u.Company)
-                    .FirstOrDefaultAsync(u => u.Id == int.Parse(userId));
+                    .FirstOrDefaultAsync(u => u.Id == userId);
 
                 if (user == null)
-                    return Unauthorized("User not found");
+                {
+                    return Unauthorized(new
+                    {
+                        message = "User not found"
+                    });
+                }
 
-                if (user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner && user.UserRole != global::User.Role.Manager && user.UserRole != global::User.Role.Assistant && user.UserRole.Value != global::User.Role.Recruiter)
-                    return StatusCode(403, "Access denied. Only Company Owner and Admins can access this resource.");
-
-                IQueryable<Warehouse> query;
+                // =========================
+                // Resolve Company Id
+                // =========================
+                int? companyId = null;
 
                 if (user.UserRole == global::User.Role.CompanyOwner)
                 {
-                    query = _context.Warehouses
-                        .Include(w => w.Companie)
-                        .Where(w => w.Companie != null && w.Companie.OwnerId == user.Id);
+                    companyId = await _context.Companies
+                        .AsNoTracking()
+                        .Where(c => c.OwnerId == user.Id)
+                        .Select(c => (int?)c.Id)
+                        .FirstOrDefaultAsync();
                 }
-                else // Admin
+                else
                 {
-                    if (!user.CompanyId.HasValue)
-                        return StatusCode(403, "Admin does not belong to any company.");
-
-                    query = _context.Warehouses
-                        .Include(w => w.Companie)
-                        .Where(w => w.CompanyId == user.CompanyId.Value);
+                    companyId = user.CompanyId;
                 }
 
+                if (!companyId.HasValue)
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new
+                    {
+                        message = "User does not belong to any company."
+                    });
+                }
 
-
-                // ✅ Proyectar a DTO (evita ciclos)
-                var warehouses = await query
+                // =========================
+                // Get Warehouses
+                // =========================
+                var warehouses = await _context.Warehouses
+                    .AsNoTracking()
+                    .Include(w => w.Companie)
+                    .Include(w => w.Metro)
+                    .Where(w =>
+                        w.CompanyId == companyId.Value &&
+                        w.IsActive == true)
+                    .OrderBy(w => w.Company) // <- cronológico
                     .Select(w => new WarehouseDto
                     {
                         Id = w.Id,
@@ -83,36 +113,45 @@ namespace TToApp.Controllers
                         Address = w.Address,
                         State = w.State,
                         isHiring = w.IsHiring,
+                        IsActive = w.IsActive,
                         SendPayroll = w.SendPayroll,
-                        CompanyId = (int)w.CompanyId,
+                        CompanyId = w.CompanyId ?? 0,
                         ZipCode = w.ZipCode,
                         DriveRate = w.DriveRate,
                         FacilityCode = w.FacilityCode,
+
                         OpenTime = w.OpenTime.HasValue
-            ? new TimeDto { Hours = w.OpenTime.Value.Hour, Minutes = w.OpenTime.Value.Minute }
-            : null,
+                            ? new TimeDto
+                            {
+                                Hours = w.OpenTime.Value.Hour,
+                                Minutes = w.OpenTime.Value.Minute
+                            }
+                            : null,
+
                         AuthorizedPersons = _context.Permits
-                        .Where(ap => ap.WarehouseId == w.Id)
-                        .Select(ap => new AuthorizedPersonDto
-                        {
-                            Id = ap.UserId,
-                            Name = ap.User.Name,
-                            LastName = ap.User.LastName
-                        })
-                        .ToList(),
+                            .Where(ap => ap.WarehouseId == w.Id)
+                            .Select(ap => new AuthorizedPersonDto
+                            {
+                                Id = ap.UserId,
+                                Name = ap.User.Name,
+                                LastName = ap.User.LastName
+                            })
+                            .ToList(),
+
                         Metro = w.Metro == null
-                       
-                       
-    ? null
-    : new Metro
-    {
-        Id = w.Metro.Id,
-        City = w.Metro.City
-    },
+                            ? null
+                            : new Metro
+                            {
+                                Id = w.Metro.Id,
+                                City = w.Metro.City
+                            },
+
                         Manager = _context.Users
-                    .Where(u => u.WarehouseId == w.Id && u.UserRole == global::User.Role.Manager)
-                    .Select(u => u.Name + " " + u.LastName)
-                    .FirstOrDefault() ?? ""
+                            .Where(u =>
+                                u.WarehouseId == w.Id &&
+                                u.UserRole == global::User.Role.Manager)
+                            .Select(u => (u.Name + " " + u.LastName).Trim())
+                            .FirstOrDefault() ?? ""
                     })
                     .ToListAsync();
 
@@ -120,7 +159,11 @@ namespace TToApp.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Server error: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, new
+                {
+                    message = "Server error",
+                    detail = ex.Message
+                });
             }
         }
 
@@ -134,25 +177,85 @@ namespace TToApp.Controllers
         private static TimeDto? FromTimeOnly(TimeOnly? t) =>
             t is null ? null : new TimeDto { Hours = t.Value.Hour, Minutes = t.Value.Minute };
 
-        [AllowAnonymous] // O quita esto si quieres protegerlo
-        [HttpGet("by-company/{companyId:int}")]
-        public async Task<ActionResult<IEnumerable<WarehouseDto>>> GetWarehousesByCompanyId(int companyId, CancellationToken ct)
+        [Authorize(Roles = "Admin,CompanyOwner")]
+        [HttpGet("by-company")]
+        public async Task<ActionResult<IEnumerable<WarehouseDto>>> GetWarehousesByCompany(
+    CancellationToken ct)
         {
-            if (companyId <= 0)
-                return BadRequest("Invalid companyId.");
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var role = User.FindFirst(ClaimTypes.Role)?.Value;
+
+            if (!int.TryParse(userIdClaim, out int userId))
+            {
+                return Unauthorized(new
+                {
+                    message = "Invalid user."
+                });
+            }
+
+            int? companyId = null;
+
+            // ✅ CompanyOwner
+            if (role == "CompanyOwner")
+            {
+                companyId = await _context.Companies
+                    .Where(c => c.OwnerId == userId)
+                    .Select(c => (int?)c.Id)
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            // ✅ Admin
+            else if (role == "Admin")
+            {
+                companyId = await _context.Users
+                    .Where(u => u.Id == userId)
+                    .Select(u => u.CompanyId)
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            if (!companyId.HasValue)
+            {
+                return BadRequest(new
+                {
+                    message = "No company associated with this user."
+                });
+            }
 
             var warehouses = await _context.Warehouses
                 .AsNoTracking()
-                .Where(w => w.CompanyId == companyId)
+                .Where(w => w.CompanyId == companyId.Value)
+                .OrderBy(w => w.City)
                 .Select(w => new WarehouseDto
                 {
                     Id = w.Id,
                     City = w.City,
                     Address = w.Address,
                     State = w.State,
-                    Company = w.Companie != null ? w.Companie.Name : null,
+
+                    Company = w.Companie != null
+                        ? w.Companie.Name
+                        : null,
+
                     isHiring = w.IsHiring,
-                    SendPayroll = w.SendPayroll
+                    SendPayroll = w.SendPayroll,
+
+                    MetroId = w.MetroId,
+
+                    Metro = w.Metro != null
+                        ? new MetroDto
+                        {
+                            Id = w.Metro.Id,
+                            City = w.Metro.City
+                        }
+                        : null,
+
+                    // ✅ Manager
+                    Manager = _context.Users
+                        .Where(u =>
+                            u.WarehouseId == w.Id &&
+                            u.UserRole == global::User.Role.Manager)
+                        .Select(u => u.Name + " " + u.LastName)
+                        .FirstOrDefault()
                 })
                 .ToListAsync(ct);
 
@@ -645,6 +748,13 @@ namespace TToApp.Controllers
             return Ok(result.OrderBy(x => x.Warehouse));
         }
     }
+
+    internal class MetroDto : Metro
+    {
+        public int Id { get; set; }
+        public string City { get; set; }
+    }
+
     public class WarehouseWithRspDto
     {
         public int Id { get; set; }

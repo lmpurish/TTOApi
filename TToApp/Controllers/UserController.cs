@@ -285,31 +285,31 @@ public class UserController : ControllerBase
             { "Locality", whInfo.City ?? "" }
         };
 
-    //         var managerEmail = GetEmailManager(user);
-    //         if (!string.IsNullOrWhiteSpace(managerEmail))
-    //         {
-    //             await _emailService.SendEmailAsync(
-    //                 toEmail: managerEmail,
-    //                 subject: "New driver on the way!",
-    //                 "ApplicationTemplate.cshtml",
-    //                 placeholders: placeholders,
-    //                 copy: false
-    //             );
-    //         }
+             var managerEmail = GetEmailManager(user);
+           if (!string.IsNullOrWhiteSpace(managerEmail))
+             {
+                await _emailService.SendEmailAsync(
+                   toEmail: managerEmail,
+                     subject: "New driver on the way!",
+                    "ApplicationTemplate.cshtml",
+                   placeholders: placeholders,
+                   copy: false
+                );
+             }
 
-    //         var adminEmails = await _authContext.Users.AsNoTracking()
-    //             .Where(u2 => u2.UserRole == global::User.Role.Admin && !string.IsNullOrEmpty(u2.Email))
-    //             .Select(u2 => u2.Email!)
-    //             .ToListAsync(ct);
+         var adminEmails = await _authContext.Users.AsNoTracking()
+                .Where(u2 => u2.UserRole == global::User.Role.Admin && !string.IsNullOrEmpty(u2.Email))
+               .Select(u2 => u2.Email!)
+                .ToListAsync(ct);
 
-    //         var authorizedEmployeeEmails = await _authContext.Permits
-    //  .AsNoTracking()
-    //  .Where(p => p.WarehouseId == user.WarehouseId
-    //           && p.UserPermit == Permit.Notification) // ó p.UserPermit == 0 si lo manejas como int
-    //  .Select(p => p.User!.Email)
-    //  .Where(email => !string.IsNullOrEmpty(email))
-    //  .Distinct()
-    //  .ToListAsync(ct);
+             var authorizedEmployeeEmails = await _authContext.Permits
+     .AsNoTracking()
+     .Where(p => p.WarehouseId == user.WarehouseId
+               && p.UserPermit == Permit.Notification) // ó p.UserPermit == 0 si lo manejas como int
+   .Select(p => p.User!.Email)
+     .Where(email => !string.IsNullOrEmpty(email))
+      .Distinct()
+      .ToListAsync(ct);
           var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
             companyId: whInfo.CompanyId,
             warehouseId: user.WarehouseId,
@@ -327,16 +327,16 @@ public class UserController : ControllerBase
                     copy: false
                 );
             }
-            // foreach (var email in adminEmails)
-            // {
-            //     await _emailService.SendEmailAsync(
-            //         toEmail: email,
-            //         subject: "New driver on the way!",
-            //         "ApplicationTemplate.cshtml",
-            //         placeholders: placeholders,
-            //         copy: false
-            //     );
-            // }
+             foreach (var email in adminEmails)
+            {
+                await _emailService.SendEmailAsync(
+                    toEmail: email,
+                     subject: "New driver on the way!",
+                   "ApplicationTemplate.cshtml",
+                    placeholders: placeholders,
+                     copy: false
+                 );
+             }
 
             var okUserMail = await _emailService.SendEmailAsync(
                 toEmail: user.Email!,
@@ -484,6 +484,7 @@ public class UserController : ControllerBase
 
 
     // GET: api/User/5
+    [Authorize]
     [HttpGet("{id}")]
     public async Task<ActionResult<UserDto>> GetUser(int id)
     {
@@ -2594,7 +2595,49 @@ public class UserController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant,Recruiter")]
+    [HttpPut("applicants/bulk-warehouse")]
+    public async Task<IActionResult> BulkUpdateApplicantsWarehouse([FromBody] BulkUpdateWarehouseDto dto)
+    {
+        if (dto.ApplicantIds == null || dto.ApplicantIds.Count == 0)
+            return BadRequest(new { message = "No applicants selected." });
 
+        if (dto.WarehouseId <= 0)
+            return BadRequest(new { message = "Invalid warehouse." });
+
+        var warehouseExists = await _authContext.Warehouses
+            .AnyAsync(w => w.Id == dto.WarehouseId);
+
+        if (!warehouseExists)
+            return NotFound(new { message = "Warehouse not found." });
+
+        var applicants = await _authContext.Users
+            .Where(u => dto.ApplicantIds.Contains(u.Id))
+            .Where(u => u.UserRole == global::User.Role.Applicant)
+            .ToListAsync();
+
+        if (!applicants.Any())
+            return NotFound(new { message = "No valid applicants found." });
+
+        foreach (var applicant in applicants)
+        {
+            applicant.WarehouseId = dto.WarehouseId;
+        }
+
+        await _authContext.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message = $"Warehouse updated for {applicants.Count} applicants.",
+            updated = applicants.Count
+        });
+    }
+}
+
+public class BulkUpdateWarehouseDto
+{
+    public List<int> ApplicantIds { get; set; } = new();
+    public int WarehouseId { get; set; }
 }
 
 public class TwilioApplyRequest
@@ -2667,10 +2710,12 @@ public class WarehouseDto
     public string ZipCode { get; set; }
     public TimeDto? OpenTime { get; set; }
     public List<AuthorizedPersonDto>? AuthorizedPersons { get; set; }
+    public int? MetroId { get; set; }
     public Metro? Metro { get; set; }
     public decimal? DriveRate { get; set; }
     public string? FacilityCode { get; set; }
     public string? Manager { get; set; }
+    public bool? IsActive { get; set; }
 }
 public sealed class WarehouseUpsertDto
 {

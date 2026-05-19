@@ -15,7 +15,7 @@ namespace TToApp.Controllers
         public LoansController(ApplicationDbContext db) => _db = db;
 
         [HttpPost]
-        public async Task<ActionResult<LoanDto>> Create([FromBody] CreateLoanRequestDto req)
+        public async Task<ActionResult<LoanDto>> Create([FromBody] LoanDto req)
         {
             if (req.Principal <= 0) return BadRequest("Principal debe ser > 0.");
             if (req.InstallmentAmount.HasValue && req.InstallmentAmount <= 0) return BadRequest("InstallmentAmount debe ser > 0.");

@@ -408,9 +408,135 @@ namespace TToApp.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<int?>("WarehouseId")
+                        .HasColumnType("int");
+
                     b.HasKey("Id");
 
+                    b.HasIndex("WarehouseId");
+
+                    b.HasIndex("DriverId", "WarehouseId", "EffectiveFrom");
+
                     b.ToTable("DriverRate", (string)null);
+                });
+
+            modelBuilder.Entity("TToApp.Model.EarlyWarning", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("BaselineValue")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<long>("CompanyId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("CurrentValue")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("DaysEvaluated")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("IncreasePercent")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Message")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("NotificationSent")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("NotificationSentAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("PayloadJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateOnly>("ReferenceDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("ReviewedBy")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("WarehouseId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("ZScore")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WarehouseId");
+
+                    b.HasIndex("CompanyId", "WarehouseId", "Type", "ReferenceDate", "DaysEvaluated")
+                        .IsUnique()
+                        .HasFilter("[WarehouseId] IS NOT NULL");
+
+                    b.ToTable("EarlyWarnings");
+                });
+
+            modelBuilder.Entity("TToApp.Model.EarlyWarningConfig", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("CompanyId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DaysForCritical")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal>("ThresholdPercent")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("WarehouseId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompanyId", "WarehouseId", "Type")
+                        .IsUnique()
+                        .HasFilter("[WarehouseId] IS NOT NULL");
+
+                    b.ToTable("EarlyWarningConfigs");
                 });
 
             modelBuilder.Entity("TToApp.Model.EarlyWarning", b =>
@@ -589,6 +715,48 @@ namespace TToApp.Migrations
                     b.HasIndex("DriverId", "Status");
 
                     b.ToTable("EmployeeLoans");
+                });
+
+            modelBuilder.Entity("TToApp.Model.Incidence", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ImageName")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ImageUrl")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("RouteId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RouteId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("Incidences");
                 });
 
             modelBuilder.Entity("TToApp.Model.LoanRepayment", b =>
@@ -2268,6 +2436,26 @@ namespace TToApp.Migrations
                     b.Navigation("Warehouse");
                 });
 
+            modelBuilder.Entity("TToApp.Model.DriverRate", b =>
+                {
+                    b.HasOne("TToApp.Model.Warehouse", "Warehouse")
+                        .WithMany()
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("Warehouse");
+                });
+
+            modelBuilder.Entity("TToApp.Model.EarlyWarning", b =>
+                {
+                    b.HasOne("TToApp.Model.Warehouse", "Warehouse")
+                        .WithMany("EarlyWarnings")
+                        .HasForeignKey("WarehouseId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("Warehouse");
+                });
+
             modelBuilder.Entity("TToApp.Model.EmployeeLoan", b =>
                 {
                     b.HasOne("User", "ApprovedByUser")
@@ -2292,6 +2480,25 @@ namespace TToApp.Migrations
                     b.Navigation("CreatedByUser");
 
                     b.Navigation("Driver");
+                });
+
+            modelBuilder.Entity("TToApp.Model.Incidence", b =>
+                {
+                    b.HasOne("TToApp.Model.Routes", "Route")
+                        .WithMany()
+                        .HasForeignKey("RouteId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Route");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("TToApp.Model.LoanRepayment", b =>

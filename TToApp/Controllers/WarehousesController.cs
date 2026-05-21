@@ -648,7 +648,7 @@ namespace TToApp.Controllers
         {
             var warehouses = await _context.Warehouses
                 .AsNoTracking()
-                .Where(w => w.IsHiring && w.CompanyId != null)
+                .Where(w => w.IsActive == true && w.CompanyId != null)
                 .Select(w => new
                 {
                     w.Id,

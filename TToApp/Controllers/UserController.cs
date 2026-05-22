@@ -275,47 +275,45 @@ public class UserController : ControllerBase
 
             // Emails / notificaciones
             var placeholders = new Dictionary<string, string>
-        {
-            { "Name", user.Name ?? "" },
-            { "LastName", user.LastName ?? "" },
-            { "Email", user.Email ?? "" },
-            { "PhoneNumber", profile.PhoneNumber ?? "" },
-            { "Make", vehicle.Make ?? "" },
-            { "Model", vehicle.Model ?? "" },
-            { "Locality", whInfo.City ?? "" }
-        };
+            {
+                { "Name", user.Name ?? "" },
+                { "LastName", user.LastName ?? "" },
+                { "Email", user.Email ?? "" },
+                { "PhoneNumber", profile.PhoneNumber ?? "" },
+                { "Make", vehicle.Make ?? "" },
+                { "Model", vehicle.Model ?? "" },
+                { "Locality", whInfo.City ?? "" }
+            };
 
-             var managerEmail = GetEmailManager(user);
-           if (!string.IsNullOrWhiteSpace(managerEmail))
-             {
-                await _emailService.SendEmailAsync(
-                   toEmail: managerEmail,
-                     subject: "New driver on the way!",
-                    "ApplicationTemplate.cshtml",
-                   placeholders: placeholders,
-                   copy: false
-                );
-             }
+        //      var managerEmail = GetEmailManager(user);
+        //    if (!string.IsNullOrWhiteSpace(managerEmail))
+        //      {
+        //         await _emailService.SendEmailAsync(
+        //            toEmail: managerEmail,
+        //              subject: "New driver on the way!",
+        //             "ApplicationTemplate.cshtml",
+        //            placeholders: placeholders,
+        //            copy: false
+        //         );
+        //      }
 
-         var adminEmails = await _authContext.Users.AsNoTracking()
-                .Where(u2 => u2.UserRole == global::User.Role.Admin && !string.IsNullOrEmpty(u2.Email))
-               .Select(u2 => u2.Email!)
-                .ToListAsync(ct);
+        //  var adminEmails = await _authContext.Users.AsNoTracking()
+        //         .Where(u2 => u2.UserRole == global::User.Role.Admin && !string.IsNullOrEmpty(u2.Email))
+        //        .Select(u2 => u2.Email!)
+        //         .ToListAsync(ct);
+   
+            var warehouseIds = await _authContext.Warehouses
+                    .AsNoTracking()
+                    .Where(w => w.MetroId == user.MetroId)
+                    .Select(w => w.Id)
+                    .ToListAsync(ct);
 
-             var authorizedEmployeeEmails = await _authContext.Permits
-     .AsNoTracking()
-     .Where(p => p.WarehouseId == user.WarehouseId
-               && p.UserPermit == Permit.Notification) // ó p.UserPermit == 0 si lo manejas como int
-   .Select(p => p.User!.Email)
-     .Where(email => !string.IsNullOrEmpty(email))
-      .Distinct()
-      .ToListAsync(ct);
-          var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
-            companyId: whInfo.CompanyId,
-            warehouseId: user.WarehouseId,
-            eventType: CommunicationEventTypes.NewDriverApplication,
-            channel: CommunicationChannels.Email
-        );
+            var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
+                companyId: whInfo.CompanyId,
+                warehouseIds: warehouseIds.Any() ? warehouseIds : null,
+                eventType: CommunicationEventTypes.NewDriverApplication,
+                channel: CommunicationChannels.Email
+            );
 
             foreach (var email in recipients.Select(r => r.Email).Where(e => !string.IsNullOrWhiteSpace(e)).Distinct())
             {
@@ -327,16 +325,16 @@ public class UserController : ControllerBase
                     copy: false
                 );
             }
-             foreach (var email in adminEmails)
-            {
-                await _emailService.SendEmailAsync(
-                    toEmail: email,
-                     subject: "New driver on the way!",
-                   "ApplicationTemplate.cshtml",
-                    placeholders: placeholders,
-                     copy: false
-                 );
-             }
+            //  foreach (var email in adminEmails)
+            // {
+            //     await _emailService.SendEmailAsync(
+            //         toEmail: email,
+            //          subject: "New driver on the way!",
+            //        "ApplicationTemplate.cshtml",
+            //         placeholders: placeholders,
+            //          copy: false
+            //      );
+            //  }
 
             var okUserMail = await _emailService.SendEmailAsync(
                 toEmail: user.Email!,

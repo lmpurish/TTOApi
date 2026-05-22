@@ -18,10 +18,12 @@ namespace TToApp.Services.CommunicationRecipient
 
         public async Task<List<User>> GetRecipientsForEventAsync(
             int companyId,
-            int? warehouseId,
+            IEnumerable<int>? warehouseIds,
             string eventType,
             string channel)
         {
+            var warehouseList = warehouseIds?.ToList();
+
             var rules = await _db.CommunicationRecipientRules
                 .AsNoTracking()
                 .Where(r =>
@@ -29,7 +31,7 @@ namespace TToApp.Services.CommunicationRecipient
                     r.CompanyId == companyId &&
                     r.EventType == eventType &&
                     r.Channel == channel &&
-                    (r.WarehouseId == null || r.WarehouseId == warehouseId))
+                    (r.WarehouseId == null || (warehouseList != null && warehouseList.Contains(r.WarehouseId.Value))))
                 .ToListAsync();
 
             var roles = rules
@@ -37,26 +39,47 @@ namespace TToApp.Services.CommunicationRecipient
                 .Distinct()
                 .ToList();
 
-            if (!roles.Any())
-                return new List<User>();
+            var roleUsers = roles.Any()
+                ? await _db.Users
+                    .AsNoTracking()
+                    .Where(u =>
+                        u.IsActive &&
+                        u.CompanyId == companyId &&
+                        u.UserRole.HasValue &&
+                        roles.Contains(u.UserRole.Value) &&
+                        !string.IsNullOrWhiteSpace(u.Email) &&
+                        (
+                            u.UserRole == User.Role.Admin ||
+                            u.UserRole == User.Role.CompanyOwner ||
+                            warehouseList == null ||
+                            (u.WarehouseId.HasValue && warehouseList.Contains(u.WarehouseId.Value))
+                        ))
+                    .ToListAsync()
+                : new List<User>();
 
-            return await _db.Users
-                .AsNoTracking()
-                .Where(u =>
-                    u.IsActive &&
-                    u.CompanyId == companyId &&
-                    u.UserRole.HasValue &&
-                    roles.Contains(u.UserRole.Value) &&
-                    !string.IsNullOrWhiteSpace(u.Email) &&
-                    (
-                        u.UserRole == User.Role.Admin ||
-                        u.UserRole == User.Role.CompanyOwner ||
-                        warehouseId == null ||
-                        u.WarehouseId == warehouseId
-                    ))
+            var permitUsers = new List<User>();
+            if (warehouseList is { Count: > 0 })
+            {
+                var permitUserIds = await _db.Permits
+                    .AsNoTracking()
+                    .Where(p => p.UserPermit == Permit.Notification && warehouseList.Contains(p.WarehouseId))
+                    .Select(p => p.UserId)
+                    .Distinct()
+                    .ToListAsync();
+
+                if (permitUserIds.Any())
+                    permitUsers = await _db.Users
+                        .AsNoTracking()
+                        .Where(u => u.IsActive && u.CompanyId == companyId &&
+                            !string.IsNullOrWhiteSpace(u.Email) && permitUserIds.Contains(u.Id))
+                        .ToListAsync();
+            }
+
+            return roleUsers
+                .Union(permitUsers)
                 .GroupBy(u => u.Email!.Trim().ToLower())
                 .Select(g => g.First())
-                .ToListAsync();
+                .ToList();
         }
     }
 }

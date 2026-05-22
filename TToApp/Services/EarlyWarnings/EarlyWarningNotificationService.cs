@@ -248,20 +248,39 @@ namespace TToApp.Services.EarlyWarnings
                 .Distinct()
                 .ToList();
 
-            if (!roles.Any())
-                return new List<User>();
+            var roleUsers = roles.Any()
+                ? await _db.Users
+                    .Where(u =>
+                        u.IsActive &&
+                        u.CompanyId == warning.CompanyId &&
+                        u.UserRole.HasValue && roles.Contains(u.UserRole.Value) &&
+                        (
+                            u.UserRole == User.Role.Admin ||
+                            warning.WarehouseId == null ||
+                            u.WarehouseId == warning.WarehouseId
+                        ))
+                    .ToListAsync()
+                : new List<User>();
 
-            return await _db.Users
-                .Where(u =>
-                    u.IsActive &&
-                    u.CompanyId == warning.CompanyId &&
-                    u.UserRole.HasValue && roles.Contains(u.UserRole.Value) &&
-                    (
-                        u.UserRole == User.Role.Admin ||
-                        warning.WarehouseId == null ||
-                        u.WarehouseId == warning.WarehouseId
-                    ))
-                .ToListAsync();
+            var permitUsers = new List<User>();
+            if (warning.WarehouseId.HasValue)
+            {
+                var permitUserIds = await _db.Permits
+                    .Where(p => p.WarehouseId == warning.WarehouseId.Value && p.UserPermit == Permit.Notification)
+                    .Select(p => p.UserId)
+                    .ToListAsync();
+
+                if (permitUserIds.Any())
+                    permitUsers = await _db.Users
+                        .Where(u => u.IsActive && u.CompanyId == warning.CompanyId && permitUserIds.Contains(u.Id))
+                        .ToListAsync();
+            }
+
+            return roleUsers
+                .Union(permitUsers)
+                .GroupBy(u => u.Id)
+                .Select(g => g.First())
+                .ToList();
         }
 
     }

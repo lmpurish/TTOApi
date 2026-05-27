@@ -26,5 +26,7 @@
         public DateOnly EffectiveFrom { get; set; }
         public DateOnly? EffectiveTo { get; set; }
         public DateTime? UpdatedAt { get; set; }
+        public int? WarehouseId { get; set; }
+        public Warehouse? Warehouse { get; set; }
     }
 }

@@ -1344,19 +1344,24 @@ public class UserController : ControllerBase
                );
 
         }
-
-        user.UpdatedAt = DateTime.UtcNow;
-        var token = Guid.NewGuid().ToString("N");
-
-        user.PasswordResetToken = token;
-        user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddHours(24);
-        user.IsActive = true;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _authContext.SaveChangesAsync();
-        var resetLink = $"https://admin.ttologistics.com/user/set-password?token={token}";
+       
         if (wasInactive && user.IsActive)
         {
+            var companyName = await _authContext.Companies
+           .Where(c => c.Id == user.CompanyId)
+           .Select(c => c.Name)
+           .FirstOrDefaultAsync();
+
+            user.UpdatedAt = DateTime.UtcNow;
+            var token = Guid.NewGuid().ToString("N");
+
+            user.PasswordResetToken = token;
+            user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddHours(24);
+            user.IsActive = true;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _authContext.SaveChangesAsync();
+            var resetLink = $"http://localhost:4200/authentication/set-password?token={token}";
             var okAccessEmail = await _emailService.SendEmailAsync(
             toEmail: user.Email,
             subject: "Account Activated!!",
@@ -1366,7 +1371,8 @@ public class UserController : ControllerBase
                 { "Name", user.Name ?? "" },
                 { "LastName", user.LastName ?? "" },
                 { "Email", user.Email ?? "" },
-                { "ResetLink", resetLink }
+                { "ResetLink", resetLink },
+                { "CompanyName", companyName ?? "TTO Hub" }
             },
             copy: true
 );
@@ -1401,7 +1407,6 @@ public class UserController : ControllerBase
         user.Password = PasswordHasher.HashPassword(dto.NewPassword);
         user.PasswordResetToken = null;
         user.PasswordResetTokenExpiresAt = null;
-        user.IsFirstLogin = false;
         user.IsActive = true;
         user.UpdatedAt = DateTime.UtcNow;
 

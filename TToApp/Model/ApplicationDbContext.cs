@@ -48,6 +48,7 @@ namespace TToApp.Model
         public DbSet<EarlyWarning> EarlyWarnings { get; set; }
         public DbSet<EarlyWarningConfig> EarlyWarningConfigs { get; set; }
         public DbSet<CommunicationRecipientRule> CommunicationRecipientRules { get; set; }
+        public DbSet<Incidence> Incidences { get; set; }
 
 
 
@@ -365,6 +366,39 @@ namespace TToApp.Model
                 x.Role
             })
             .IsUnique();
+
+            modelBuilder.Entity<DriverRate>()
+            .HasOne(r => r.Warehouse)
+            .WithMany()
+            .HasForeignKey(r => r.WarehouseId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<DriverRate>()
+            .HasIndex(r => new
+            {
+                r.DriverId,
+                r.WarehouseId,
+                r.EffectiveFrom
+            });
+
+            modelBuilder.Entity<Incidence>()
+                .Property(i => i.Type)
+                .HasConversion<string>();
+
+            modelBuilder.Entity<Incidence>()
+                .HasOne(i => i.Route)
+                .WithMany()
+                .HasForeignKey(i => i.RouteId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Incidence>()
+                .HasOne(i => i.User)
+                .WithMany()
+                .HasForeignKey(i => i.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<Incidence>()
+                .HasIndex(i => i.RouteId);
 
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

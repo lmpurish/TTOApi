@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Incidence Alert</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f2f4f8;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #b54708;
+            text-align: center;
+        }
+        p {
+            font-size: 16px;
+            color: #333;
+        }
+        .info {
+            background-color: #fff7ed;
+            padding: 15px;
+            margin-top: 15px;
+            border-left: 5px solid #f97316;
+            border-radius: 5px;
+        }
+        .info p {
+            margin: 8px 0;
+        }
+        .image-wrap {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .image-wrap img {
+            max-width: 100%;
+            border-radius: 8px;
+            border: 1px solid #eee;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            font-size: 14px;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>⚠️ New incidence reported on your route</h2>
+        <p>Hello <strong>{{Name}}</strong>,</p>
+        <p>A new incidence has been registered on route <strong>#{{RouteId}}</strong>. Please review the details below.</p>
+
+        <div class="info">
+            <p><strong>🏷️ Type:</strong> {{Type}}</p>
+            <p><strong>📝 Description:</strong> {{Description}}</p>
+            <p><strong>🗓️ Occurred at:</strong> {{OccurredAt}}</p>
+        </div>
+
+        {{ImageBlock}}
+
+        <p>Please take the necessary action as soon as possible.</p>
+
+        <div class="footer">
+            &copy; 2025 TTO Logistics. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

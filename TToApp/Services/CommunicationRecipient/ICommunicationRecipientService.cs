@@ -3,7 +3,7 @@ namespace TToApp.Services.CommunicationRecipient
     public interface ICommunicationRecipientService
     {
         Task<List<User>> GetRecipientsForEventAsync(int companyId,
-            int? warehouseId,
+            IEnumerable<int>? warehouseIds,
             string eventType,
             string channel);
     }

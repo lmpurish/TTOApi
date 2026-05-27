@@ -18,7 +18,8 @@ namespace TToApp.Controllers
         public async Task<ActionResult<LoanDto>> Create([FromBody] LoanDto req)
         {
             if (req.Principal <= 0) return BadRequest("Principal debe ser > 0.");
-            if (req.InstallmentAmount.HasValue && req.InstallmentAmount <= 0) return BadRequest("InstallmentAmount debe ser > 0.");
+            if (req.InstallmentAmount <= 0)
+                return BadRequest("InstallmentAmount debe ser > 0.");
             if (req.MaxDeductionPerPayRun.HasValue && req.MaxDeductionPerPayRun <= 0) return BadRequest("MaxDeductionPerPayRun debe ser > 0.");
 
             // opcional: bloquear si ya tiene uno activo
@@ -43,7 +44,7 @@ namespace TToApp.Controllers
             {
                 DriverId = (int)req.DriverId,
                 Principal = req.Principal,
-                Balance = req.Principal,
+                Balance = req.InstallmentAmount,
                 InstallmentAmount = req.InstallmentAmount,
                 MaxDeductionPerPayRun = req.MaxDeductionPerPayRun,
                 Notes = req.Notes,

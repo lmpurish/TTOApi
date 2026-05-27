@@ -100,5 +100,7 @@ public class User
     public ICollection<UserDocumentSignature> DocumentSignatures { get; set; } = [];
     [JsonIgnore]
     public RentalRenter? RentalRenterProfile { get; set; }
+    public string? PasswordResetToken { get; set; }
+    public DateTime? PasswordResetTokenExpiresAt { get; set; }
 
 }

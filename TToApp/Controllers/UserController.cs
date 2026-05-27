@@ -303,13 +303,13 @@ public class UserController : ControllerBase
                 .ToListAsync(ct);
 
              var authorizedEmployeeEmails = await _authContext.Permits
-     .AsNoTracking()
-     .Where(p => p.WarehouseId == user.WarehouseId
+        .AsNoTracking()
+        .Where(p => p.WarehouseId == user.WarehouseId
                && p.UserPermit == Permit.Notification) // ó p.UserPermit == 0 si lo manejas como int
-   .Select(p => p.User!.Email)
-     .Where(email => !string.IsNullOrEmpty(email))
-      .Distinct()
-      .ToListAsync(ct);
+        .Select(p => p.User!.Email)
+        .Where(email => !string.IsNullOrEmpty(email))
+        .Distinct()
+        .ToListAsync(ct);
           var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
             companyId: whInfo.CompanyId,
             warehouseId: user.WarehouseId,
@@ -1331,22 +1331,69 @@ public class UserController : ControllerBase
         }
 
         user.UpdatedAt = DateTime.UtcNow;
-        await _authContext.SaveChangesAsync();
+        var token = Guid.NewGuid().ToString("N");
 
+        user.PasswordResetToken = token;
+        user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddHours(24);
+        user.IsActive = true;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _authContext.SaveChangesAsync();
+        var resetLink = $"https://admin.ttologistics.com/user/set-password?token={token}";
         if (wasInactive && user.IsActive)
         {
-            await _emailService.SendEmailAsync(
-                toEmail: user.Email,
-                subject: "Account Activated!",
-                "AccountActivated.cshtml",
-                placeholders: new() { ["Name"] = user.Name, ["LastName"] = user.LastName },
-                copy: false
-            );
+            var okAccessEmail = await _emailService.SendEmailAsync(
+            toEmail: user.Email,
+            subject: "Account Activated!!",
+            "AccountActivated.cshtml",
+            placeholders: new Dictionary<string, string>
+            {
+                { "Name", user.Name ?? "" },
+                { "LastName", user.LastName ?? "" },
+                { "Email", user.Email ?? "" },
+                { "ResetLink", resetLink }
+            },
+            copy: true
+);
+
+            if (!okAccessEmail)
+            {
+                return BadRequest(new { Message = "Access email was not sent." });
+            }
         }
 
         return Ok(new { Message = "User updated successfully!" });
     }
+    
+    [AllowAnonymous]
+    [HttpPost("set-password")]
+    public async Task<IActionResult> SetPassword([FromBody] SetPasswordDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Token))
+            return BadRequest(new { Message = "Invalid token." });
 
+        if (string.IsNullOrWhiteSpace(dto.NewPassword) || dto.NewPassword.Length < 6)
+            return BadRequest(new { Message = "Password must be at least 6 characters." });
+
+        var user = await _authContext.Users
+            .FirstOrDefaultAsync(u =>
+                u.PasswordResetToken == dto.Token &&
+                u.PasswordResetTokenExpiresAt > DateTime.UtcNow);
+
+        if (user is null)
+            return BadRequest(new { Message = "Token expired or invalid." });
+
+        user.Password = PasswordHasher.HashPassword(dto.NewPassword);
+        user.PasswordResetToken = null;
+        user.PasswordResetTokenExpiresAt = null;
+        user.IsFirstLogin = false;
+        user.IsActive = true;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _authContext.SaveChangesAsync();
+
+        return Ok(new { Message = "Password created successfully." });
+    }
 
 
     [HttpDelete("{id}")]
@@ -2801,7 +2848,11 @@ public class UserValidationResultDto
 //     public TToApp.Model.PackageStatus Status { get; set; }
 //     public DateTime IncidentDate { get; set; }
 // }
-
+public class SetPasswordDto
+{
+    public string Token { get; set; } = string.Empty;
+    public string NewPassword { get; set; } = string.Empty;
+}
 public sealed class RouteWithPackagesDto
 {
     public int RouteId { get; set; }

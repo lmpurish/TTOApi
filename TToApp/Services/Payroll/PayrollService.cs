@@ -570,7 +570,13 @@ namespace TToApp.Services.Payroll
                 if (netAvailable <= 0) break;
 
                 // desired: cuota fija o máximo por corrida o saldo completo
-                var desired = loan.InstallmentAmount ?? loan.MaxDeductionPerPayRun ?? loan.Balance;
+                decimal desired = loan.InstallmentAmount;
+
+                if (desired <= 0)
+                    desired = (decimal)loan.MaxDeductionPerPayRun;
+
+                if (desired <= 0)
+                    desired = loan.Balance;
 
                 // si hay MaxDeductionPerPayRun, respeta el menor
                 if (loan.MaxDeductionPerPayRun.HasValue)

@@ -9,7 +9,7 @@
         public decimal Principal { get; set; }
         public decimal Balance { get; set; }
 
-        public decimal? InstallmentAmount { get; set; }     // cuota fija
+        public decimal InstallmentAmount { get; set; }     // cuota fija
         public decimal? MaxDeductionPerPayRun { get; set; } // tope por payroll
 
         public string Status { get; set; } = "Draft"; // Draft|Active|Paused|Completed|Cancelled

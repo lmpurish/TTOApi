@@ -707,10 +707,12 @@ namespace TToApp.Controllers
                         WarehouseId = wh.Id,
                         Warehouse = $"{wh.Company} {wh.City}",
                         City = wh.City,
-                        Packages = 0,
+                        Volumen = 0,
+                        Stops = 0,
+                        CantDrivers = 0,
+                        CountRoutes = 0,
+                        Attemps = 0,
                         Delivered = 0,
-                        Drivers = 0,
-                        Routes = 0,
                         OnTimePercent = 0,
                         Status = "No Data"
                     });
@@ -718,15 +720,13 @@ namespace TToApp.Controllers
                     continue;
                 }
 
-                var packages = routes.Sum(r => r.DeliveryStops);
-                var delivered = routes.Sum(r => Math.Max(0, r.DeliveryStops - r.CNL));
-                var drivers = routes.Select(r => r.UserId).Distinct().Count();
-                var routeCount = routes.Count;
-                //var onTimePercent = Math.Round((decimal)routes.Average(r => r.CustomerOnTime), 2);
+                var Volumen = routes.Sum(r => r.Volumen);
+                var Attemps = routes.Sum(r => r.Attempts);
                 decimal onTimePercent = 0;
-                if (packages > 0)
+
+                if (Volumen > 0)
                 {
-                    onTimePercent = Math.Round((decimal)delivered * 100 / packages, 2);
+                    onTimePercent = Math.Round((decimal)(Volumen - Attemps ) * 100 / Volumen, 2);
                 }
 
                 result.Add(new WarehousePerformanceDto
@@ -734,10 +734,12 @@ namespace TToApp.Controllers
                     WarehouseId = wh.Id,
                     Warehouse = $"{wh.Company} {wh.City}",
                     City = wh.City,
-                    Packages = packages,
-                    Delivered = delivered,
-                    Drivers = drivers,
-                    Routes = routeCount,
+                    Volumen = Volumen,
+                    CantDrivers = routes.Select(r => r.UserId).Distinct().Count(),
+                    CountRoutes = routes.Count,
+                    Attemps = Attemps,
+                    Delivered = Volumen - Attemps,
+                    Stops = routes.Sum(r => r.DeliveryStops),
                     OnTimePercent = onTimePercent,
                     Status = onTimePercent >= 95 ? "Healthy" :  onTimePercent >= 85
                                                             ? "Needs Attention"

@@ -184,6 +184,34 @@ namespace TToApp.Controllers
                       && (req.ZoneId.HasValue == false ||  (int)req.ZoneId.Value == 0 || r.ZoneId == (int)req.ZoneId.Value)
                 select new { r, z };
 
+            var driverWarehousePairs = await routesQ
+                .Where(x =>
+                    x.r.UserId.HasValue &&
+                    x.r.WarehouseId.HasValue)
+                .Select(x => new
+                {
+                    DriverId = (long)x.r.UserId!.Value,
+                    WarehouseId = x.r.WarehouseId!.Value
+                })
+                .Distinct()
+                .ToListAsync();
+                foreach (var pair in driverWarehousePairs)
+                {
+                    var hasWarehouseRate = await _db.DriverRates
+                        .AnyAsync(r =>
+                            r.DriverId == pair.DriverId &&
+                            r.WarehouseId == pair.WarehouseId);
+
+                    if (!hasWarehouseRate)
+                    {
+                        await EnsureMissingDriverRatesForWarehouseAsync(
+                            warehouseId: pair.WarehouseId,
+                            driverId: pair.DriverId,
+                            effectiveFrom: start,
+                            ct: CancellationToken.None);
+                    }
+                }
+
             // Get distinct warehouseIds
             var warehouseIdsAll = await routesQ
                 .Select(x => x.r.WarehouseId)
@@ -199,7 +227,7 @@ namespace TToApp.Controllers
             // Si no hay warehouses, no hay nada que procesar
             if (warehouseIdsAll.Count == 0)
             {
-                return Ok(new { message = "No warehouses to process" });
+                return Ok(new { message = "No warehouses to process " });
             }
 
             // Clarify if is OnTrac per warehouse
@@ -263,7 +291,6 @@ namespace TToApp.Controllers
                     !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
                 );
             }
-
 
             var roleFlat = await (
                 from rq in routesQ
@@ -1609,86 +1636,118 @@ namespace TToApp.Controllers
             await _db.SaveChangesAsync(ct);
             return Ok(new { message = "Bulk updated", count = entities.Count });
         }
+
         [Authorize(Roles = "Admin")]
         [HttpPost("generate-missing")]
         public async Task<IActionResult> GenerateMissingDriverRates(
-        [FromQuery] int warehouseId,
-        CancellationToken ct)
+            [FromQuery] int warehouseId,
+            CancellationToken ct)
         {
-            if (warehouseId <= 0)
-                return BadRequest(new { message = "warehouseId inválido." });
-
-            // 1) Traer warehouse y su rate default
-            var warehouse = await _db.Warehouses
-                .AsNoTracking()
-                .FirstOrDefaultAsync(w => w.Id == warehouseId, ct);
-
-            if (warehouse is null)
-                return NotFound(new { message = $"Warehouse {warehouseId} no existe." });
-
-            // Ajusta el nombre según tu modelo:
-            var baseAmount = warehouse.DriveRate; // <-- CAMBIA si tu propiedad se llama diferente
-
-            if (baseAmount <= 0)
-                return BadRequest(new { message = "El warehouse no tiene DriveRate válido (> 0)." });
-
-            var today = new DateOnly(2025, 1, 1);
-
-            // 2) Obtener drivers del warehouse que NO tienen rate
-            //    (RoleId=3 según tu mensaje)
-            var driverIdsWithoutRate = await _db.Users
-                .AsNoTracking()
-                .Where(u =>
-                         (u.UserRole == global::User.Role.Driver ||
-                         u.UserRole == global::User.Role.Manager)
-                        && u.WarehouseId == warehouseId && u.IsActive
-                    )
-                .Where(u => !_db.DriverRates.Any(dr => dr.DriverId == u.Id))
-                .Select(u => (long)u.Id)
-                .ToListAsync(ct);
-
-            if (driverIdsWithoutRate.Count == 0)
+            try
             {
+                var createdDriverIds = await EnsureMissingDriverRatesForWarehouseAsync(
+                    warehouseId: warehouseId,
+                    ct: ct);
+
                 return Ok(new
                 {
-                    created = 0,
-                    message = "No hay drivers sin DriverRate en ese warehouse."
+                    created = createdDriverIds.Count,
+                    warehouseId,
+                    driverIds = createdDriverIds,
+                    message = createdDriverIds.Count == 0
+                        ? "No hay drivers sin DriverRate en ese warehouse."
+                        : "DriverRates creados correctamente."
                 });
             }
-
-            // 3) Crear DriverRates (bulk)
-            var now = DateTime.UtcNow;
-
-            var newRates = driverIdsWithoutRate.Select(driverId => new DriverRate
+            catch (ArgumentException ex)
             {
-                DriverId = driverId,
-                RateType = "PerStop",          // o "PerStop" si ese es tu default
-                BaseAmount = (decimal)baseAmount,        // desde el warehouse
-                EffectiveFrom = today,
-                EffectiveTo = null,
-                UpdatedAt = now,
-                ExtraAmount = 0,
-                // opcional: defaults
-                MinPayPerRoute = null,
-                OverStopBonusThreshold = null,
-                OverStopBonusPerStop = null,
-                FailedStopPenalty = null,
-                RescueStopRate = null,
-                NightDeliveryBonus = null
-            }).ToList();
-
-            await _db.DriverRates.AddRangeAsync(newRates, ct);
-            await _db.SaveChangesAsync(ct);
-
-            return Ok(new
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (InvalidOperationException ex)
             {
-                created = newRates.Count,
-                warehouseId,
-                baseAmount,
-                rateType = "PerStop",
-                driverIds = driverIdsWithoutRate
-            });
+                return BadRequest(new { message = ex.Message });
+            }
         }
+        // [Authorize(Roles = "Admin")]
+        // [HttpPost("generate-missing")]
+        // public async Task<IActionResult> GenerateMissingDriverRates(
+        // [FromQuery] int warehouseId,
+        // CancellationToken ct)
+        // {
+        //     if (warehouseId <= 0)
+        //         return BadRequest(new { message = "warehouseId inválido." });
+
+        //     // 1) Traer warehouse y su rate default
+        //     var warehouse = await _db.Warehouses
+        //         .AsNoTracking()
+        //         .FirstOrDefaultAsync(w => w.Id == warehouseId, ct);
+
+        //     if (warehouse is null)
+        //         return NotFound(new { message = $"Warehouse {warehouseId} no existe." });
+
+        //     // Ajusta el nombre según tu modelo:
+        //     var baseAmount = warehouse.DriveRate; // <-- CAMBIA si tu propiedad se llama diferente
+
+        //     if (baseAmount <= 0)
+        //         return BadRequest(new { message = "El warehouse no tiene DriveRate válido (> 0)." });
+
+        //     var today = new DateOnly(2025, 1, 1);
+
+        //     // 2) Obtener drivers del warehouse que NO tienen rate
+        //     //    (RoleId=3 según tu mensaje)
+        //     var driverIdsWithoutRate = await _db.Users
+        //         .AsNoTracking()
+        //         .Where(u =>
+        //                  (u.UserRole == global::User.Role.Driver ||
+        //                  u.UserRole == global::User.Role.Manager)
+        //                 && u.WarehouseId == warehouseId && u.IsActive
+        //             )
+        //         .Where(u => !_db.DriverRates.Any(dr => dr.DriverId == u.Id))
+        //         .Select(u => (long)u.Id)
+        //         .ToListAsync(ct);
+
+        //     if (driverIdsWithoutRate.Count == 0)
+        //     {
+        //         return Ok(new
+        //         {
+        //             created = 0,
+        //             message = "No hay drivers sin DriverRate en ese warehouse."
+        //         });
+        //     }
+
+        //     // 3) Crear DriverRates (bulk)
+        //     var now = DateTime.UtcNow;
+
+        //     var newRates = driverIdsWithoutRate.Select(driverId => new DriverRate
+        //     {
+        //         DriverId = driverId,
+        //         RateType = "PerStop",          // o "PerStop" si ese es tu default
+        //         BaseAmount = (decimal)baseAmount,        // desde el warehouse
+        //         EffectiveFrom = today,
+        //         EffectiveTo = null,
+        //         UpdatedAt = now,
+        //         ExtraAmount = 0,
+        //         // opcional: defaults
+        //         MinPayPerRoute = null,
+        //         OverStopBonusThreshold = null,
+        //         OverStopBonusPerStop = null,
+        //         FailedStopPenalty = null,
+        //         RescueStopRate = null,
+        //         NightDeliveryBonus = null
+        //     }).ToList();
+
+        //     await _db.DriverRates.AddRangeAsync(newRates, ct);
+        //     await _db.SaveChangesAsync(ct);
+
+        //     return Ok(new
+        //     {
+        //         created = newRates.Count,
+        //         warehouseId,
+        //         baseAmount,
+        //         rateType = "PerStop",
+        //         driverIds = driverIdsWithoutRate
+        //     });
+        // }
 
         // [HttpGet("latestGrossAmountByWarehouse1")]
         // public async Task<IActionResult> LatestGrossAmountByWarehouse1()
@@ -1868,10 +1927,10 @@ namespace TToApp.Controllers
 
         [HttpGet("periods/by-range")]
         public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
-    [FromQuery] long companyId,
-    [FromQuery] long? warehouseId,
-    [FromQuery] string startDate,
-    [FromQuery] string endDate)
+        [FromQuery] long companyId,
+        [FromQuery] long? warehouseId,
+        [FromQuery] string startDate,
+        [FromQuery] string endDate)
         {
             var start = ParseDateOnly(startDate);
             var end = ParseDateOnly(endDate);
@@ -2015,6 +2074,85 @@ namespace TToApp.Controllers
                 adjustments = run.Adjustments,
                 netAmount = run.NetAmount
             });
+        }
+
+       private async Task<List<long>> EnsureMissingDriverRatesForWarehouseAsync(
+            int warehouseId,
+            long? driverId = null,
+            DateOnly? effectiveFrom = null,
+            CancellationToken ct = default)
+        {
+            if (warehouseId <= 0)
+                throw new ArgumentException("warehouseId inválido.");
+
+            var warehouse = await _db.Warehouses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(w => w.Id == warehouseId, ct);
+
+            if (warehouse is null)
+                throw new InvalidOperationException($"Warehouse {warehouseId} no existe.");
+
+            var baseAmount = warehouse.DriveRate;
+
+            if (baseAmount == null || baseAmount <= 0)
+                throw new InvalidOperationException("El warehouse no tiene DriveRate válido (> 0).");
+
+            var effectiveDate = effectiveFrom ?? new DateOnly(2025, 1, 1);
+
+            var driversQuery = _db.Users
+                .AsNoTracking()
+                .Where(u =>
+                    u.IsActive &&
+                    (u.UserRole == global::User.Role.Driver ||
+                    u.UserRole == global::User.Role.Manager));
+
+            if (driverId.HasValue)
+            {
+                driversQuery = driversQuery.Where(u => u.Id == driverId.Value);
+            }
+            else
+            {
+                driversQuery = driversQuery.Where(u => u.WarehouseId == warehouseId);
+            }
+
+            var driverIdsWithoutRate = await driversQuery
+                .Where(u => !_db.DriverRates.Any(dr =>
+                    dr.DriverId == u.Id &&
+                    dr.WarehouseId == warehouseId))
+                .Select(u => (long)u.Id)
+                .ToListAsync(ct);
+
+            if (driverIdsWithoutRate.Count == 0)
+                return new List<long>();
+
+            var now = DateTime.UtcNow;
+
+            var newRates = driverIdsWithoutRate.Select(id => new DriverRate
+            {
+                DriverId = id,
+                WarehouseId = warehouseId,
+
+                RateType = "PerStop",
+                BaseAmount = baseAmount.Value,
+
+                EffectiveFrom = effectiveDate,
+                EffectiveTo = null,
+                UpdatedAt = now,
+
+                ExtraAmount = 0,
+                DailyAmount = 0,
+                MinPayPerRoute = null,
+                OverStopBonusThreshold = null,
+                OverStopBonusPerStop = null,
+                FailedStopPenalty = null,
+                RescueStopRate = null,
+                NightDeliveryBonus = null
+            }).ToList();
+
+            await _db.DriverRates.AddRangeAsync(newRates, ct);
+            await _db.SaveChangesAsync(ct);
+
+            return driverIdsWithoutRate;
         }
 
 

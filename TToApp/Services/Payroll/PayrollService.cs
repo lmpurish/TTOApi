@@ -54,15 +54,19 @@ namespace TToApp.Services.Payroll
             }
 
             // 2) DriverRate vigente (solo BaseAmount por ahora)
-            var rate = await _db.DriverRates
-                .Where(r => r.DriverId == driverId
-                            && r.EffectiveFrom <= weekEnd
-                            && (r.EffectiveTo == null || r.EffectiveTo >= weekStart))
-                .OrderByDescending(r => r.EffectiveFrom)
-                .FirstOrDefaultAsync();
-
-            // if (rate is null)
-            //     throw new InvalidOperationException("No hay DriverRate configurado para este driver y período.");
+            var rates = await _db.DriverRates
+                .Where(r =>
+                    r.DriverId == driverId &&
+                    r.EffectiveFrom <= weekEnd &&
+                    (r.EffectiveTo == null || r.EffectiveTo >= weekStart))
+                .OrderByDescending(r => r.WarehouseId != null) // específicos primero
+                .ThenByDescending(r => r.EffectiveFrom)
+                .ToListAsync();
+                
+            if (!rates.Any())
+            {
+                throw new Exception($"Driver {driverId} has no DriverRate configured.");
+            }
 
             // 3) PayrollConfig (por warehouse)
             PayrollConfig? payrollConfig = null;
@@ -148,6 +152,31 @@ namespace TToApp.Services.Payroll
                 .Include(r => r.Zone)
                 .ToListAsync();
 
+                DriverRate? GetRateForRoute(Routes route)
+                {
+                    var routeDate = DateOnly.FromDateTime(route.Date);
+                    var routeWarehouseId = route.WarehouseId;
+
+                    var specificRate = rates
+                        .Where(r =>
+                            r.WarehouseId == routeWarehouseId &&
+                            r.EffectiveFrom <= routeDate &&
+                            (r.EffectiveTo == null || r.EffectiveTo >= routeDate))
+                        .OrderByDescending(r => r.EffectiveFrom)
+                        .FirstOrDefault();
+
+                    if (specificRate != null)
+                        return specificRate;
+
+                    return rates
+                        .Where(r =>
+                            r.WarehouseId == null &&
+                            r.EffectiveFrom <= routeDate &&
+                            (r.EffectiveTo == null || r.EffectiveTo >= routeDate))
+                        .OrderByDescending(r => r.EffectiveFrom)
+                        .FirstOrDefault();
+                }
+
             var hasRoutesInThisPayRun = routes.Any();
 
             // 5) Precargar pesos por ruta (solo si weightRules aplica)
@@ -181,40 +210,7 @@ namespace TToApp.Services.Payroll
                     );
 
             }
-     /*       Dictionary<int, FineSummary> finesByRoute = new();
 
-            if(penaltyRules.Count > 0 && routeIds.Count > 0)
-            {
-                // Aquí podrías hacer algo similar para cargar datos relevantes para las penalidades, dependiendo de cómo las apliques.
-                var packageIds = packs.Select(x => x.PackageId).Distinct().ToList();
-                // 6.) Cheking is there are fines for the packages in the routes
-
-                if (packageIds.Count > 0)
-                {
-                    finesByRoute = await (
-                        from f in _db.Set<PayrollFine>().AsNoTracking()
-                        join p in _db.Set<Packages>().AsNoTracking()
-                            on f.PackageId equals p.Id
-                        where packageIds.Contains(p.Id)
-                            && f.Amount > 0
-                            && p.RoutesId != null
-                        group new { f, p } by (int)p.RoutesId into g
-                        select new
-                        {
-                            RouteId = g.Key,
-                            TotalFine = g.Sum(x => x.f.Amount),
-                            PackagesCount = g.Select(x => x.p.Id).Distinct().Count() // ✅ paquetes únicos
-                            // si quieres contar multas: g.Count()
-                        }
-                    ).ToDictionaryAsync(
-                        x => x.RouteId,
-                        x => new FineSummary(x.TotalFine, x.PackagesCount)
-                    );
-                }
-            }
- */
-
-            // 7) Crear / limpiar PayRun
             var payRun = await _db.PayRuns.FirstOrDefaultAsync(x => x.PayPeriodId == period.Id && x.DriverId == driverId);
             if (payRun is null)
             {
@@ -314,13 +310,28 @@ namespace TToApp.Services.Payroll
 
             foreach (var route in routes)
             {
+                var routeRate = GetRateForRoute(route);
                 var delivered = Math.Max(0, route.DeliveryStops - route.CNL);
-                var failed = Math.Max(0, route.CNL);
+                var failed    = Math.Max(0, route.CNL);
 
-                // var driverPerStop = rate.BaseAmount;
+                  // var driverPerStop = rate.BaseAmount;
+                // var routeRate = rates.FirstOrDefault(r =>
+                // r.WarehouseId == route.WarehouseId);
+
+                // routeRate ??= rates.FirstOrDefault(r =>
+                //     r.WarehouseId == null);
+
+                // if (routeRate == null)
+                // {
+                //     warnings.Add(
+                //         $"Driver {driverId} has no rate configured for warehouse {route.WarehouseId}");
+                //     continue;
+                // }
+
+
                 var driverPerStop =
-                    (rate.RateType == "Mixed" || rate.RateType == "PerStop")
-                        ? rate.BaseAmount
+                    (routeRate.RateType == "Mixed" || routeRate.RateType == "PerStop")
+                        ? routeRate.BaseAmount
                         : 0m;
 
                 decimal zonePerStop = 0m;
@@ -365,7 +376,7 @@ namespace TToApp.Services.Payroll
                             // item: (rule, count, amountTotal)
                             var rule = item.Rule;
                             var qty = item.Count;
-                            var rateExtra = Math.Max((rule.ExtraAmount + (rate.ExtraAmount ?? 0m))+ driverPerStop, zonePerStop) ;
+                            var rateExtra = Math.Max((rule.ExtraAmount + (routeRate.ExtraAmount ?? 0m))+ driverPerStop, zonePerStop) ;
                             qtyExtraWeigth += qty;
 
                             // Línea por regla (agregado) => qty * rateExtra = total
@@ -451,16 +462,16 @@ namespace TToApp.Services.Payroll
                 }
 
                 // Penalidad CNL (si aplica)
-                if (failed > 0 && rate.FailedStopPenalty.GetValueOrDefault() > 0)
+                if (failed > 0 && routeRate.FailedStopPenalty.GetValueOrDefault() > 0)
                 {
                     routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
-                        "CNL Penalty", failed, -rate.FailedStopPenalty!.Value, "CNL_PENALTY",route.Date, route.Zone?.Id, route.Zone?.Area);
+                        "CNL Penalty", failed, -routeRate.FailedStopPenalty!.Value, "CNL_PENALTY",route.Date, route.Zone?.Id, route.Zone?.Area);
                 }
 
                 // Mínimo por ruta (si aplica)
-                if (rate.MinPayPerRoute.HasValue && routeSubtotal < rate.MinPayPerRoute.Value)
+                if (routeRate.MinPayPerRoute.HasValue && routeSubtotal < routeRate.MinPayPerRoute.Value)
                 {
-                    var diff = rate.MinPayPerRoute.Value - routeSubtotal;
+                    var diff = routeRate.MinPayPerRoute.Value - routeSubtotal;
                     routeSubtotal += AddLine(payRun, "Bonus", route.Id.ToString(),
                         "Minimum adjustment per route", 1m, diff, "MIN_ROUTE_ADJUST",route.Date, route.Zone?.Id, route.Zone?.Area);
                 }
@@ -496,37 +507,101 @@ namespace TToApp.Services.Payroll
                     }
                 }*/
             }
+           var mixedRatesWithDaily = rates
+            .Where(r =>
+                r.RateType == "Mixed" &&
+                r.DailyAmount.GetValueOrDefault() > 0 &&
+                r.WarehouseId.HasValue)
+            .ToList();
 
-            if (rate.RateType == "Mixed" && rate.DailyAmount > 0) {
- 
+            if (mixedRatesWithDaily.Any())
+            {
+                var mixedWarehouseIds = mixedRatesWithDaily
+                    .Select(r => r.WarehouseId!.Value)
+                    .Distinct()
+                    .ToList();
+
                 var startUtc = weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
                 var endExclusiveUtc = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
 
-                var days = await _db.DriverPunches
+                var punchDaysByWarehouse = await _db.DriverPunches
                     .AsNoTracking()
-                    .Where(p => p.DriverId == driverId)
-                    .Where(p => p.OccurredAtUtc >= startUtc && p.OccurredAtUtc < endExclusiveUtc)
-                    .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
+                    .Where(p =>
+                        p.DriverId == driverId &&
+                        mixedWarehouseIds.Contains(p.WarehouseId) &&
+                        p.OccurredAtUtc >= startUtc &&
+                        p.OccurredAtUtc < endExclusiveUtc)
+                    .Select(p => new
+                    {
+                        Day = DateOnly.FromDateTime(p.OccurredAtUtc),
+                        p.WarehouseId
+                    })
                     .Distinct()
-                    .OrderBy(d => d)
+                    .OrderBy(x => x.Day)
+                    .ThenBy(x => x.WarehouseId)
                     .ToListAsync();
-                var dailyRate = rate.DailyAmount.GetValueOrDefault();
-                foreach (var day in days)
+
+                foreach (var punchDay in punchDaysByWarehouse)
                 {
+                    var dailyRateObj = mixedRatesWithDaily
+                        .Where(r =>
+                            r.WarehouseId == punchDay.WarehouseId &&
+                            r.EffectiveFrom <= punchDay.Day &&
+                            (r.EffectiveTo == null || r.EffectiveTo >= punchDay.Day))
+                        .OrderByDescending(r => r.EffectiveFrom)
+                        .FirstOrDefault();
+
+                    if (dailyRateObj == null)
+                        continue;
+
+                    var dailyRate = dailyRateObj.DailyAmount.GetValueOrDefault();
+
                     AddLine(
                         payRun,
                         "DailyAmount",
                         driverId.ToString(),
-                        $"Daily Amount on: {day:MMM dd, yyyy}" ,
+                        $"Daily Amount on: {punchDay.Day:MMM dd, yyyy} - WH {punchDay.WarehouseId}",
                         1m,
                         dailyRate,
                         "DAILY_AMOUNT",
-                        day.ToDateTime(TimeOnly.MinValue)
-                        
+                        punchDay.Day.ToDateTime(TimeOnly.MinValue)
                     );
+
+                    gross += dailyRate;
                 }
-                gross += days.Count * dailyRate;
             }
+           
+
+            // if (routeRate.RateType == "Mixed" && routeRate.DailyAmount > 0) {
+ 
+            //     var startUtc = weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            //     var endExclusiveUtc = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+
+            //     var days = await _db.DriverPunches
+            //         .AsNoTracking()
+            //         .Where(p => p.DriverId == driverId)
+            //         .Where(p => p.OccurredAtUtc >= startUtc && p.OccurredAtUtc < endExclusiveUtc)
+            //         .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
+            //         .Distinct()
+            //         .OrderBy(d => d)
+            //         .ToListAsync();
+            //     var dailyRate = rate.DailyAmount.GetValueOrDefault();
+            //     foreach (var day in days)
+            //     {
+            //         AddLine(
+            //             payRun,
+            //             "DailyAmount",
+            //             driverId.ToString(),
+            //             $"Daily Amount on: {day:MMM dd, yyyy}" ,
+            //             1m,
+            //             dailyRate,
+            //             "DAILY_AMOUNT",
+            //             day.ToDateTime(TimeOnly.MinValue)
+                        
+            //         );
+            //     }
+            //     gross += days.Count * dailyRate;
+            // }
             
             if (warnings.Count > 0)
                 AddLine(payRun, "Info", null, $"Warnings: {warnings.Count}", 0m, 0m, "WARN_SUMMARY");

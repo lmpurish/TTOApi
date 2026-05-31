@@ -1921,6 +1921,8 @@ namespace TToApp.Controllers
 
             return Ok(result);
         }
+
+        //Esto es para evitar que amilkar lo rompa
         private int GetCurrentUserId()
         {
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);

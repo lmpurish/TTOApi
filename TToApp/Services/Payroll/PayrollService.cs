@@ -130,16 +130,16 @@ namespace TToApp.Services.Payroll
                     r.UserId == (int)driverId
                 );
 
-            if (filterZoneId.HasValue && isOnTrac)
+            if (filterZoneId.HasValue && filterZoneId.Value > 0 && isOnTrac)
                 routesQuery = routesQuery.Where(r => r.ZoneId == filterZoneId.Value);
 
             if (warehouseId.HasValue && isOnTrac)
             {
-                // OnTrac: requiere zona y amarra el warehouse a la zona
+                var wid = (int)warehouseId.Value;
                 routesQuery = routesQuery.Where(r =>
                     r.ZoneId != null &&
-                    r.Zone != null &&
-                    r.Zone.IdWarehouse == warehouseId.Value
+                    (r.WarehouseId == wid ||
+                     (r.Zone != null && r.Zone.IdWarehouse == warehouseId.Value))
                 );
             }
             if (warehouseId.HasValue && !isOnTrac)
@@ -148,36 +148,53 @@ namespace TToApp.Services.Payroll
                 routesQuery = routesQuery.Where(r => r.WarehouseId == wid);
             }
 
+
             var routes = await routesQuery
                 .Include(r => r.Zone)
                 .ToListAsync();
 
-                DriverRate? GetRateForRoute(Routes route)
-                {
-                    var routeDate = DateOnly.FromDateTime(route.Date);
-                    var routeWarehouseId = route.WarehouseId;
 
-                    var specificRate = rates
-                        .Where(r =>
-                            r.WarehouseId == routeWarehouseId &&
-                            r.EffectiveFrom <= routeDate &&
-                            (r.EffectiveTo == null || r.EffectiveTo >= routeDate))
-                        .OrderByDescending(r => r.EffectiveFrom)
-                        .FirstOrDefault();
+            DriverRate? GetDriverRateForRoute(Routes route)
+            {
+                var routeDate = DateOnly.FromDateTime(route.Date);
+                var routeWarehouseId = route.WarehouseId ?? route.Zone?.IdWarehouse;
 
-                    if (specificRate != null)
-                        return specificRate;
+                var specificRate = rates
+                    .Where(r =>
+                        r.WarehouseId == routeWarehouseId &&
+                        r.EffectiveFrom <= routeDate &&
+                        (r.EffectiveTo == null || r.EffectiveTo >= routeDate))
+                    .OrderByDescending(r => r.EffectiveFrom)
+                    .FirstOrDefault();
 
-                    return rates
-                        .Where(r =>
-                            r.WarehouseId == null &&
-                            r.EffectiveFrom <= routeDate &&
-                            (r.EffectiveTo == null || r.EffectiveTo >= routeDate))
-                        .OrderByDescending(r => r.EffectiveFrom)
-                        .FirstOrDefault();
-                }
+                if (specificRate != null)
+                    return specificRate;
+
+                return rates
+                    .Where(r =>
+                        r.WarehouseId == null &&
+                        r.EffectiveFrom <= routeDate &&
+                        (r.EffectiveTo == null || r.EffectiveTo >= routeDate))
+                    .OrderByDescending(r => r.EffectiveFrom)
+                    .FirstOrDefault();
+            }
 
             var hasRoutesInThisPayRun = routes.Any();
+            // _logger.LogInformation("Driver {DriverId} | Routes found: {Count} | HasRoutes: {HasRoutes}", driverId, routes.Count, hasRoutesInThisPayRun);
+
+            // 5a) Cargar ZonePayRules para las zonas de las rutas
+            var zoneIds = routes.Where(r => r.ZoneId.HasValue).Select(r => r.ZoneId!.Value).Distinct().ToList();
+            List<ZonePayRule> zonePayRules = new();
+            if (zoneIds.Any())
+            {
+                zonePayRules = await _db.Set<ZonePayRule>()
+                    .AsNoTracking()
+                    .Where(r =>
+                        zoneIds.Contains(r.ZoneId) &&
+                        r.IsActive &&
+                        (r.EffectiveTo == null || r.EffectiveTo >= startDt))
+                    .ToListAsync();
+            }
 
             // 5) Precargar pesos por ruta (solo si weightRules aplica)
             var routeIds = routes.Select(r => r.Id).Distinct().ToList(); // Id de Routes (int)
@@ -310,56 +327,60 @@ namespace TToApp.Services.Payroll
 
             foreach (var route in routes)
             {
-                var routeRate = GetRateForRoute(route);
+                var driverRate = GetDriverRateForRoute(route);
                 var delivered = Math.Max(0, route.DeliveryStops - route.CNL);
                 var failed    = Math.Max(0, route.CNL);
+                var volumen   = route.Volumen;
 
-                  // var driverPerStop = rate.BaseAmount;
-                // var routeRate = rates.FirstOrDefault(r =>
-                // r.WarehouseId == route.WarehouseId);
+                var activeZoneRule = route.ZoneId.HasValue
+                    ? zonePayRules.FirstOrDefault(r =>
+                        r.ZoneId == route.ZoneId.Value &&
+                        r.IsActive &&
+                        //r.EffectiveFrom <= route.Date &&
+                        (r.EffectiveTo == null || r.EffectiveTo >= route.Date))
+                    : null;
 
-                // routeRate ??= rates.FirstOrDefault(r =>
-                //     r.WarehouseId == null);
+                var zoneRulePerStop = activeZoneRule?.PaymentType == PaymentType.PerStop;
+                var zoneRuleSuffix = zoneRulePerStop ? $":ZONE_RULE:{activeZoneRule!.Id}" : "";
 
-                // if (routeRate == null)
-                // {
-                //     warnings.Add(
-                //         $"Driver {driverId} has no rate configured for warehouse {route.WarehouseId}");
-                //     continue;
-                // }
+                decimal driverPerStop =
+                    zoneRulePerStop
+                        ? Math.Max(activeZoneRule!.BaseAmount ?? 0m, driverRate?.BaseAmount ?? 0m)
+                        : driverRate?.RateType is "Mixed" or "PerStop"
+                            ? driverRate.BaseAmount
+                            : 0m;
 
+                decimal zonePerStop =
+                    route.Zone?.PriceStop ?? 0m;
 
-                var driverPerStop =
-                    (routeRate.RateType == "Mixed" || routeRate.RateType == "PerStop")
-                        ? routeRate.BaseAmount
-                        : 0m;
-
-                decimal zonePerStop = 0m;
-
-                if (route.Zone != null)
-                    zonePerStop = route.Zone.PriceStop;
-
-                decimal effectivePerStop = driverPerStop;
-                string? stopTag;
-
-                if (zonePerStop > 0 )
+                // Si la regla activa es PerStop, ella debe mandar sobre PriceStop
+                if (zoneRulePerStop && activeZoneRule!.BaseAmount.HasValue)
                 {
-                    if (isOnTrac)
-                    {
-                        effectivePerStop = Math.Max(driverPerStop, zonePerStop);
-                       
-                    }
-                    else
-                    {
+                    zonePerStop = activeZoneRule.BaseAmount.Value;
+                }
 
-                    }
-                    stopTag = (driverPerStop > zonePerStop) ? "USE_DRIVER_BASE" : "USE_ZONE_RATE";
+                decimal effectivePerStop;
+                string stopTag;
+
+                if (zonePerStop > 0)
+                {
+                    effectivePerStop = isOnTrac
+                        ? Math.Max(driverPerStop, zonePerStop)
+                        : driverPerStop > 0 ? driverPerStop : zonePerStop;
+
+                    stopTag = driverPerStop > zonePerStop
+                        ? $"USE_DRIVER_BASE:{driverRate?.Id}{zoneRuleSuffix}"
+                        : $"USE_ZONE_RATE{zoneRuleSuffix}";
                 }
                 else
                 {
                     effectivePerStop = driverPerStop;
-                    stopTag = (route.Zone == null) ? "WARN_NO_ZONE" : "WARN_ZONE_PRICE_FALLBACK";
+
+                    stopTag = route.Zone == null
+                        ? "WARN_NO_ZONE"
+                        : $"WARN_ZONE_PRICE_FALLBACK{zoneRuleSuffix}";
                 }
+
                 // ✅ 6.1) EXTRA POR PESO (por paquete)
                 
                 decimal routeSubtotal = 0m;
@@ -376,7 +397,7 @@ namespace TToApp.Services.Payroll
                             // item: (rule, count, amountTotal)
                             var rule = item.Rule;
                             var qty = item.Count;
-                            var rateExtra = Math.Max((rule.ExtraAmount + (routeRate.ExtraAmount ?? 0m))+ driverPerStop, zonePerStop) ;
+                            var rateExtra = Math.Max((rule.ExtraAmount + (driverRate?.ExtraAmount ?? 0m)) + driverPerStop, zonePerStop);
                             qtyExtraWeigth += qty;
 
                             // Línea por regla (agregado) => qty * rateExtra = total
@@ -395,23 +416,29 @@ namespace TToApp.Services.Payroll
                     }
                 }
                  
-                // ✅ PAYMENT TYPE (ENUM)
-                switch (route.PaymentType)
+                // ✅ PAYMENT TYPE — se prioriza el ZonePayRule activo de la zona
+
+                var effectivePaymentType = activeZoneRule?.PaymentType ?? route.PaymentType;
+
+                switch (effectivePaymentType)
                 {
                     case PaymentType.PerRoute:
                         {
-                            var priceRoute = route.PriceRoute;
+                            var priceRoute = activeZoneRule?.BaseAmount.HasValue == true
+                                ? activeZoneRule.BaseAmount
+                                : (decimal?)route.PriceRoute;
+                            var perRouteTag = activeZoneRule?.BaseAmount.HasValue == true ? $"PAY_PER_ROUTE:ZONE_RULE:{activeZoneRule.Id}" : "PAY_PER_ROUTE";
 
-                            if (priceRoute <= 0)
+                            if (priceRoute == null || priceRoute <= 0)
                             {
                                 warnings.Add($"Ruta {route.Id}: PaymentType=PerRoute pero PriceRoute inválido ({priceRoute}); se pagó 0." );
                                 AddLine(payRun, "Route", route.Id.ToString(),
-                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute, sin precio)", 1m, 0m, "WARN_NO_ROUTE_PRICE",route.Date,route.Zone.Id, route.Zone.Area);
+                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute, sin precio)", 1m, 0m, "WARN_NO_ROUTE_PRICE",route.Date, route.Zone?.Id, route.Zone?.Area);
                             }
                             else
                             {
                                 routeSubtotal += AddLine(payRun, "Route", route.Id.ToString(),
-                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute)", 1m, (decimal)priceRoute, "PAY_PER_ROUTE",route.Date, route.Zone.Id, route.Zone.Area);
+                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (PerRoute)", 1m, priceRoute.Value, perRouteTag, route.Date, route.Zone?.Id, route.Zone?.Area);
                             }
 
                             break;
@@ -444,36 +471,82 @@ namespace TToApp.Services.Payroll
                             break;
                         }
 
-                    case PaymentType.Mixed:
-                    default:
+                    case PaymentType.PerBlock:
                         {
-                            var priceRoute = route.PriceRoute;
-
-                            if (priceRoute > 0)
-                                routeSubtotal += AddLine(payRun, "Route", route.Id.ToString(),
-                                    $"Route {route.Id} - {route.Date:yyyy-MM-dd} (Mixed-Route)", 1m, (decimal)priceRoute, "PAY_MIXED_ROUTE",route.Date, route.Zone?.Id, route.Zone?.Area);
-
                             if (delivered > 0)
-                                routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
-                                    "Delivered Stops (Mixed-Stop)", delivered, effectivePerStop, "PAY_MIXED_STOP",route.Date, route.Zone?.Id, route.Zone?.Area);
+                            {
+                                if (activeZoneRule?.BaseAmount.HasValue == true)
+                                {
+                                    routeSubtotal += AddLine(
+                                        payRun, "Earning", route.Id.ToString(),
+                                        $"{route.Date:MMM dd, yyyy} - Block ({activeZoneRule.MaxPackages} pkgs, Zone {route.Zone?.ZoneCode})",
+                                        1m, activeZoneRule.BaseAmount.Value, $"ZONE_BLOCK_RATE:ZONE_RULE:{activeZoneRule.Id}",
+                                        route.Date, route.Zone?.Id, route.Zone?.Area);
 
+                                    var excess = delivered - (activeZoneRule.MaxPackages ?? 0);
+                                    if (excess > 0)
+                                    {
+                                        var extraRate = activeZoneRule.UseDriverRateForExtra
+                                            ? effectivePerStop
+                                            : (activeZoneRule.ExtraAmount ?? effectivePerStop);
+                                        var extraTag = activeZoneRule.UseDriverRateForExtra ? "ZONE_BLOCK_EXTRA_DRIVER" : "ZONE_BLOCK_EXTRA";
+
+                                        routeSubtotal += AddLine(
+                                            payRun, "Earning", route.Id.ToString(),
+                                            $"{route.Date:MMM dd, yyyy} - Extra pkgs beyond block",
+                                            excess, extraRate, extraTag,
+                                            route.Date, route.Zone?.Id, route.Zone?.Area);
+                                    }
+                                }
+                                else
+                                {
+                                    warnings.Add($"Route {route.Id}: ZonePayRule PerBlock sin BaseAmount configurado en zona {route.ZoneId}.");
+                                    routeSubtotal += AddLine(
+                                        payRun, "Earning", route.Id.ToString(),
+                                        $"{route.Date:MMM dd, yyyy} {(route.Zone != null ? $"Zone {route.Zone.ZoneCode} " : "")} - PerBlock fallback",
+                                        delivered, effectivePerStop, stopTag,
+                                        route.Date, route.Zone?.Id, route.Zone?.Area);
+                                }
+                            }
+                            else
+                            {
+                                AddLine(payRun, "Stop", route.Id.ToString(),
+                                    "Delivered Stops 0 (PerBlock)", 0m, effectivePerStop, "INFO_ZERO_DELIVERED",
+                                    route.Date, route.Zone?.Id, route.Zone?.Area);
+                            }
                             break;
                         }
+
+                    // case PaymentType.Mixed:
+                    // default:
+                    //     {
+                    //         var priceRoute = route.PriceRoute;
+
+                    //         if (priceRoute > 0)
+                    //             routeSubtotal += AddLine(payRun, "Route", route.Id.ToString(),
+                    //                 $"Route {route.Id} - {route.Date:yyyy-MM-dd} (Mixed-Route)", 1m, (decimal)priceRoute, "PAY_MIXED_ROUTE",route.Date, route.Zone?.Id, route.Zone?.Area);
+
+                    //         if (delivered > 0)
+                    //             routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
+                    //                 "Delivered Stops (Mixed-Stop)", delivered, effectivePerStop, "PAY_MIXED_STOP",route.Date, route.Zone?.Id, route.Zone?.Area);
+
+                    //         break;
+                    //     }
                 }
 
                 // Penalidad CNL (si aplica)
-                if (failed > 0 && routeRate.FailedStopPenalty.GetValueOrDefault() > 0)
+                if (failed > 0 && driverRate?.FailedStopPenalty.GetValueOrDefault() > 0)
                 {
                     routeSubtotal += AddLine(payRun, "Stop", route.Id.ToString(),
-                        "CNL Penalty", failed, -routeRate.FailedStopPenalty!.Value, "CNL_PENALTY",route.Date, route.Zone?.Id, route.Zone?.Area);
+                        "CNL Penalty", failed, -driverRate!.FailedStopPenalty!.Value, "CNL_PENALTY", route.Date, route.Zone?.Id, route.Zone?.Area);
                 }
 
                 // Mínimo por ruta (si aplica)
-                if (routeRate.MinPayPerRoute.HasValue && routeSubtotal < routeRate.MinPayPerRoute.Value)
+                if (driverRate?.MinPayPerRoute.HasValue == true && routeSubtotal < driverRate.MinPayPerRoute.Value)
                 {
-                    var diff = routeRate.MinPayPerRoute.Value - routeSubtotal;
+                    var diff = driverRate.MinPayPerRoute.Value - routeSubtotal;
                     routeSubtotal += AddLine(payRun, "Bonus", route.Id.ToString(),
-                        "Minimum adjustment per route", 1m, diff, "MIN_ROUTE_ADJUST",route.Date, route.Zone?.Id, route.Zone?.Area);
+                        "Minimum adjustment per route", 1m, diff, "MIN_ROUTE_ADJUST", route.Date, route.Zone?.Id, route.Zone?.Area);
                 }
 
                 gross += routeSubtotal;

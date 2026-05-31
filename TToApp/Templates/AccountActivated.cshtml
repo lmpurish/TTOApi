@@ -3,112 +3,114 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Activate Your Account</title>
+    <title>TTO Logistics - Account Activation</title>
 </head>
 
-<body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:0;background:#eef2f7;font-family:Arial,Helvetica,sans-serif;">
 
-    <div style="max-width:600px;margin:40px auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <div style="max-width:620px;margin:40px auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #dbe3ef;">
 
         <!-- HEADER -->
-        <div style="background:#0a4d8c;padding:30px;text-align:center;">
-            <h1 style="color:white;margin:0;font-size:28px;">
-                Welcome to TTO Logistics
+        <div style="background:#061f3d;padding:34px 30px;text-align:center;">
+            <h1 style="color:#ffffff;margin:0;font-size:27px;font-weight:700;">
+                TTO Logistics
             </h1>
 
-            <p style="color:#dbeafe;margin-top:10px;font-size:16px;">
-                Your account has been activated successfully
+            <p style="color:#9cc9ff;margin:10px 0 0;font-size:15px;letter-spacing:.5px;">
+                <strong>{{CompanyName}}</strong>
             </p>
+
+            <div style="margin:24px auto 0;width:70px;height:4px;background:#1e88e5;border-radius:10px;"></div>
         </div>
 
         <!-- BODY -->
-        <div style="padding:35px;">
+        <div style="padding:36px;">
 
-            <p style="font-size:16px;color:#374151;">
+            <h2 style="margin:0 0 18px;color:#0f172a;font-size:24px;text-align:center;">
+                Your Driver Account Is Active
+            </h2>
+
+            <p style="font-size:16px;color:#334155;line-height:1.7;">
                 Hello <strong>{{Name}} {{LastName}}</strong>,
             </p>
 
-            <p style="font-size:16px;color:#374151;line-height:1.7;">
-                We are excited to inform you that your driver account with
-                <strong>Torres Transportation One LLC (TTO Logistics)</strong>
-                is now active.
+            <p style="font-size:16px;color:#334155;line-height:1.7;">
+                Your account with <strong>{{CompanyName}}</strong> has been activated.
+                You can now create your password and access the TTO driver portal.
             </p>
 
-            <p style="font-size:16px;color:#374151;line-height:1.7;">
-                To access your portal and complete your onboarding process,
-                please create your password using the secure button below.
-            </p>
+            <div style="background:#f8fafc;border:1px solid #dbeafe;border-left:5px solid #1e88e5;padding:18px;border-radius:10px;margin:26px 0;">
+                <p style="margin:0;color:#1e293b;font-size:15px;line-height:1.6;">
+                    Complete your onboarding, update your personal information, and continue with the driver verification process.
+                </p>
+            </div>
 
             <!-- BUTTON -->
-            <div style="text-align:center;margin:40px 0;">
+            <div style="text-align:center;margin:36px 0;">
 
                 <a href="{{ResetLink}}"
                    target="_blank"
                    style="
-                        background:#0a4d8c;
-                        color:white;
+                        background:#1e88e5;
+                        color:#ffffff;
                         text-decoration:none;
-                        padding:16px 30px;
-                        border-radius:8px;
+                        padding:16px 34px;
+                        border-radius:10px;
                         display:inline-block;
                         font-size:16px;
                         font-weight:bold;
+                        box-shadow:0 8px 18px rgba(30,136,229,.25);
                    ">
-
-                    Create My Password
-
+                    Create Password & Access Portal
                 </a>
 
             </div>
 
-            <!-- FALLBACK -->
-            <p style="font-size:14px;color:#6b7280;line-height:1.6;">
-                If the button above does not work, copy and paste this link into your browser:
+            <p style="font-size:14px;color:#64748b;line-height:1.6;">
+                If the button does not work, copy and paste this secure link into your browser:
             </p>
 
             <div style="
-                background:#f3f4f6;
-                border:1px solid #d1d5db;
+                background:#f1f5f9;
+                border:1px solid #cbd5e1;
                 padding:14px;
-                border-radius:8px;
+                border-radius:9px;
                 font-size:13px;
                 word-break:break-all;
-                color:#111827;
+                color:#0f172a;
             ">
                 {{ResetLink}}
             </div>
 
             <!-- SECURITY -->
             <div style="
-                margin-top:30px;
+                margin-top:28px;
                 background:#fff7ed;
-                border:1px solid #fdba74;
+                border:1px solid #fed7aa;
                 padding:16px;
-                border-radius:8px;
+                border-radius:10px;
             ">
-
                 <p style="margin:0;color:#9a3412;font-size:14px;line-height:1.6;">
-                    🔒 This activation link will expire in 24 hours for security reasons.
+                    🔒 This activation link expires in 24 hours. Do not share this email or link with anyone.
                 </p>
-
             </div>
 
             <!-- LOGIN INFO -->
-            <div style="margin-top:35px;">
+            <div style="margin-top:34px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:18px;">
 
-                <h3 style="color:#111827;margin-bottom:15px;">
-                    Driver Portal
+                <h3 style="color:#0f172a;margin:0 0 14px;font-size:18px;">
+                    Driver Portal Access
                 </h3>
 
-                <p style="font-size:15px;color:#374151;margin:5px 0;">
+                <p style="font-size:15px;color:#334155;margin:6px 0;">
                     <strong>Email:</strong> {{Email}}
                 </p>
 
-                <p style="font-size:15px;color:#374151;margin:5px 0;">
+                <p style="font-size:15px;color:#334155;margin:6px 0;">
                     <strong>Portal:</strong>
                     <a href="https://admin.ttologistics.com"
                        target="_blank"
-                       style="color:#0a4d8c;text-decoration:none;">
+                       style="color:#1e88e5;text-decoration:none;font-weight:bold;">
                         admin.ttologistics.com
                     </a>
                 </p>
@@ -116,14 +118,18 @@
             </div>
 
             <!-- FOOTER -->
-            <div style="margin-top:45px;border-top:1px solid #e5e7eb;padding-top:25px;">
+            <div style="margin-top:42px;border-top:1px solid #e5e7eb;padding-top:24px;text-align:center;">
 
-                <p style="font-size:15px;color:#374151;">
+                <p style="font-size:15px;color:#334155;margin:0;">
                     Best regards,
                 </p>
 
-                <p style="font-size:16px;font-weight:bold;color:#111827;">
+                <p style="font-size:17px;font-weight:bold;color:#061f3d;margin:8px 0 0;">
                     TTO Logistics Team
+                </p>
+
+                <p style="font-size:12px;color:#94a3b8;margin-top:14px;">
+                    {{CompanyName}}
                 </p>
 
             </div>

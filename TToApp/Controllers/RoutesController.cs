@@ -48,15 +48,18 @@ namespace TToApp.Controllers
             return await _context.Routes.ToListAsync();
         }
         [HttpGet("by-date")]
-        public async Task<ActionResult<IEnumerable<object>>> GetRoutesByDate([FromQuery] DateTime date, [FromQuery] int? warehouseId = null)
+        public async Task<ActionResult<IEnumerable<object>>> GetRoutesByDate(
+    [FromQuery] DateTime date,
+    [FromQuery] int? warehouseId = null)
         {
-            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
-            var userRole = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
+            var userIdClaim = User.Claims
+                .FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+
+            var userRole = User.Claims
+                .FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
 
             if (!int.TryParse(userIdClaim, out int userId))
-            {
                 return Unauthorized("Invalid user ID.");
-            }
 
             int resolvedWarehouseId;
 
@@ -68,66 +71,62 @@ namespace TToApp.Controllers
                     .FirstOrDefaultAsync();
 
                 if (!managerWarehouseId.HasValue)
-                {
                     return NotFound("Manager not found or does not have an assigned warehouse.");
-                }
 
                 resolvedWarehouseId = managerWarehouseId.Value;
             }
             else
             {
                 if (!warehouseId.HasValue)
-                {
                     return BadRequest("Warehouse ID is required for non-manager users.");
-                }
 
                 resolvedWarehouseId = warehouseId.Value;
             }
 
-            // Obtener las rutas filtrando por warehouseId y fecha
+            var startDate = date.Date;
+            var endDate = startDate.AddDays(1);
+
             var routesRaw = await _context.Routes
-    .AsNoTracking()
-    .Where(r =>
-       // Sin usuario => validar por zona
-       (r.Zone != null && r.Zone.IdWarehouse == resolvedWarehouseId)
-    ||
-    // O si el usuario pertenece al almacén, que pase
-    (r.UserId != null && r.User.WarehouseId == resolvedWarehouseId)
-    )
-    // Fecha segura (evita .Date en LINQ to SQL)
-    .Where(r => r.Date >= date.Date && r.Date < date.Date.AddDays(1))
-    .Select(r => new
-    {
-        r.Id,
-        r.Date,
-        r.DeliveryStops,
-        r.Volumen,
-        r.Los,
-        r.CustomerOnTime,
-        r.BranchOnTime,
-        r.CNL,
-        r.Attempts,
-        r.routeStatus,
-        r.PaymentType,
-        r.PriceRoute,
-        User = r.User == null ? null : new
-        {
-            r.User.Id,
-            r.User.IdentificationNumber,
-            r.User.Name,
-            r.User.LastName,
-            r.User.Email
-        },
-        Zone = r.Zone == null ? null : new
-        {
-            r.Zone.Id,
-            r.Zone.ZoneCode
-        }
-    })
-    .ToListAsync();
+                .AsNoTracking()
+                .Where(r =>
+                    r.WarehouseId == resolvedWarehouseId ||
+                    (r.Zone != null && r.Zone.IdWarehouse == resolvedWarehouseId) ||
+                    (r.UserId != null && r.User.WarehouseId == resolvedWarehouseId)
+                )
+                .Where(r => r.Date >= startDate && r.Date < endDate)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.Date,
+                    r.DeliveryStops,
+                    r.Volumen,
+                    r.Los,
+                    r.CustomerOnTime,
+                    r.BranchOnTime,
+                    r.CNL,
+                    r.Attempts,
+                    r.routeStatus,
+                    r.PaymentType,
+                    r.PriceRoute,
+                    r.WarehouseId,
 
+                    User = r.User == null ? null : new
+                    {
+                        r.User.Id,
+                        r.User.IdentificationNumber,
+                        r.User.Name,
+                        r.User.LastName,
+                        r.User.Email
+                    },
 
-            // Transformación fuera del LINQ (en memoria)
+                    Zone = r.Zone == null ? null : new
+                    {
+                        r.Zone.Id,
+                        r.Zone.ZoneCode
+                    }
+                })
+                .ToListAsync();
+
             var routes = routesRaw.Select(r => new
             {
                 r.Id,
@@ -139,11 +138,19 @@ namespace TToApp.Controllers
                 r.BranchOnTime,
                 r.CNL,
                 r.Attempts,
-                routeStatus = r.routeStatus != null ? GetReadableStatus(r.routeStatus.Value) : "no status",
+                routeStatus = r.routeStatus != null
+                    ? GetReadableStatus(r.routeStatus.Value)
+                    : "no status",
                 r.PaymentType,
                 r.PriceRoute,
+                r.WarehouseId,
                 r.User,
-                r.Zone
+                r.Zone,
+
+                hasDriver = r.User != null,
+                driverLabel = r.User == null
+                    ? "Driver not found"
+                    : $"{r.User.Name} {r.User.LastName}"
             });
 
             return Ok(routes);
@@ -478,6 +485,7 @@ namespace TToApp.Controllers
         {
             if (file == null || file.Length == 0 || Path.GetExtension(file.FileName).ToLower() != ".xml")
                 return BadRequest(new { message = "Debe subir un archivo XML válido con extensión .xml." });
+
             try
             {
                 using var stream = new MemoryStream();
@@ -487,21 +495,21 @@ namespace TToApp.Controllers
                 XDocument xmlDoc = XDocument.Load(stream);
                 XNamespace ns = xmlDoc.Root?.GetDefaultNamespace() ?? "";
 
-                // 🔍 Obtener la fecha del reporte
                 var reportDateAttr = xmlDoc.Root?.Attribute("SummaryHeader_TextBox")?.Value;
                 if (string.IsNullOrEmpty(reportDateAttr))
                     return BadRequest(new { message = "No se encontró la fecha del reporte en el XML." });
 
                 var reportDateStr = reportDateAttr.Replace("Report Date: ", "").Trim();
+
                 if (!DateTime.TryParse(reportDateStr, out DateTime reportDate))
                     return BadRequest(new { message = $"La fecha del reporte no es válida: '{reportDateStr}'." });
 
                 var details = xmlDoc.Descendants(ns + "Detail");
 
                 var losBeforeCutoffDetails = xmlDoc
-                     .Descendants(ns + "LOSBeforeCutoff_Tablix")
-                     .Descendants(ns + "Details4")
-                     .ToList();
+                    .Descendants(ns + "LOSBeforeCutoff_Tablix")
+                    .Descendants(ns + "Details4")
+                    .ToList();
 
                 var Cnls = xmlDoc
                     .Descendants(ns + "CNL_Tablix")
@@ -512,16 +520,15 @@ namespace TToApp.Controllers
                     .Descendants(ns + "IncompleteDay2_Tablix")
                     .Descendants(ns + "Details3")
                     .ToList();
-               
 
-                // 🔍 Obtener `Branch On Time` del XML
+                // RSP metrics desde XML
                 var branchOnTimeForRSPElement = xmlDoc.Descendants(ns + "PerformanceIndex2")
                     .FirstOrDefault(p => (string)p.Attribute("PerformanceIndex2") == "Branch On Time %")
                     ?.Element(ns + "Textbox218")?.Attribute("Textbox232")?.Value;
 
                 var LosForRSPElement = xmlDoc.Descendants(ns + "PerformanceIndex2")
-                   .FirstOrDefault(p => (string)p.Attribute("PerformanceIndex2") == "Los %")
-                   ?.Element(ns + "Textbox218")?.Attribute("Textbox232")?.Value;
+                    .FirstOrDefault(p => (string)p.Attribute("PerformanceIndex2") == "Los %")
+                    ?.Element(ns + "Textbox218")?.Attribute("Textbox232")?.Value;
 
                 double branchOnTimeForRSP = !string.IsNullOrEmpty(branchOnTimeForRSPElement)
                     ? SafeParseDouble(branchOnTimeForRSPElement) * 100
@@ -531,13 +538,8 @@ namespace TToApp.Controllers
                     ? SafeParseDouble(LosForRSPElement) * 100
                     : 0;
 
-                /*     Console.WriteLine($"📌 Branch On Time obtenido del XML: {branchOnTimeForRSP}");
-                     Console.WriteLine($"📌 Branch On Time obtenido del XML: {LosForRSP}");
-                */
+                var notifiedPackages = new List<(string Tracking, string Status, int DaysElapsed)>();
 
-                var notifiedPackages = new List<(string Tracking,string Status ,int DaysElapsed)>();
-
-                // 🔍 Obtener los `IdentificationNumber` únicos desde el XML
                 var spValues = details
                     .Select(d => d.Attribute("SP__")?.Value?.Trim())
                     .Where(sp => !string.IsNullOrEmpty(sp))
@@ -547,102 +549,149 @@ namespace TToApp.Controllers
                 if (!spValues.Any())
                     return BadRequest(new { message = "No se encontraron IdentificationNumber en el XML." });
 
-                // 🔍 Obtener los conductores de la base de datos basados en `IdentificationNumber` y `WarehouseId` recibido
-                
                 var users = await _context.Users
                     .Where(u => spValues.Contains(u.IdentificationNumber) && u.WarehouseId == warehouseId)
                     .ToListAsync();
 
                 var notFoundInUsers = spValues
-                 .Except(users.Select(u => u.IdentificationNumber))
-                 .ToList();
+                    .Except(users.Select(u => u.IdentificationNumber))
+                    .ToList();
 
                 var rsp = await _context.Users
-                    .Where(u => u.UserRole ==  global::User.Role.Rsp && u.WarehouseId == warehouseId)
-                    .FirstOrDefaultAsync();
+                    .FirstOrDefaultAsync(u =>
+                        u.UserRole == global::User.Role.Rsp &&
+                        u.WarehouseId == warehouseId);
 
-                // 🔍 Crear diccionario `(IdentificationNumber, WarehouseId) -> UserId`
+                if (rsp == null)
+                {
+                    return BadRequest(new { message = "No se encontró RSP para este Warehouse." });
+                }
+
+                var manager = await _context.Users
+                    .FirstOrDefaultAsync(u =>
+                        u.WarehouseId == warehouseId &&
+                        u.UserRole == global::User.Role.Manager);
+
                 var userIds = users
                     .GroupBy(u => new { u.IdentificationNumber, u.WarehouseId })
                     .ToDictionary(g => (g.Key.IdentificationNumber, g.Key.WarehouseId), g => g.First().Id);
 
-                if (!userIds.Any())
-                    return BadRequest(new { message = "No se encontraron coincidencias en la base de datos para los conductores del XML en este Warehouse." });
-
-                // 🔍 Obtener el `UserId` del RSP del `WarehouseId`
-                var rspUsers = users
-                    .Where(u => u.UserRole == global::User.Role.Rsp)
-                    .ToDictionary(u => u.WarehouseId, u => u.Id);
-
-                var manager = await _context.Users
-                    .FirstOrDefaultAsync(u => u.WarehouseId == warehouseId && u.UserRole == global::User.Role.Manager);
-
-
-                // 🔍 Obtener los UserId que ya tienen rutas en la fecha
+              
+                // IMPORTANTE: filtrar por warehouse
                 var existingRoutes = await _context.Routes
-                    .Where(r => r.Date.Date == reportDate.Date)
+                    .Where(r => r.Date.Date == reportDate.Date && r.WarehouseId == warehouseId)
                     .Select(r => r.UserId)
                     .ToHashSetAsync();
 
                 var routesToSave = new List<Routes>();
                 var Packages = new List<Packages>();
 
-                // 🔄 Procesar cada detalle y agregar rutas a la lista
                 foreach (var detail in details)
+{
+    string spValue = detail.Attribute("SP__")?.Value?.Trim() ?? "0";
+
+    int volumen = SafeParseInt(detail.Attribute("Volume3")?.Value);
+    int attempts = SafeParseInt(detail.Attribute("Incomplete_D5")?.Value);
+
+    int? userId = null;
+
+    if (userIds.TryGetValue((spValue, warehouseId), out int foundUserId))
+    {
+        userId = foundUserId;
+
+        if (existingRoutes.Contains(foundUserId))
+            continue;
+    }
+
+    double los = volumen > 0
+        ? SafeParseDouble(detail.Attribute("LOS3")?.Value) * 100
+        : 0;
+
+    int cnlValue = SafeParseInt(detail.Attribute("CNL3")?.Value);
+
+    int customerOnTimeNumerator = volumen > 0
+        ? SafeParseInt(detail.Attribute("Customer_On_Time_Numerator")?.Value)
+        : 0;
+
+    int customerOnTimeDenominator = volumen > 0
+        ? SafeParseInt(detail.Attribute("Customer_On_Time_Denominator")?.Value)
+        : 1;
+
+    double customerOnTime = customerOnTimeDenominator > 0
+        ? (double)customerOnTimeNumerator / customerOnTimeDenominator * 100
+        : 0;
+
+    var route = new Routes
+    {
+        Date = reportDate,
+        DeliveryStops = volumen > 0
+            ? SafeParseInt(detail.Attribute("Delivery_Stops3")?.Value)
+            : 0,
+
+        Volumen = volumen,
+        Los = los,
+        CustomerOnTime = customerOnTime,
+
+        // Aquí está la clave:
+        // Si encontró el SP, asigna conductor.
+        // Si no lo encontró, queda null.
+        UserId = userId,
+
+        routeStatus = RouteStatus.Completed,
+        Attempts = attempts,
+        CNL = cnlValue,
+        BranchOnTime = 100,
+        WarehouseId = warehouseId
+    };
+
+    routesToSave.Add(route);
+}
+
+                // FIX: crear o actualizar ruta del RSP
+                double rspVolume = GetScorecardValue(xmlDoc, ns, "Volume");
+                double rspDeliveryStops = GetScorecardValue(xmlDoc, ns, "Delivery Stops");
+                double rspLos = GetScorecardValue(xmlDoc, ns, "Los %");
+                double rspCustomerOnTime = GetScorecardValue(xmlDoc, ns, "Customer On Time %");
+                double rspBranchOnTime = GetScorecardValue(xmlDoc, ns, "Branch On Time %");
+
+                var existingRspRoute = await _context.Routes
+                    .FirstOrDefaultAsync(r =>
+                        r.Date.Date == reportDate.Date &&
+                        r.UserId == rsp.Id &&
+                        r.WarehouseId == warehouseId);
+
+                if (existingRspRoute == null)
                 {
-                    string spValue = detail.Attribute("SP__")?.Value?.Trim() ?? "0";
-                    int volumen = SafeParseInt(detail.Attribute("Volume3")?.Value);
-                    int attempts = SafeParseInt(detail.Attribute("Incomplete_D5")?.Value);
-
-                    // ✅ Verificar si el usuario pertenece al `WarehouseId` proporcionado
-                    if (!userIds.TryGetValue((spValue, warehouseId), out int userId))
-                        continue;
-
-                    // ✅ Evitar duplicados: Si ya tiene una ruta en la fecha, no la creamos
-                    if (existingRoutes.Contains(userId))
-                        continue;
-
-                    // 🔍 Obtener valores del XML
-                    double los = volumen > 0 ? SafeParseDouble(detail.Attribute("LOS3")?.Value) * 100 : 0;
-                    int cnlValue = SafeParseInt(detail.Attribute("CNL3")?.Value);
-                    int customerOnTimeNumerator = volumen > 0 ? SafeParseInt(detail.Attribute("Customer_On_Time_Numerator")?.Value) : 0;
-                    int customerOnTimeDenominator = volumen > 0 ? SafeParseInt(detail.Attribute("Customer_On_Time_Denominator")?.Value) : 1;
-                    double customerOnTime = (customerOnTimeDenominator > 0) ? (double)customerOnTimeNumerator / customerOnTimeDenominator * 100 : 0;
-
-                    var route = new Routes
+                    routesToSave.Add(new Routes
                     {
                         Date = reportDate,
-                        DeliveryStops = volumen > 0 ? SafeParseInt(detail.Attribute("Delivery_Stops3")?.Value) : 0,
-                        Volumen = volumen,
-                        Los = los,
-                        CustomerOnTime = customerOnTime,
-                        UserId = userId,
+                        UserId = rsp.Id,
+                        WarehouseId = warehouseId,
                         routeStatus = RouteStatus.Completed,
-                        Attempts = attempts,
-                        CNL = cnlValue,
-                        BranchOnTime = 100, // Se asignará más adelante si es un RSP
-                        WarehouseId = warehouseId
-                    };
 
-                    routesToSave.Add(route);
-                    
+                    //    Volumen = (int)rspVolume,
+                    //    DeliveryStops = (int)rspDeliveryStops,
+                        Los = rspLos,
+                        CustomerOnTime = rspCustomerOnTime,
+                        
+                        BranchOnTime = rspBranchOnTime,
+
+                        Attempts = 0,
+                        CNL = 0
+                    });
                 }
-
-                // 🔍 Asignar `BranchOnTime` al RSP dentro del `WarehouseId`
-                foreach (var route in routesToSave)
+                else
                 {
-                    if (rspUsers.TryGetValue(warehouseId, out int rspUserId))
-                    {
-                        if (route.UserId == rspUserId)
-                        {
-                            route.BranchOnTime = branchOnTimeForRSP;
-                            route.Los = LosForRSP;
-                            Console.WriteLine($"✅ Asignando BranchOnTime: {branchOnTimeForRSP} al RSP con UserId: {rspUserId}");
-                        }
-                    }
+                 //   existingRspRoute.Volumen = (int)rspVolume;
+                 //   existingRspRoute.DeliveryStops = (int)rspDeliveryStops;
+                    existingRspRoute.Los = rspLos;
+                    existingRspRoute.CustomerOnTime = rspCustomerOnTime;
+                    
+                    existingRspRoute.BranchOnTime = rspBranchOnTime;
+
+                    _context.Routes.Update(existingRspRoute);
                 }
 
-                // 🔍 Guardar las rutas si hay alguna para insertar
                 if (routesToSave.Any())
                 {
                     _context.Routes.AddRange(routesToSave);
@@ -650,60 +699,40 @@ namespace TToApp.Controllers
                 }
                 else
                 {
-                    return BadRequest(new { message = "No new routes were found to insert into the database.",
-                        NotFountInUsers= notFoundInUsers
-
-                    });
+                    await _context.SaveChangesAsync();
                 }
 
-                if (losBeforeCutoffDetails.Count == 0) {
-                    Console.Write("⛔ No se encontraron RD, se omite la inserción de paquetes.");
-                }
-                else
+                if (losBeforeCutoffDetails.Count > 0)
                 {
                     foreach (var detail in losBeforeCutoffDetails)
                     {
                         string tracking = detail.Attribute("tracking4")?.Value?.Trim();
                         string address = detail.Attribute("Delivery_Address4")?.Value?.Trim();
-                        string city = detail.Attribute("Delviery_City4")?.Value?.Trim(); // typo confirmado
+                        string city = detail.Attribute("Delviery_City4")?.Value?.Trim();
                         string state = detail.Attribute("Delivery_State4")?.Value?.Trim();
                         string zip = detail.Attribute("Delivery_Zip4")?.Value?.Trim();
+
                         int rsp1 = int.TryParse(rsp.IdentificationNumber, out var result) ? result : 0;
-                        var attr = detail.Attribute("Driver4");
 
-                  /*      if (attr != null && int.TryParse(attr.Value.Trim(), out int result))
-                        {
-                            rsp = result;
-                        }
-                  */
                         if (string.IsNullOrWhiteSpace(tracking))
-                        {
-                            Console.WriteLine("⚠️ Paquete ignorado: tracking vacío");
                             continue;
-                        }
 
-                        // 🔍 Buscar si el paquete ya existe
-                        var existingPackage = await _context.Packages.FirstOrDefaultAsync(p => p.Tracking == tracking);
+                        var existingPackage = await _context.Packages
+                            .FirstOrDefaultAsync(p => p.Tracking == tracking);
 
                         if (existingPackage != null)
                         {
                             if (existingPackage.Status == PackageStatus.RD)
                             {
                                 existingPackage.DaysElapsed += 1;
-                                existingPackage.IncidentDate = reportDate; // actualiza fecha si es necesario
-                                _context.Packages.Update(existingPackage); // asegúrate de marcarlo para actualización
-                                await _context.SaveChangesAsync(); // ✅ guardarlo en la base de datos
-                                Console.WriteLine($"🔁 Paquete ya existente con estado RD. Incrementando DaysElapsed: {tracking}");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"⚠️ Paquete ya existe con estado diferente ({existingPackage.Status}), ignorado: {tracking}");
+                                existingPackage.IncidentDate = reportDate;
+                                _context.Packages.Update(existingPackage);
+                                await _context.SaveChangesAsync();
                             }
 
                             continue;
                         }
 
-                        // ✅ Insertar nuevo paquete
                         Packages.Add(new Packages
                         {
                             RSP = rsp1,
@@ -716,76 +745,132 @@ namespace TToApp.Controllers
                             Status = PackageStatus.RD,
                             DaysElapsed = 0
                         });
-
-                        Console.WriteLine($"✅ Agregado paquete nuevo: {tracking}");
                     }
-                  
                 }
-                if (Cnls.Count == 0)
-                {
-                    Console.Write("⛔ No se encontraron CNLs, se omite la inserción de paquetes.");
-                }
-                else
+
+                if (Cnls.Count > 0)
                 {
                     var identificationToUserId = users.ToDictionary(u => u.IdentificationNumber, u => u.Id);
 
-                    // Obtener rutas existentes para la fecha
                     var routeDictionary = await _context.Routes
-                        .Where(r => r.Date.Date == reportDate.Date)
+                        .Where(r => r.Date.Date == reportDate.Date && r.WarehouseId == warehouseId)
                         .ToDictionaryAsync(r => r.UserId, r => r.Id);
-
 
                     var existingTrackings = await _context.Packages
                         .Where(p => p.Status == PackageStatus.CNL)
                         .Select(p => p.Tracking)
                         .ToListAsync();
 
-                   
-                    if (Cnls != null || !Cnls.Any())
+                    foreach (var detail in Cnls)
                     {
-                        foreach (var detail in Cnls)
+                        int rsp1 = int.TryParse(rsp.IdentificationNumber, out var result) ? result : 0;
+
+                        string tracking = detail.Attribute("tracking5")?.Value?.Trim();
+                        string driverIdentification = detail.Attribute("Driver5")?.Value?.Trim();
+                        string address = detail.Attribute("Delivery_Address5")?.Value?.Trim();
+                        string city = detail.Attribute("Delviery_City5")?.Value?.Trim();
+                        string state = detail.Attribute("Delivery_State5")?.Value?.Trim();
+                        string zip = detail.Attribute("Delivery_Zip5")?.Value?.Trim();
+                        string distance = detail.Attribute("Distance")?.Value?.Trim();
+                        string scanLat = detail.Attribute("Scan_Lat")?.Value?.Trim();
+                        string scanLon = detail.Attribute("Scan_Long")?.Value?.Trim();
+                        string addrLat = detail.Attribute("Addr_Lat")?.Value?.Trim();
+                        string addrLon = detail.Attribute("Addr_Long")?.Value?.Trim();
+
+                        if (string.IsNullOrWhiteSpace(tracking) || string.IsNullOrWhiteSpace(driverIdentification))
+                            continue;
+
+                        if (!identificationToUserId.TryGetValue(driverIdentification, out int userId))
+                            continue;
+
+                        if (!routeDictionary.TryGetValue(userId, out int routeId))
+                            continue;
+
+                        if (existingTrackings.Contains(tracking))
+                            continue;
+
+                        Packages.Add(new Packages
                         {
-                            int rsp1 = int.TryParse(rsp.IdentificationNumber, out var result) ? result : 0;
-                            string tracking = detail.Attribute("tracking5")?.Value?.Trim();
-                            string driverIdentification = detail.Attribute("Driver5")?.Value?.Trim();
-                            string address = detail.Attribute("Delivery_Address5")?.Value?.Trim();
-                            string city = detail.Attribute("Delviery_City5")?.Value?.Trim();
-                            string state = detail.Attribute("Delivery_State5")?.Value?.Trim();
-                            string zip = detail.Attribute("Delivery_Zip5")?.Value?.Trim();
-                            string distance = detail.Attribute("Distance")?.Value?.Trim();
-                            string scanLat = detail.Attribute("Scan_Lat")?.Value?.Trim();
-                            string scanLon = detail.Attribute("Scan_Long")?.Value?.Trim();
-                            string addrLat = detail.Attribute("Addr_Lat")?.Value?.Trim();
-                            string addrLon = detail.Attribute("Addr_Long")?.Value?.Trim();
-                            
+                            Tracking = tracking,
+                            Address = address,
+                            City = city,
+                            State = state,
+                            ZipCode = zip,
+                            Distance = distance,
+                            ScanLat = scanLat,
+                            ScanLon = scanLon,
+                            AddrLat = addrLat,
+                            AddrLon = addrLon,
+                            IncidentDate = reportDate,
+                            Status = PackageStatus.CNL,
+                            RoutesId = routeId,
+                            DaysElapsed = 0,
+                            RSP = rsp1
+                        });
+                    }
+                }
 
-                           
-                            if (string.IsNullOrWhiteSpace(tracking) || string.IsNullOrWhiteSpace(driverIdentification))
+                if (IncompleteDay2.Count > 0)
+                {
+                    var existingTrackings = await _context.Packages
+                        .Where(p => p.Tracking != null)
+                        .Select(p => p.Tracking.Trim().ToUpper())
+                        .ToListAsync();
+
+                    foreach (var detail in IncompleteDay2)
+                    {
+                        int rsp1 = int.TryParse(rsp.IdentificationNumber, out var result) ? result : 0;
+
+                        string tracking = detail.Attribute("tracking3")?.Value?.Trim();
+                        string address = detail.Attribute("Delivery_Address3")?.Value?.Trim();
+                        string city = detail.Attribute("Delviery_City3")?.Value?.Trim();
+                        string state = detail.Attribute("Delivery_State3")?.Value?.Trim();
+                        string zip = detail.Attribute("Delivery_Zip3")?.Value?.Trim();
+                        string CurrentStatuscode1 = detail.Attribute("CurrentStatuscode1")?.Value?.Trim();
+
+                        if (string.IsNullOrWhiteSpace(tracking))
+                            continue;
+
+                        var normalizedTracking = tracking.Trim().ToUpper();
+
+                        if (existingTrackings.Contains(normalizedTracking))
+                        {
+                            if (new[] { "CO", "NH", "OD", "WA", "ED", "UG", "HW" }.Contains(CurrentStatuscode1))
                             {
-                                Console.WriteLine("⚠️ Paquete CNL ignorado por falta de datos");
-                                continue;
+                                var existingPackage = await _context.Packages
+                                    .FirstOrDefaultAsync(p => p.Tracking.Trim().ToUpper() == normalizedTracking);
+
+                                if (existingPackage != null && Enum.TryParse<PackageStatus>(CurrentStatuscode1, out var parsedStatus1))
+                                {
+                                    existingPackage.Status = parsedStatus1;
+                                    existingPackage.DaysElapsed += 1;
+                                    existingPackage.IncidentDate = reportDate;
+
+                                    if (manager != null)
+                                    {
+                                        await _notificationService.NotifyAsync(
+                                            userId: manager.Id,
+                                            title: "📦 Overdue Package Alert",
+                                            message: $"The package with tracking number {existingPackage.Tracking} has been open for more than 1 day. Please follow up.",
+                                            type: NotificationType.Success,
+                                            url: "",
+                                            source: "Tracking System"
+                                        );
+                                    }
+
+                                    notifiedPackages.Add((
+                                        existingPackage.Tracking,
+                                        existingPackage.Status.ToString(),
+                                        existingPackage.DaysElapsed
+                                    ));
+                                }
                             }
 
-                            if (!identificationToUserId.TryGetValue(driverIdentification, out int userId))
-                            {
-                                Console.WriteLine($"⚠️ No se encontró UserId para Driver5={driverIdentification}");
-                                continue;
-                            }
+                            continue;
+                        }
 
-                            if (!routeDictionary.TryGetValue(userId, out int routeId))
-                            {
-                                Console.WriteLine($"⚠️ No se encontró RouteId para UserId={userId} (Driver5={driverIdentification}) en fecha {reportDate:yyyy-MM-dd}");
-                                continue;
-                            }
-
-                            if (existingTrackings.Contains(tracking))
-                            {
-                                Console.WriteLine($"⚠️ Tracking duplicado: {tracking} ya existe");
-                                continue;
-                            }
-
-                            Console.WriteLine($"➕ Intentando agregar paquete: {tracking}, RouteId={routeId}, DriverId={driverIdentification}");
-
+                        if (Enum.TryParse<PackageStatus>(CurrentStatuscode1, out var parsedStatus))
+                        {
                             Packages.Add(new Packages
                             {
                                 Tracking = tracking,
@@ -793,98 +878,14 @@ namespace TToApp.Controllers
                                 City = city,
                                 State = state,
                                 ZipCode = zip,
-                                Distance = distance,
-                                ScanLat = scanLat,
-                                ScanLon = scanLon,
-                                AddrLat = addrLat,
-                                AddrLon = addrLon,
                                 IncidentDate = reportDate,
-                                Status = PackageStatus.CNL,
-                                RoutesId = routeId,
-                                DaysElapsed = 0,
+                                Status = parsedStatus,
+                                DaysElapsed = 1,
                                 RSP = rsp1
                             });
                         }
                     }
-
-                    // ✅ Guardar todos los nuevos de una vez
                 }
-                if (IncompleteDay2.Count == 0) {
-                    Console.Write("⛔ No se encontraron Incomplete Day 2, se omite la inserción de paquetes.");
-                }
-                else
-                {
-                    
-                    var existingTrackings = await _context.Packages
-                        .Where(p => p.Tracking != null)
-                        .Select(p => p.Tracking.Trim().ToUpper())
-                        .ToListAsync();
-
-                    if (IncompleteDay2 != null || !IncompleteDay2.Any())
-                    {
-                        foreach (var detail in IncompleteDay2)
-                        {
-                            int rsp1 = int.TryParse(rsp.IdentificationNumber, out var result) ? result : 0;
-                            string tracking = detail.Attribute("tracking3")?.Value?.Trim();
-                            string driverIdentification = detail.Attribute("Driver3")?.Value?.Trim();
-                            string address = detail.Attribute("Delivery_Address3")?.Value?.Trim();
-                            string city = detail.Attribute("Delviery_City3")?.Value?.Trim();
-                            string state = detail.Attribute("Delivery_State3")?.Value?.Trim();
-                            string zip = detail.Attribute("Delivery_Zip3")?.Value?.Trim();
-                            string CurrentStatuscode1 = detail.Attribute("CurrentStatuscode1")?.Value?.Trim();
-
-                            if (existingTrackings.Contains(tracking))
-                            {
-
-                                if (new[] { "CO", "NH", "OD", "WA", "ED", "UG","HW" }.Contains(CurrentStatuscode1))
-                                {
-                                    var existingPackage = await _context.Packages
-                                        .FirstOrDefaultAsync(p => p.Tracking.Trim().ToUpper() == tracking);
-
-                                    if (existingPackage != null && Enum.TryParse<PackageStatus>(CurrentStatuscode1, out var parsedStatus1))
-                                    {
-                                        existingPackage.Status = parsedStatus1;
-                                        existingPackage.DaysElapsed += 1;
-                                        existingPackage.IncidentDate = reportDate;
-                                    }
-                                    string title = "📦 Overdue Package Alert";
-                                    string message = $"The package with tracking number {existingPackage.Tracking} has been open for more than 1 day. Please follow up.";
-                                    await _notificationService.NotifyAsync(
-                                        userId: manager.Id,
-                                        title: title,
-                                        message: message,
-                                        type: NotificationType.Success,
-                                        url: "",
-                                        source: "Tracking System"
-                                    );
-                                    notifiedPackages.Add((existingPackage.Tracking,existingPackage.Status.ToString(),existingPackage.DaysElapsed));
-                                }
-                                Console.WriteLine($"⚠️ Tracking duplicado: {tracking} ya existe");
-                                continue;
-                            }
-                            if (Enum.TryParse<PackageStatus>(CurrentStatuscode1, out var parsedStatus))
-                            {
-                                Packages.Add(new Packages
-                                {
-                                    Tracking = tracking,
-                                    Address = address,
-                                    City = city,
-                                    State = state,
-                                    ZipCode = zip,
-                                    IncidentDate = reportDate,
-                                    Status = parsedStatus, // Usa el valor parseado del XML
-                                    DaysElapsed = 1,
-                                    RSP = rsp1
-                                });
-                            }
-
-                        }
-                        await _context.SaveChangesAsync();
-
-                    }
-
-                }
-
 
                 if (Packages.Count > 0)
                 {
@@ -892,66 +893,72 @@ namespace TToApp.Controllers
                     await _context.SaveChangesAsync();
                 }
 
-                var adminEmails = _context.Users
-                    .Where(u => u.UserRole.Value == global::User.Role.Admin && !string.IsNullOrEmpty(u.Email))
-                    .Select(u => u.Email)
-                    .ToList();
-
-                var warehouse = GetWarehouseCity(warehouseId);
-
-                // Construir tabla HTML de paquetes
-                var tableHtml = new StringBuilder();
-                tableHtml.AppendLine("<table style='width:100%; border-collapse:collapse;'>");
-                tableHtml.AppendLine("<thead><tr style='background-color:#f2f2f2;'>");
-                tableHtml.AppendLine("<th style='border:1px solid #ddd; padding:8px;'>Tracking</th>");
-                tableHtml.AppendLine("<th style='border:1px solid #ddd; padding:8px;'>Status</th>");
-                tableHtml.AppendLine("<th style='border:1px solid #ddd; padding:8px;'>Days Elapsed</th>");
-                tableHtml.AppendLine("</tr></thead>");
-                tableHtml.AppendLine("<tbody>");
-
-                foreach (var pkg in notifiedPackages)
+                if (manager != null)
                 {
-                    tableHtml.AppendLine("<tr>");
-                    tableHtml.AppendLine($"<td style='border:1px solid #ddd; padding:8px;'>{pkg.Tracking}</td>");
-                    tableHtml.AppendLine($"<td style='border:1px solid #ddd; padding:8px;'>{pkg.Status}</td>");
-                    tableHtml.AppendLine($"<td style='border:1px solid #ddd; padding:8px;'>{pkg.DaysElapsed}</td>");
-                    tableHtml.AppendLine("</tr>");
-                }
+                    var adminEmails = _context.Users
+                        .Where(u => u.UserRole.Value == global::User.Role.Admin && !string.IsNullOrEmpty(u.Email))
+                        .Select(u => u.Email)
+                        .ToList();
 
-                tableHtml.AppendLine("</tbody></table>");
+                    var warehouse = GetWarehouseCity(warehouseId);
 
-                // Preparar placeholders
-                var placeholders = new Dictionary<string, string>
-                {
-                    { "warehouse", warehouse },
-                    { "date", DateTime.Now.AddDays(-1).ToString("MMMM dd, yyyy", new System.Globalization.CultureInfo("en-US")) },
-                    { "packageList", tableHtml.ToString() }
-                };
-                await _emailService.SendEmailAsync(
+                    var tableHtml = new StringBuilder();
+                    tableHtml.AppendLine("<table style='width:100%; border-collapse:collapse;'>");
+                    tableHtml.AppendLine("<thead><tr style='background-color:#f2f2f2;'>");
+                    tableHtml.AppendLine("<th style='border:1px solid #ddd; padding:8px;'>Tracking</th>");
+                    tableHtml.AppendLine("<th style='border:1px solid #ddd; padding:8px;'>Status</th>");
+                    tableHtml.AppendLine("<th style='border:1px solid #ddd; padding:8px;'>Days Elapsed</th>");
+                    tableHtml.AppendLine("</tr></thead>");
+                    tableHtml.AppendLine("<tbody>");
+
+                    foreach (var pkg in notifiedPackages)
+                    {
+                        tableHtml.AppendLine("<tr>");
+                        tableHtml.AppendLine($"<td style='border:1px solid #ddd; padding:8px;'>{pkg.Tracking}</td>");
+                        tableHtml.AppendLine($"<td style='border:1px solid #ddd; padding:8px;'>{pkg.Status}</td>");
+                        tableHtml.AppendLine($"<td style='border:1px solid #ddd; padding:8px;'>{pkg.DaysElapsed}</td>");
+                        tableHtml.AppendLine("</tr>");
+                    }
+
+                    tableHtml.AppendLine("</tbody></table>");
+
+                    var placeholders = new Dictionary<string, string>
+            {
+                { "warehouse", warehouse },
+                { "date", reportDate.ToString("MMMM dd, yyyy", new System.Globalization.CultureInfo("en-US")) },
+                { "packageList", tableHtml.ToString() }
+            };
+
+                    await _emailService.SendEmailAsync(
                         toEmail: manager.Email,
                         subject: "Information Loaded!",
                         "ConfirmUploadXml.cshtml",
                         placeholders: placeholders,
                         copy: false
                     );
-                // Enviar a cada admin
-                foreach (var email in adminEmails)
-                {
-                    await _emailService.SendEmailAsync(
-                        toEmail: email,
-                        subject: "Information Loaded!",
-                        "ConfirmUploadXml.cshtml",
-                        placeholders: placeholders,
-                        copy: false
-                    );
+
+                    foreach (var email in adminEmails)
+                    {
+                        await _emailService.SendEmailAsync(
+                            toEmail: email,
+                            subject: "Information Loaded!",
+                            "ConfirmUploadXml.cshtml",
+                            placeholders: placeholders,
+                            copy: false
+                        );
+                    }
                 }
-
-
-
 
                 return Ok(new
                 {
-                    message = $"{routesToSave.Count} registros guardados en Routes, incluyendo el RSP.",
+                    message = $"{routesToSave.Count} registros guardados/actualizados en Routes, incluyendo el RSP.",
+                    rsp = new
+                    {
+                        rsp.Id,
+                        rsp.IdentificationNumber,
+                        BranchOnTime = branchOnTimeForRSP,
+                        Los = LosForRSP
+                    },
                     notFoundUsers = notFoundInUsers
                 });
             }
@@ -964,6 +971,28 @@ namespace TToApp.Controllers
                     innerException = ex.InnerException?.Message
                 });
             }
+        }
+        private double GetScorecardValue(XDocument xmlDoc, XNamespace ns, string metricName)
+        {
+            var value = xmlDoc.Descendants(ns + "PerformanceIndex2")
+                .FirstOrDefault(p =>
+                    string.Equals(
+                        (string)p.Attribute("PerformanceIndex2"),
+                        metricName,
+                        StringComparison.OrdinalIgnoreCase))
+                ?.Element(ns + "Textbox218")
+                ?.Attribute("Textbox232")
+                ?.Value;
+
+            if (string.IsNullOrWhiteSpace(value))
+                return 0;
+
+            var result = SafeParseDouble(value);
+
+            if (metricName.Contains("%") && result <= 1)
+                result *= 100;
+
+            return Math.Round(result, 2);
         }
 
         [HttpGet("routes-by-date-and-warehouse")]

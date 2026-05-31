@@ -54,7 +54,8 @@ namespace TToApp.Model
     {
         PerRoute,
         PerStop,
-        Mixed
+        Mixed,
+        PerBlock
     }
     public enum RouteStatus
     {

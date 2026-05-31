@@ -1261,131 +1261,140 @@ public class UserController : ControllerBase
     [HttpPut("update/{id:int}")]
     public async Task<IActionResult> UpdateUser([FromRoute] int id, [FromBody] UpdateUserDto dto)
     {
-        if (dto == null) return BadRequest(new { Message = "Body is required" });
+        if (dto == null)
+            return BadRequest(new { Message = "Body is required" });
+
         if (dto.Id.HasValue && dto.Id.Value != id)
             return BadRequest(new { Message = "Route id and body id mismatch" });
 
         var user = await _authContext.Users
             .Include(u => u.Profile)
             .FirstOrDefaultAsync(u => u.Id == id);
-        if (user == null) return NotFound(new { Message = "User not found" });
+
+        if (user == null)
+            return NotFound(new { Message = "User not found" });
 
         bool wasInactive = !user.IsActive && (dto.IsActive ?? user.IsActive);
 
-        // Solo aplicar si vino valor (null => no tocar)
         if (dto.Name != null) user.Name = dto.Name;
         if (dto.LastName != null) user.LastName = dto.LastName;
         if (dto.Email != null) user.Email = dto.Email;
         if (dto.IsActive.HasValue) user.IsActive = dto.IsActive.Value;
         if (dto.IsFirstLogin.HasValue) user.IsFirstLogin = dto.IsFirstLogin.Value;
         if (dto.WasContacted.HasValue) user.WasContacted = dto.WasContacted.Value;
-        if (dto.WarehouseId.HasValue) user.WarehouseId = dto.WarehouseId;
-        if (dto.UserRole.HasValue) user.UserRole = dto.UserRole;
+        if (dto.WarehouseId.HasValue) user.WarehouseId = dto.WarehouseId.Value;
+        if (dto.UserRole.HasValue) user.UserRole = dto.UserRole.Value;
         if (dto.IdentificationNumber != null) user.IdentificationNumber = dto.IdentificationNumber;
-        if (!string.IsNullOrWhiteSpace(dto.Password)) user.Password = dto.Password;
-        if(dto.Stage.HasValue) user.Stage = dto.Stage.Value;
-        if (dto.InitialDate != null) {
+        if (dto.Stage.HasValue) user.Stage = dto.Stage.Value;
+
+        if (!string.IsNullOrWhiteSpace(dto.Password))
+        {
+            user.Password = dto.Password; // Ideal: guardar con hash
+        }
+
+        if (dto.InitialDate.HasValue && user.InitialDate != dto.InitialDate.Value)
+        {
             user.ConfirmationToken = Guid.NewGuid().ToString("N");
-            user.ConfirmationDate = null; // por si acaso
-            var confirmUrl = $"https://ttologistics.online/api/Users/confirm-attendance?token={Uri.EscapeDataString(user.ConfirmationToken)}";
-            user.InitialDate = dto.InitialDate;
-           
+            user.ConfirmationDate = null;
+            user.InitialDate = dto.InitialDate.Value;
+
+            var confirmUrl =
+                $"https://ttologistics.online/api/Users/confirm-attendance?token={Uri.EscapeDataString(user.ConfirmationToken)}";
+
             var manager = await _authContext.Users
                 .AsNoTracking()
+                .Include(x => x.Profile)
                 .FirstOrDefaultAsync(x =>
                     x.WarehouseId == user.WarehouseId &&
-                    x.UserRole == global::User.Role.Manager); // evita números mágicos
+                    x.UserRole == global::User.Role.Manager);
 
             var warehouse = await _authContext.Warehouses
-                .FirstOrDefaultAsync(w => w.Id == manager.WarehouseId);
+                .AsNoTracking()
+                .FirstOrDefaultAsync(w => w.Id == user.WarehouseId);
 
-            await _emailService.SendEmailAsync(
-                toEmail: user.Email,
-                subject: "Start Date Confirmation!",
-                "StartDateConfimation.cshtml",
-                placeholders: new()
-                {
-                    ["Name"] = user?.Name ?? "",
-                    ["LastName"] = user?.LastName ?? "",
-                    ["Position"] = "Driver",
-                    ["StartDate"] = dto.InitialDate?.ToDateTime(TimeOnly.MinValue).ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture) ?? "",
-                    ["StartTime"] = $"{warehouse?.OpenTime}",
-                    ["StartWeekday"] = dto.InitialDate?.ToDateTime(TimeOnly.MinValue).ToString("dddd", System.Globalization.CultureInfo.InvariantCulture) ?? "",
-                    ["WarehouseName"] = warehouse?.Company + "(" + warehouse?.City + ")" ?? "",
-                    ["WarehouseAddress"] = $"{warehouse?.Address} {warehouse?.City} {warehouse?.State}".Trim(),
-                    ["ManagerName"] = $"{manager?.Name} {manager?.LastName}".Trim(),
-                    ["ManagerPhone"] = manager?.Profile?.PhoneNumber ?? "",
-                    ["ManagerEmail"] = manager?.Email ?? "",
-                    ["ConfirmUrl"] = confirmUrl
-
-                },
-                copy: false
+            if (manager != null && warehouse != null)
+            {
+                await _emailService.SendEmailAsync(
+                    toEmail: user.Email,
+                    subject: "Start Date Confirmation!",
+                    "StartDateConfimation.cshtml",
+                    placeholders: new()
+                    {
+                        ["Name"] = user.Name ?? "",
+                        ["LastName"] = user.LastName ?? "",
+                        ["Position"] = "Driver",
+                        ["StartDate"] = dto.InitialDate.Value.ToDateTime(TimeOnly.MinValue)
+                            .ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture),
+                        ["StartTime"] = $"{warehouse.OpenTime}",
+                        ["StartWeekday"] = dto.InitialDate.Value.ToDateTime(TimeOnly.MinValue)
+                            .ToString("dddd", System.Globalization.CultureInfo.InvariantCulture),
+                        ["WarehouseName"] = $"{warehouse.Company} ({warehouse.City})",
+                        ["WarehouseAddress"] = $"{warehouse.Address} {warehouse.City} {warehouse.State}".Trim(),
+                        ["ManagerName"] = $"{manager.Name} {manager.LastName}".Trim(),
+                        ["ManagerPhone"] = manager.Profile?.PhoneNumber ?? "",
+                        ["ManagerEmail"] = manager.Email ?? "",
+                        ["ConfirmUrl"] = confirmUrl
+                    },
+                    copy: false
                 );
-            await _emailService.SendEmailAsync(
-               toEmail: manager.Email,
-               subject: "Start Date Confirmation!",
-               "HireStartReminder.cshtml",
-               placeholders: new()
-               {
-                   ["ManagerName"] = $"{manager?.Name} {manager?.LastName}".Trim(),
-                   ["WarehouseName"] = warehouse?.Company + "(" + warehouse?.City + ")" ?? "",
-                   ["Name"] = user?.Name ?? "",
-                   ["LastName"] = user?.LastName ?? "",
-                   ["Position"] = "Driver",
-                   ["ApplicantPhone"] = user?.Profile?.PhoneNumber ?? "",
-                   ["ApplicantEmail"] = user?.Email ?? "",
-                   ["StartTime"] = $"{warehouse?.OpenTime}",
-                   ["StartDate"] = dto.InitialDate?.ToDateTime(TimeOnly.MinValue).ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture) ?? "",
-                   ["StartWeekday"] = dto.InitialDate?.ToDateTime(TimeOnly.MinValue).ToString("dddd", System.Globalization.CultureInfo.InvariantCulture) ?? "",
-                   
 
-               },
-               copy: true
-               );
-
-        }
-       
-        if (wasInactive && user.IsActive)
-        {
-            var companyName = await _authContext.Companies
-           .Where(c => c.Id == user.CompanyId)
-           .Select(c => c.Name)
-           .FirstOrDefaultAsync();
-
-            user.UpdatedAt = DateTime.UtcNow;
-            var token = Guid.NewGuid().ToString("N");
-
-            user.PasswordResetToken = token;
-            user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddHours(24);
-            user.IsActive = true;
-            user.UpdatedAt = DateTime.UtcNow;
-
-            await _authContext.SaveChangesAsync();
-            var resetLink = $"http://localhost:4200/authentication/set-password?token={token}";
-            var okAccessEmail = await _emailService.SendEmailAsync(
-            toEmail: user.Email,
-            subject: "Account Activated!!",
-            "AccountActivated.cshtml",
-            placeholders: new Dictionary<string, string>
-            {
-                { "Name", user.Name ?? "" },
-                { "LastName", user.LastName ?? "" },
-                { "Email", user.Email ?? "" },
-                { "ResetLink", resetLink },
-                { "CompanyName", companyName ?? "TTO Hub" }
-            },
-            copy: true
-);
-
-            if (!okAccessEmail)
-            {
-                return BadRequest(new { Message = "Access email was not sent." });
+                await _emailService.SendEmailAsync(
+                    toEmail: manager.Email,
+                    subject: "Start Date Confirmation!",
+                    "HireStartReminder.cshtml",
+                    placeholders: new()
+                    {
+                        ["ManagerName"] = $"{manager.Name} {manager.LastName}".Trim(),
+                        ["WarehouseName"] = $"{warehouse.Company} ({warehouse.City})",
+                        ["Name"] = user.Name ?? "",
+                        ["LastName"] = user.LastName ?? "",
+                        ["Position"] = "Driver",
+                        ["ApplicantPhone"] = user.Profile?.PhoneNumber ?? "",
+                        ["ApplicantEmail"] = user.Email ?? "",
+                        ["StartTime"] = $"{warehouse.OpenTime}",
+                        ["StartDate"] = dto.InitialDate.Value.ToDateTime(TimeOnly.MinValue)
+                            .ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture),
+                        ["StartWeekday"] = dto.InitialDate.Value.ToDateTime(TimeOnly.MinValue)
+                            .ToString("dddd", System.Globalization.CultureInfo.InvariantCulture)
+                    },
+                    copy: true
+                );
             }
         }
 
+        if (wasInactive && user.IsActive)
+        {
+          
+            var okAccessEmail = await SendAccountActivatedEmail(user, "Account Activated!!");
+
+            if (!okAccessEmail)
+                return BadRequest(new { Message = "Access email was not sent." });
+        }
+
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _authContext.SaveChangesAsync();
+
         return Ok(new { Message = "User updated successfully!" });
     }
-    
+    [Authorize]
+    [HttpPost("resend-password-setup/{id:int}")]
+    public async Task<IActionResult> ResendPasswordSetup([FromRoute] int id)
+    {
+        var user = await _authContext.Users
+      .FirstOrDefaultAsync(x => x.Id == id);
+
+        if (user == null)
+            return NotFound(new { Message = "User not found" });
+
+        var ok = await SendAccountActivatedEmail(user, "Setup Your Password");
+
+        if (!ok)
+            return BadRequest(new { Message = "Email could not be sent." });
+
+        return Ok(new { Message = "Password setup email resent successfully" });
+    }
+
     [AllowAnonymous]
     [HttpPost("set-password")]
     public async Task<IActionResult> SetPassword([FromBody] SetPasswordDto dto)
@@ -2699,6 +2708,44 @@ public class UserController : ControllerBase
             updated = applicants.Count
         });
     }
+
+    private async Task<bool> SendAccountActivatedEmail(User user, string subject)
+    {
+        if (string.IsNullOrWhiteSpace(user.Email))
+            return false;
+
+        var companyName = await _authContext.Companies
+            .Where(c => c.Id == user.CompanyId)
+            .Select(c => c.Name)
+            .FirstOrDefaultAsync();
+
+        var token = Guid.NewGuid().ToString("N");
+
+        user.PasswordResetToken = token;
+        user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddHours(24);
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _authContext.SaveChangesAsync();
+
+        var resetLink =
+            $"https://admin.ttologistics.com/authentication/set-password?token={Uri.EscapeDataString(token)}";
+
+        return await _emailService.SendEmailAsync(
+            toEmail: user.Email,
+            subject: subject,
+            "AccountActivated.cshtml",
+            placeholders: new Dictionary<string, string>
+            {
+                ["Name"] = user.Name ?? "",
+                ["LastName"] = user.LastName ?? "",
+                ["Email"] = user.Email ?? "",
+                ["ResetLink"] = resetLink,
+                ["CompanyName"] = companyName ?? "TTO Hub"
+            },
+            copy: false
+        );
+    }
+
 }
 
 public class BulkUpdateWarehouseDto

@@ -4,13 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace TToApp.Model
 {
-    public enum PaymentType
-    {
-        PerRoute,
-        PerStop,
-        Mixed,
-        PerBlock
-    }
+  
 
     public class ZonePayRule
     {

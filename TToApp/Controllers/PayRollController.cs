@@ -359,7 +359,7 @@ namespace TToApp.Controllers
                 join u in _db.Users.AsNoTracking()
                     on uid equals u.Id
                 where u.UserRole.HasValue
-                && u.UserRole.Value != global::User.Role.Applicant
+                && u.UserRole.Value != global::User.Role.Applicant && u.UserRole.Value != global::User.Role.Rsp
                 select (long)u.Id
             )
             .Distinct()
@@ -373,6 +373,7 @@ namespace TToApp.Controllers
                     u.UserRole.HasValue &&
                     u.UserRole.Value != global::User.Role.Applicant &&
                     u.UserRole.Value != global::User.Role.Driver &&
+                    u.UserRole.Value != global::User.Role.Rsp &&
                     u.WarehouseId.HasValue &&
                     warehouseIdsFiltered.Contains(u.WarehouseId.Value)
                 )

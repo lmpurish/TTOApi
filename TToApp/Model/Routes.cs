@@ -50,12 +50,6 @@ namespace TToApp.Model
         public Warehouse? Warehouse { get; set; }
     }
 
-    public enum PaymentType
-    {
-        PerRoute,
-        PerStop,
-        Mixed
-    }
     public enum RouteStatus
     {
         Pending,    // La ruta está pendiente de asignación.

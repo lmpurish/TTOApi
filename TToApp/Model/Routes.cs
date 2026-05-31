@@ -51,13 +51,7 @@ namespace TToApp.Model
     }
 
 
-    public enum PaymentType
-    {
-        PerRoute,
-        PerStop,
-        Mixed,
-        PerBlock
-    }
+    
 
     public enum RouteStatus
     {

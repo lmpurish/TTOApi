@@ -49,6 +49,7 @@ namespace TToApp.Model
         public DbSet<EarlyWarningConfig> EarlyWarningConfigs { get; set; }
         public DbSet<CommunicationRecipientRule> CommunicationRecipientRules { get; set; }
         public DbSet<Incidence> Incidences { get; set; }
+        public DbSet<ZonePayRule> ZonePayRules { get; set; } = null!;
 
 
 
@@ -399,6 +400,15 @@ namespace TToApp.Model
 
             modelBuilder.Entity<Incidence>()
                 .HasIndex(i => i.RouteId);
+
+            modelBuilder.Entity<ZonePayRule>()
+                .HasOne(z => z.Zone)
+                .WithMany()
+                .HasForeignKey(z => z.ZoneId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<ZonePayRule>()
+                .HasIndex(z => new { z.ZoneId, z.PaymentType, z.IsActive, z.EffectiveFrom });
 
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

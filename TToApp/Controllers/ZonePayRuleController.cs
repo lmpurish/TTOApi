@@ -7,7 +7,7 @@ namespace TToApp.Controllers
 {
     [Route("api/zone-pay-rules")]
     [ApiController]
-    //[Authorize]
+    [Authorize]
     public class ZonePayRuleController : ControllerBase
     {
         private readonly ApplicationDbContext _db;

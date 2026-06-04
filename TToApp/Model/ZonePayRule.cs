@@ -43,7 +43,6 @@ namespace TToApp.Model
     {
         PerRoute,
         PerStop,
-        Mixed,
         PerBlock
     }
 }

@@ -49,10 +49,10 @@ namespace TToApp.Services.CommunicationRecipient
                         roles.Contains(u.UserRole.Value) &&
                         !string.IsNullOrWhiteSpace(u.Email) &&
                         (
+                            warehouseList == null ||
                             u.UserRole == User.Role.Admin ||
                             u.UserRole == User.Role.CompanyOwner ||
-                            warehouseList == null ||
-                            (u.WarehouseId.HasValue && warehouseList.Contains(u.WarehouseId.Value))
+                            u.WarehouseId.HasValue && warehouseList.Contains(u.WarehouseId.Value)
                         ))
                     .ToListAsync()
                 : new List<User>();
@@ -70,13 +70,18 @@ namespace TToApp.Services.CommunicationRecipient
                 if (permitUserIds.Any())
                     permitUsers = await _db.Users
                         .AsNoTracking()
-                        .Where(u => u.IsActive && u.CompanyId == companyId &&
-                            !string.IsNullOrWhiteSpace(u.Email) && permitUserIds.Contains(u.Id))
+                        .Where(u =>
+                            u.IsActive &&
+                            u.CompanyId == companyId &&
+                            !string.IsNullOrWhiteSpace(u.Email) &&
+                            permitUserIds.Contains(u.Id))
                         .ToListAsync();
             }
 
+            // (Fix 4) Guardar contra emails nulos antes del GroupBy
             return roleUsers
                 .Union(permitUsers)
+                .Where(u => !string.IsNullOrWhiteSpace(u.Email))
                 .GroupBy(u => u.Email!.Trim().ToLower())
                 .Select(g => g.First())
                 .ToList();

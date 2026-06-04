@@ -520,7 +520,7 @@ namespace TToApp.Services.Payroll
                                 var stopRate   = activeZoneRule?.BaseAmount ?? effectivePerStop;
                                 var extraRate  = activeZoneRule.UseDriverRateForExtra
                                             ? effectivePerStop
-                                            : Math.Max(effectivePerStop, activeZoneRule?.ExtraAmount ?? 0m);
+                                            : activeZoneRule?.ExtraAmount ?? 0m;
                                 var diff       = Math.Max(0m, (decimal)route.Volumen - delivered);
                                 var ruleTag    = activeZoneRule != null ? $":ZONE_RULE:{activeZoneRule.Id}" : $":DRIVER_RATE:{driverRate?.Id}";
 

@@ -57,7 +57,7 @@ namespace TToApp.Services.Payroll
             var rates = await _db.DriverRates
                 .Where(r =>
                     r.DriverId == driverId &&
-                    r.EffectiveFrom <= weekEnd &&
+                   // r.EffectiveFrom <= weekEnd &&
                     (r.EffectiveTo == null || r.EffectiveTo >= weekStart))
                 .OrderByDescending(r => r.WarehouseId != null) // específicos primero
                 .ThenByDescending(r => r.EffectiveFrom)

@@ -6,5 +6,7 @@ namespace TToApp.Constants
     public const string MissingDailyPackages = "MissingDailyPackages";
     public const string CompletedProfile = "CompletedProfile";
     public const string AttendanceConfirmed = "AttendanceConfirmed";
+    public const string PakagesInformationLoaded = "PakagesInformationLoaded";
+    
     }
 }

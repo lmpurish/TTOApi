@@ -43,6 +43,7 @@ namespace TToApp.Model
     {
         PerRoute,
         PerStop,
-        PerBlock
+        PerBlock,
+        PerStopPlusAdditionalPackage   // BaseAmount × stops + ExtraAmount × max(0, Volumen - stops)
     }
 }

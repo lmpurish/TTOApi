@@ -386,39 +386,9 @@ namespace TToApp.Services.Payroll
                 decimal routeSubtotal = 0m;
                 var qtyExtraWeigth = 0m;
 
-                if (delivered > 0)
-                {
-                    if (weightRules.Count > 0 && weightsByRoute.TryGetValue(route.Id, out var weightsForRoute))
-                    {
-                        var extraByRule = ComputeWeightExtras(weightsForRoute, weightRules);
-
-                        foreach (var item in extraByRule)
-                        {
-                            // item: (rule, count, amountTotal)
-                            var rule = item.Rule;
-                            var qty = item.Count;
-                            var rateExtra = Math.Max((rule.ExtraAmount + (driverRate?.ExtraAmount ?? 0m)) + driverPerStop, zonePerStop);
-                            qtyExtraWeigth += qty;
-
-                            // Línea por regla (agregado) => qty * rateExtra = total
-                            routeSubtotal += AddLine(
-                                payRun,
-                                "Earning",
-                                route.Id.ToString(),
-                                $"{route.Date:MMM dd, yyyy} - More than 1lb",
-                                qty,
-                                rateExtra ,
-                                "WEIGHT_EXTRA",
-                                route.Date,
-                                route.Zone?.Id, route.Zone?.Area
-                            );
-                        }
-                    }
-                }
+                var effectivePaymentType = activeZoneRule?.PaymentType ?? route.PaymentType;
                  
                 // ✅ PAYMENT TYPE — se prioriza el ZonePayRule activo de la zona
-
-                var effectivePaymentType = activeZoneRule?.PaymentType ?? route.PaymentType;
 
                 switch (effectivePaymentType)
                 {
@@ -448,6 +418,32 @@ namespace TToApp.Services.Payroll
                         {
                             if (delivered > 0)
                             {
+                                if (weightRules.Count > 0 && weightsByRoute.TryGetValue(route.Id, out var weightsForRoute))
+                                {
+                                    var extraByRule = ComputeWeightExtras(weightsForRoute, weightRules);
+
+                                    foreach (var item in extraByRule)
+                                    {
+                                        // item: (rule, count, amountTotal)
+                                        var rule = item.Rule;
+                                        var qty = item.Count;
+                                        var rateExtra = Math.Max((rule.ExtraAmount + (driverRate?.ExtraAmount ?? 0m)) + driverPerStop, zonePerStop);
+                                        qtyExtraWeigth += qty;
+
+                                        // Línea por regla (agregado) => qty * rateExtra = total
+                                        routeSubtotal += AddLine(
+                                            payRun,
+                                            "Earning",
+                                            route.Id.ToString(),
+                                            $"{route.Date:MMM dd, yyyy} - More than 1lb",
+                                            qty,
+                                            rateExtra ,
+                                            "WEIGHT_EXTRA",
+                                            route.Date,
+                                            route.Zone?.Id, route.Zone?.Area
+                                        );
+                                    }
+                                }
 
                                 routeSubtotal += AddLine(
                                 payRun,
@@ -488,7 +484,7 @@ namespace TToApp.Services.Payroll
                                     {
                                         var extraRate = activeZoneRule.UseDriverRateForExtra
                                             ? effectivePerStop
-                                            : (activeZoneRule.ExtraAmount ?? effectivePerStop);
+                                            : Math.Max(effectivePerStop, activeZoneRule?.ExtraAmount ?? 0m);
                                         var extraTag = activeZoneRule.UseDriverRateForExtra ? "ZONE_BLOCK_EXTRA_DRIVER" : "ZONE_BLOCK_EXTRA";
 
                                         routeSubtotal += AddLine(
@@ -512,6 +508,39 @@ namespace TToApp.Services.Payroll
                             {
                                 AddLine(payRun, "Stop", route.Id.ToString(),
                                     "Delivered Stops 0 (PerBlock)", 0m, effectivePerStop, "INFO_ZERO_DELIVERED",
+                                    route.Date, route.Zone?.Id, route.Zone?.Area);
+                            }
+                            break;
+                        }
+
+                    case PaymentType.PerStopPlusAdditionalPackage:
+                        {
+                            if (delivered > 0)
+                            {
+                                var stopRate   = activeZoneRule?.BaseAmount ?? effectivePerStop;
+                                var extraRate  = activeZoneRule.UseDriverRateForExtra
+                                            ? effectivePerStop
+                                            : Math.Max(effectivePerStop, activeZoneRule?.ExtraAmount ?? 0m);
+                                var diff       = Math.Max(0m, (decimal)route.Volumen - delivered);
+                                var ruleTag    = activeZoneRule != null ? $":ZONE_RULE:{activeZoneRule.Id}" : $":DRIVER_RATE:{driverRate?.Id}";
+
+                                routeSubtotal += AddLine(
+                                    payRun, "Earning", route.Id.ToString(),
+                                    $"{route.Date:MMM dd, yyyy} - PerStop ({delivered} stops)",
+                                    delivered, stopRate, $"PAY_PER_STOP_{ruleTag}",
+                                    route.Date, route.Zone?.Id, route.Zone?.Area);
+
+                                if (diff > 0)
+                                    routeSubtotal += AddLine(
+                                        payRun, "Earning", route.Id.ToString(),
+                                        $"{route.Date:MMM dd, yyyy} - Pkg diff ({diff} extra pkgs)",
+                                        diff, extraRate, $"PAY_PKG_DIFF{ruleTag}",
+                                        route.Date, route.Zone?.Id, route.Zone?.Area);
+                            }
+                            else
+                            {
+                                AddLine(payRun, "Stop", route.Id.ToString(),
+                                    "Delivered Stops 0 (PerStopPlusAdditionalPackage)", 0m, 0m, "INFO_ZERO_DELIVERED",
                                     route.Date, route.Zone?.Id, route.Zone?.Area);
                             }
                             break;

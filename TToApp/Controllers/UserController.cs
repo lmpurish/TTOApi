@@ -30,11 +30,11 @@ public class UserController : ControllerBase
     private readonly ISensitiveDataProtector _protector;
     private readonly ILogger<UserController> _logger;
     private readonly ICommunicationRecipientService _communicationRecipients;
-    
+    private readonly INotificationService _notificationService;
 
-    public UserController(ApplicationDbContext authContext, EmailService emailService, IConfiguration config, WhatsAppService whatsAppService, 
+    public UserController(ApplicationDbContext authContext, EmailService emailService, IConfiguration config, WhatsAppService whatsAppService,
         IApplicantContactService applicantContactService, IJwtService jwtService, ISensitiveDataProtector protector, ICommunicationRecipientService communicationRecipients,
-        ILogger<UserController> logger)
+        ILogger<UserController> logger, INotificationService notificationService)
     {
         _authContext = authContext ?? throw new ArgumentNullException(nameof(authContext));
         _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
@@ -42,55 +42,87 @@ public class UserController : ControllerBase
         _whatsAppService = whatsAppService;
         _applicantContactService = applicantContactService;
         _jwtService = jwtService;
-        _protector = protector ?? throw new ArgumentNullException(nameof(protector)); 
+        _protector = protector ?? throw new ArgumentNullException(nameof(protector));
         _communicationRecipients = communicationRecipients;
+        _notificationService = notificationService;
         _logger = logger;
-
     }
 
     [HttpPost("authenticate")]
     public async Task<IActionResult> Authenticate([FromBody] AuthenticationDto userObj)
     {
-        if (userObj == null)
-            return BadRequest();
+        if (userObj == null || string.IsNullOrWhiteSpace(userObj.Login) || string.IsNullOrWhiteSpace(userObj.Password))
+            return BadRequest(new { Message = "Login and password are required." });
 
-        // 🔹 Buscar usuario con Company y Warehouse
-        var user = await _authContext.Users
-            .Where(u => u.Email == userObj.Email)
-            .Include(u => u.Company)
-            .Include(u => u.Warehouse)
-            .FirstOrDefaultAsync();
+        var hasEmail = userObj.Login.Contains('@');
+        User? user = null;
+
+        if (hasEmail)
+        {
+            user = await _authContext.Users
+                .Where(u => u.Email == userObj.Login.Trim())
+                .Include(u => u.Company)
+                .Include(u => u.Warehouse)
+                .FirstOrDefaultAsync();
+        }
+        else
+        {
+            var phone = userObj.Login.Trim()
+                .Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "");
+
+            var userIds = await _authContext.Set<UserProfile>()
+                .Where(p => p.PhoneNumber == phone)
+                .Select(p => p.Id)
+                .ToListAsync();
+
+            if (userIds.Any())
+            {
+                var candidates = await _authContext.Users
+                    .Where(u => userIds.Contains(u.Id) && !string.IsNullOrEmpty(u.Password))
+                    .Include(u => u.Company)
+                    .Include(u => u.Warehouse)
+                    .ToListAsync();
+
+                user = candidates.FirstOrDefault(u =>
+                    PasswordHasher.VerifiPassword(userObj.Password, u.Password!));
+            }
+        }
 
         if (user == null)
             return NotFound(new { Message = "User not Found" });
 
-        // 🔹 Validar contraseña
-        if (!PasswordHasher.VerifiPassword(userObj.Password, user.Password))
+        if (hasEmail && (string.IsNullOrEmpty(user.Password) || !PasswordHasher.VerifiPassword(userObj.Password, user.Password)))
             return BadRequest(new { Message = "Password is Incorrect!" });
 
-        // 🔹 Validar si está activo
         if (!user.IsActive)
-            return BadRequest(new { Message = "That email is not Active!" });
+            return BadRequest(new { Message = "That account is not Active!" });
 
-        // 🔹 Obtener la compañía (para Owner buscar manualmente)
         Company? company = user.Company;
         if (company == null && user.UserRole == global::User.Role.CompanyOwner)
-        {
-            company = await _authContext.Companies
-                .FirstOrDefaultAsync(c => c.OwnerId == user.Id);
-        }
+            company = await _authContext.Companies.FirstOrDefaultAsync(c => c.OwnerId == user.Id);
 
-        // 🔹 Crear token con compañía correcta
         user.Token = _jwtService.CreateJwtToken(user, company);
+
+        if (string.IsNullOrEmpty(user.Email))
+        {
+            await _notificationService.NotifyAsync(
+                userId: user.Id,
+                title: "Email required",
+                message: "Please update your email address to keep your account secure.",
+                type: NotificationType.Warning,
+                url: "/profile/email",
+                source: "Account"
+            );
+        }
 
         return Ok(new
         {
             Token = user.Token,
             IsFirstLogin = user.IsFirstLogin,
+            RequiresEmailUpdate = string.IsNullOrEmpty(user.Email),
             Message = "Login success!"
         });
     }
-
 
     [HttpPost("register")]
     public async Task<IActionResult> RegisterUser([FromBody] RegisterUserDto body)
@@ -2965,6 +2997,12 @@ public sealed class UserDailySummaryDto
         PayRunLines
             .GroupBy(x => x.SourceType ?? "")
             .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
+}
+
+public sealed class RecoverByPhoneDto
+{
+    public string PhoneNumber { get; set; } = null!;
+    public string Password { get; set; } = null!;
 }
 
 

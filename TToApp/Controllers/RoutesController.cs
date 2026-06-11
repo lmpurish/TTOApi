@@ -590,9 +590,10 @@ namespace TToApp.Controllers
                 {
                     string spValue = detail.Attribute("SP__")?.Value?.Trim() ?? "0";
 
-                    int volumen = SafeParseInt(detail.Attribute("Volume3")?.Value);
+                    int volume3 = SafeParseInt(detail.Attribute("Volume3")?.Value);
+                    int deliveryPieces = SafeParseInt(detail.Attribute("Delivery_Pieces3")?.Value);
                     int attempts = SafeParseInt(detail.Attribute("Incomplete_D5")?.Value);
-
+                    int volumen = deliveryPieces > 0 ? deliveryPieces : volume3;
                     int? userId = null;
 
                     if (userIds.TryGetValue((spValue, warehouseId), out int foundUserId))
@@ -603,9 +604,7 @@ namespace TToApp.Controllers
                             continue;
                     }
 
-                    double los = volumen > 0
-                        ? SafeParseDouble(detail.Attribute("LOS3")?.Value) * 100
-                        : 0;
+                    double los = SafeParseDouble(detail.Attribute("LOS3")?.Value) * 100;
 
                     int cnlValue = SafeParseInt(detail.Attribute("CNL3")?.Value);
 

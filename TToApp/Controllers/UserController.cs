@@ -54,52 +54,81 @@ public class UserController : ControllerBase
         if (userObj == null || string.IsNullOrWhiteSpace(userObj.Login) || string.IsNullOrWhiteSpace(userObj.Password))
             return BadRequest(new { Message = "Login and password are required." });
 
-        var hasEmail = userObj.Login.Contains('@');
+        var login = userObj.Login.Trim();
+        var hasEmail = login.Contains('@');
+
         User? user = null;
+        bool userExists = false;
 
         if (hasEmail)
         {
             user = await _authContext.Users
-                .Where(u => u.Email == userObj.Login.Trim())
+                .Where(u => u.Email != null && u.Email.ToLower() == login.ToLower())
                 .Include(u => u.Company)
                 .Include(u => u.Warehouse)
                 .FirstOrDefaultAsync();
+
+            userExists = user != null;
+
+            if (user != null && (string.IsNullOrEmpty(user.Password) ||
+                !PasswordHasher.VerifiPassword(userObj.Password, user.Password)))
+            {
+                return BadRequest(new { Message = "Password is Incorrect!" });
+            }
         }
         else
         {
-            var phone = userObj.Login.Trim()
-                .Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "");
+            var phone = login
+                .Replace(" ", "")
+                .Replace("-", "")
+                .Replace("(", "")
+                .Replace(")", "")
+                .Replace(".", "")
+                .Replace("+", "");
 
             var userIds = await _authContext.Set<UserProfile>()
-                .Where(p => p.PhoneNumber == phone)
+                .Where(p => p.PhoneNumber != null &&
+                    p.PhoneNumber.Replace(" ", "")
+                                 .Replace("-", "")
+                                 .Replace("(", "")
+                                 .Replace(")", "")
+                                 .Replace(".", "")
+                                 .Replace("+", "") == phone)
                 .Select(p => p.Id)
                 .ToListAsync();
 
-            if (userIds.Any())
+            userExists = userIds.Any();
+
+            if (userExists)
             {
                 var candidates = await _authContext.Users
-                    .Where(u => userIds.Contains(u.Id) && !string.IsNullOrEmpty(u.Password))
+                    .Where(u => userIds.Contains(u.Id))
                     .Include(u => u.Company)
                     .Include(u => u.Warehouse)
                     .ToListAsync();
 
                 user = candidates.FirstOrDefault(u =>
-                    PasswordHasher.VerifiPassword(userObj.Password, u.Password!));
+                    !string.IsNullOrEmpty(u.Password) &&
+                    PasswordHasher.VerifiPassword(userObj.Password, u.Password));
             }
+
+            if (userExists && user == null)
+                return BadRequest(new { Message = "Password is Incorrect!" });
         }
 
         if (user == null)
             return NotFound(new { Message = "User not Found" });
 
-        if (hasEmail && (string.IsNullOrEmpty(user.Password) || !PasswordHasher.VerifiPassword(userObj.Password, user.Password)))
-            return BadRequest(new { Message = "Password is Incorrect!" });
-
         if (!user.IsActive)
             return BadRequest(new { Message = "That account is not Active!" });
 
         Company? company = user.Company;
+
         if (company == null && user.UserRole == global::User.Role.CompanyOwner)
-            company = await _authContext.Companies.FirstOrDefaultAsync(c => c.OwnerId == user.Id);
+        {
+            company = await _authContext.Companies
+                .FirstOrDefaultAsync(c => c.OwnerId == user.Id);
+        }
 
         user.Token = _jwtService.CreateJwtToken(user, company);
 

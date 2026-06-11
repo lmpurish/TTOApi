@@ -221,6 +221,74 @@ namespace TToApp.Controllers
             return Ok(new { reply });
         }
 
+        [HttpPost("send")]
+        public async Task<IActionResult> SendWhatsApp([FromBody] SendWhatsAppDto dto)
+        {
+            try
+            {
+                var twilioSid = _cfg["Twilio:AccountSid"];
+                var twilioAuth = _cfg["Twilio:AuthToken"];
+                var msSid = _cfg["Twilio:MessagingServiceSid"];
+
+                TwilioClient.Init(twilioSid, twilioAuth);
+
+                var message = await MessageResource.CreateAsync(
+                    messagingServiceSid: msSid,
+                    to: new PhoneNumber($"whatsapp:{dto.Phone}"),
+                    body: dto.Message
+                );
+
+                return Ok(new
+                {
+                    Success = true,
+                    Sid = message.Sid
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+        [HttpGet("status/{sid}")]
+        public async Task<IActionResult> GetMessageStatus(string sid)
+        {
+            try
+            {
+                var twilioSid = _cfg["Twilio:AccountSid"];
+                var twilioAuth = _cfg["Twilio:AuthToken"];
+
+                TwilioClient.Init(twilioSid, twilioAuth);
+
+                var message = await MessageResource.FetchAsync(sid);
+
+                return Ok(new
+                {
+                    sid = message.Sid,
+                    status = message.Status.ToString(),
+                    errorCode = message.ErrorCode,
+                    errorMessage = message.ErrorMessage,
+                    to = message.To,
+                    from = message.From,
+                    dateCreated = message.DateCreated,
+                    dateSent = message.DateSent
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        public class SendWhatsAppDto
+        {
+            public string Phone { get; set; }
+            public string Message { get; set; }
+        }
+
 
     }
     public class GptWebhookDto

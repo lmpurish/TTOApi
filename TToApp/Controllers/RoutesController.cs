@@ -1302,8 +1302,167 @@ namespace TToApp.Controllers
         public class ImportRouteParcelInfoRequest
         {
             public IFormFile File { get; set; } = null!;
-
             public int WarehouseId { get; set; }
+        }
+
+        public class ImportDailyRoutesRequest
+        {
+            public IFormFile File { get; set; } = null!;
+            public int WarehouseId { get; set; }
+        }
+
+        [Authorize]
+        [HttpPost("import-UniUni-DailyRoutes")]
+        public async Task<IActionResult> ImportDailyRoutes(
+            [FromForm] ImportDailyRoutesRequest req,
+            CancellationToken ct)
+        {
+            if (req.File == null || req.File.Length == 0)
+                return BadRequest(new { Message = "File required." });
+
+            // 1) Leer Excel
+            using var ms = new MemoryStream();
+            await req.File.CopyToAsync(ms, ct);
+            ms.Position = 0;
+
+            using var wb = new XLWorkbook(ms);
+            var ws = wb.Worksheets.FirstOrDefault(s => s.Name.Equals("Daily", StringComparison.OrdinalIgnoreCase))
+                  ?? wb.Worksheets.First();
+
+            // 2) HeaderMap dinámico
+            var headerRow = ws.Row(1);
+            var headerMap = headerRow.CellsUsed()
+                .ToDictionary(
+                    c => c.GetString().Trim(),
+                    c => c.Address.ColumnNumber,
+                    StringComparer.OrdinalIgnoreCase);
+
+            string S(IXLRow row, string col) =>
+                headerMap.TryGetValue(col, out var i) ? row.Cell(i).GetString().Trim() : "";
+
+            DateTime? D(IXLRow row, string col)
+            {
+                if (!headerMap.TryGetValue(col, out var i)) return null;
+                var cell = row.Cell(i);
+                if (cell.IsEmpty()) return null;
+                if (cell.DataType == XLDataType.DateTime) return cell.GetDateTime();
+                return DateTime.TryParse(cell.GetString().Trim(), out var dt) ? dt : null;
+            }
+
+            int I(IXLRow row, string col)
+            {
+                if (!headerMap.TryGetValue(col, out var i)) return 0;
+                var cell = row.Cell(i);
+                if (cell.IsEmpty()) return 0;
+                if (cell.DataType == XLDataType.Number) return (int)cell.GetDouble();
+                return int.TryParse(cell.GetString().Trim(), out var v) ? v : 0;
+            }
+
+            double? Dbl(IXLRow row, string col)
+            {
+                if (!headerMap.TryGetValue(col, out var i)) return null;
+                var cell = row.Cell(i);
+                if (cell.IsEmpty()) return null;
+                if (cell.DataType == XLDataType.Number) return cell.GetDouble();
+                return double.TryParse(cell.GetString().Trim(),
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+            }
+
+            // 3) Precargar usuarios por IdentificationNumber (sin filtro de warehouse)
+            var users = await _context.Users
+                .AsNoTracking()
+                .Where(u => !string.IsNullOrEmpty(u.IdentificationNumber))
+                .Select(u => new { u.Id, u.IdentificationNumber })
+                .ToListAsync(ct);
+
+            var userByIdNumber = users
+                .GroupBy(u => u.IdentificationNumber!.Trim())
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
+            // 4) Leer filas
+            var lastRow = ws.LastRowUsed()?.RowNumber() ?? 1;
+            var created = 0;
+            var updated = 0;
+            var driverNotFound = new List<string>();
+
+            var minDate = DateTime.MaxValue;
+            var maxDate = DateTime.MinValue;
+            var rawRows = new List<(string DriverId, DateTime Date, int Volume, int Stops, double? Price)>();
+
+            for (int r = 2; r <= lastRow; r++)
+            {
+                var row = ws.Row(r);
+                var driverId = S(row, "driver_id");
+                var date = D(row, "date");
+                if (date == null) continue;
+
+                rawRows.Add((driverId, date.Value.Date, I(row, "total_order_cnt"), I(row, "first_order_cnt"), Dbl(row, "total_delivery_price")));
+                if (date.Value < minDate) minDate = date.Value;
+                if (date.Value > maxDate) maxDate = date.Value;
+            }
+
+            if (rawRows.Count == 0)
+                return BadRequest(new { Message = "No valid rows found." });
+
+            // 5) Precargar rutas existentes en el rango
+            var existingRoutes = await _context.Routes
+                .Where(r => r.WarehouseId == req.WarehouseId
+                         && r.Date >= minDate && r.Date <= maxDate.AddDays(1))
+                .ToListAsync(ct);
+
+            // 6) Crear o actualizar rutas (una por driver+date)
+            foreach (var row in rawRows)
+            {
+                int? userId = null;
+                if (!string.IsNullOrWhiteSpace(row.DriverId))
+                {
+                    if (userByIdNumber.TryGetValue(row.DriverId, out var uid))
+                        userId = uid;
+                    else
+                        driverNotFound.Add(row.DriverId);
+                }
+
+                var existing = existingRoutes.FirstOrDefault(r =>
+                    r.WarehouseId == req.WarehouseId &&
+                    r.Date.Date == row.Date.Date &&
+                    r.UserId == userId);
+
+                if (existing != null)
+                {
+                    existing.Volumen      = row.Volume;
+                    existing.DeliveryStops = row.Stops;
+                    existing.PriceRoute   = row.Price;
+                    updated++;
+                }
+                else
+                {
+                    _context.Routes.Add(new Routes
+                    {
+                        WarehouseId    = req.WarehouseId,
+                        UserId         = userId,
+                        Date           = row.Date,
+                        Volumen        = row.Volume,
+                        DeliveryStops  = row.Stops,
+                        CNL            = 0,
+                        Attempts       = 0,
+                        routeStatus    = RouteStatus.Completed,
+                        PaymentType    = Model.PaymentType.PerRoute,
+                        PriceRoute     = row.Price
+                    });
+                    created++;
+                }
+            }
+
+            await _context.SaveChangesAsync(ct);
+
+            return Ok(new
+            {
+                created,
+                updated,
+                totalRows = rawRows.Count,
+                driverNotFound = driverNotFound.Distinct().ToList()
+            });
         }
 
         [Authorize]

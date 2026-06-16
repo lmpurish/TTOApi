@@ -1193,7 +1193,8 @@ namespace TToApp.Controllers
                     ZoneId = routesDto.ZoneId,
                     routeStatus = RouteStatus.Created,
                     PriceRoute = routesDto.PriceRoute,
-                    PaymentType = routesDto.paymentType
+                    PaymentType = routesDto.paymentType,
+                    WarehouseId = routesDto.WarehouseId
                 };
 
                 _context.Routes.Add(routes);
@@ -1215,7 +1216,8 @@ namespace TToApp.Controllers
                         routes.ZoneId,
                         routes.routeStatus,
                         routes.PriceRoute,
-                        routes.PaymentType
+                        routes.PaymentType,
+                        routes.WarehouseId
                     })
                 });
 
@@ -3508,6 +3510,8 @@ public class RoutesDto
     public DateTime Date { get; set; }
     public double? PriceRoute   { get; set; }
     public PaymentType paymentType { get; set; }
+    public Warehouse? Warehouse { get; set; }
+    public int? WarehouseId { get; set; }
 
 }
 

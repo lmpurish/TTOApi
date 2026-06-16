@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TToApp.Model;
 
@@ -11,9 +12,11 @@ using TToApp.Model;
 namespace TToApp.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260612024643_AddAuditLogs")]
+    partial class AddAuditLogs
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -822,73 +825,6 @@ namespace TToApp.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("Notifications");
-                });
-
-            modelBuilder.Entity("TToApp.Model.PackageReturnEvidence", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int?>("DriverId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("DriverName")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("DriverPhone")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("ImageUrl")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<bool>("IsDriverFault")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Message")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<int?>("PackageId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Reason")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<bool>("Reviewed")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime?>("ReviewedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("ReviewedBy")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Tracking")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<int?>("WarehouseId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DriverId");
-
-                    b.HasIndex("PackageId");
-
-                    b.HasIndex("WarehouseId");
-
-                    b.ToTable("PackageReturnEvidences");
                 });
 
             modelBuilder.Entity("TToApp.Model.PackageReviewEvidence", b =>
@@ -1707,9 +1643,6 @@ namespace TToApp.Migrations
 
                     b.Property<int>("DeliveryStops")
                         .HasColumnType("int");
-
-                    b.Property<string>("DriverIdentificationNumber")
-                        .HasColumnType("nvarchar(max)");
 
                     b.Property<double>("Los")
                         .HasColumnType("float");
@@ -2610,27 +2543,6 @@ namespace TToApp.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
-                });
-
-            modelBuilder.Entity("TToApp.Model.PackageReturnEvidence", b =>
-                {
-                    b.HasOne("User", "Driver")
-                        .WithMany()
-                        .HasForeignKey("DriverId");
-
-                    b.HasOne("TToApp.Model.Packages", "Package")
-                        .WithMany()
-                        .HasForeignKey("PackageId");
-
-                    b.HasOne("TToApp.Model.Warehouse", "Warehouse")
-                        .WithMany()
-                        .HasForeignKey("WarehouseId");
-
-                    b.Navigation("Driver");
-
-                    b.Navigation("Package");
-
-                    b.Navigation("Warehouse");
                 });
 
             modelBuilder.Entity("TToApp.Model.PackageReviewEvidence", b =>

@@ -50,8 +50,8 @@ namespace TToApp.Model
         public DbSet<CommunicationRecipientRule> CommunicationRecipientRules { get; set; }
         public DbSet<Incidence> Incidences { get; set; }
         public DbSet<ZonePayRule> ZonePayRules { get; set; } = null!;
-
-
+        public DbSet<AuditLogs> AuditLogs { get; set; }
+        public DbSet<PackageReturnEvidence> PackageReturnEvidences { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

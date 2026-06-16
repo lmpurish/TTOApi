@@ -482,10 +482,8 @@ namespace TToApp.Services.Payroll
                                     var excess = delivered - (activeZoneRule.MaxPackages ?? 0);
                                     if (excess > 0)
                                     {
-                                        var extraRate = activeZoneRule.UseDriverRateForExtra
-                                            ? effectivePerStop
-                                            : Math.Max(effectivePerStop, activeZoneRule?.ExtraAmount ?? 0m);
-                                        var extraTag = activeZoneRule.UseDriverRateForExtra ? "ZONE_BLOCK_EXTRA_DRIVER" : "ZONE_BLOCK_EXTRA";
+                                        var extraRate = activeZoneRule?.ExtraAmount ?? 0m;
+                                        var extraTag = "ZONE_BLOCK_EXTRA";
 
                                         routeSubtotal += AddLine(
                                             payRun, "Earning", route.Id.ToString(),

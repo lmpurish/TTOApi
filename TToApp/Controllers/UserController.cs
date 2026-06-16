@@ -1,16 +1,18 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Playwright;
 using System.Buffers.Text;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using TToApp.Constants;
 using TToApp.DTOs;
 using TToApp.Helpers;
 using TToApp.Model;
 using TToApp.Services;
+using TToApp.Services.Audit;
 using TToApp.Services.Auth;
 using TToApp.Services.CommunicationRecipient;
-using TToApp.Constants;
 using TToApp.Services.Notifications;
 using static User;
 
@@ -31,10 +33,10 @@ public class UserController : ControllerBase
     private readonly ILogger<UserController> _logger;
     private readonly ICommunicationRecipientService _communicationRecipients;
     private readonly INotificationService _notificationService;
-
+    private readonly AuditService _auditService;
     public UserController(ApplicationDbContext authContext, EmailService emailService, IConfiguration config, WhatsAppService whatsAppService,
         IApplicantContactService applicantContactService, IJwtService jwtService, ISensitiveDataProtector protector, ICommunicationRecipientService communicationRecipients,
-        ILogger<UserController> logger, INotificationService notificationService)
+        ILogger<UserController> logger, INotificationService notificationService, AuditService auditService)
     {
         _authContext = authContext ?? throw new ArgumentNullException(nameof(authContext));
         _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
@@ -46,6 +48,7 @@ public class UserController : ControllerBase
         _communicationRecipients = communicationRecipients;
         _notificationService = notificationService;
         _logger = logger;
+        _auditService = auditService;
     }
 
     [HttpPost("authenticate")]
@@ -73,6 +76,21 @@ public class UserController : ControllerBase
             if (user != null && (string.IsNullOrEmpty(user.Password) ||
                 !PasswordHasher.VerifiPassword(userObj.Password, user.Password)))
             {
+                await _auditService.LogAsync(new AuditLogDto
+                {
+                    UserId = user.Id,
+                    UserName = $"{user.Name} {user.LastName}",
+                    UserRole = user.UserRole.ToString(),
+                    Action = AuditLogAction.FailedLogin,
+                    Entity = "User",
+                    EntityId = user.Id.ToString(),
+                    Description = $"Failed login. Incorrect password for email {login}",
+                    WarehouseId = user.WarehouseId,
+                    WarehouseName = user.Warehouse?.City,
+                    CompanyId = user.CompanyId,
+                    CompanyName = user.Company?.Name
+                });
+
                 return BadRequest(new { Message = "Password is Incorrect!" });
             }
         }
@@ -113,14 +131,49 @@ public class UserController : ControllerBase
             }
 
             if (userExists && user == null)
+            {
+                await _auditService.LogAsync(new AuditLogDto
+                {
+                    Action = AuditLogAction.FailedLogin,
+                    Entity = "User",
+                    Description = $"Failed login. Incorrect password for phone {phone}"
+                });
+
                 return BadRequest(new { Message = "Password is Incorrect!" });
+            }
         }
 
         if (user == null)
+        {
+            await _auditService.LogAsync(new AuditLogDto
+            {
+                Action = AuditLogAction.FailedLogin,
+                Entity = "User",
+                Description = $"Failed login. User not found for login {login}"
+            });
+
             return NotFound(new { Message = "User not Found" });
+        }
 
         if (!user.IsActive)
+        {
+            await _auditService.LogAsync(new AuditLogDto
+            {
+                UserId = user.Id,
+                UserName = $"{user.Name} {user.LastName}",
+                UserRole = user.UserRole.ToString(),
+                Action = AuditLogAction.FailedLogin,
+                Entity = "User",
+                EntityId = user.Id.ToString(),
+                Description = "Failed login. Account is not active.",
+                WarehouseId = user.WarehouseId,
+                WarehouseName = user.Warehouse?.City,
+                CompanyId = user.CompanyId,
+                CompanyName = user.Company?.Name
+            });
+
             return BadRequest(new { Message = "That account is not Active!" });
+        }
 
         Company? company = user.Company;
 
@@ -131,6 +184,21 @@ public class UserController : ControllerBase
         }
 
         user.Token = _jwtService.CreateJwtToken(user, company);
+
+        await _auditService.LogAsync(new AuditLogDto
+        {
+            UserId = user.Id,
+            UserName = $"{user.Name} {user.LastName}",
+            UserRole = user.UserRole.ToString(),
+            Action = AuditLogAction.Login,
+            Entity = "User",
+            EntityId = user.Id.ToString(),
+            Description = "User logged in successfully.",
+            WarehouseId = user.WarehouseId,
+            WarehouseName = user.Warehouse?.City,
+            CompanyId = company?.Id ?? user.CompanyId,
+            CompanyName = company?.Name ?? user.Company?.Name
+        });
 
         if (string.IsNullOrEmpty(user.Email))
         {
@@ -179,8 +247,11 @@ public class UserController : ControllerBase
 
             // Redirección (302). Si prefieres forzar GET tras POST, usa 303:
             // return StatusCode(StatusCodes.Status303SeeOther, null).WithHeader("Location", url);  // alternativa manual
-            return  Ok(new { redirectUrl = url,
-                             companyName = company.Name   }); // 302 Found
+            return Ok(new
+            {
+                redirectUrl = url,
+                companyName = company.Name
+            }); // 302 Found
         }
 
         // 2) Registro normal de CompanyOwner (si NO hay ReferralCode)
@@ -281,7 +352,7 @@ public class UserController : ControllerBase
         if (whInfo is null)
             return BadRequest(new { Message = "Metro not found." });
 
-        if (whInfo.CompanyId==null)
+        if (whInfo.CompanyId == null)
             return BadRequest(new { Message = "Metro has no company assigned." });
 
         // Vehículo
@@ -346,23 +417,23 @@ public class UserController : ControllerBase
                 { "Locality", whInfo.City ?? "" }
             };
 
-        //      var managerEmail = GetEmailManager(user);
-        //    if (!string.IsNullOrWhiteSpace(managerEmail))
-        //      {
-        //         await _emailService.SendEmailAsync(
-        //            toEmail: managerEmail,
-        //              subject: "New driver on the way!",
-        //             "ApplicationTemplate.cshtml",
-        //            placeholders: placeholders,
-        //            copy: false
-        //         );
-        //      }
+            //      var managerEmail = GetEmailManager(user);
+            //    if (!string.IsNullOrWhiteSpace(managerEmail))
+            //      {
+            //         await _emailService.SendEmailAsync(
+            //            toEmail: managerEmail,
+            //              subject: "New driver on the way!",
+            //             "ApplicationTemplate.cshtml",
+            //            placeholders: placeholders,
+            //            copy: false
+            //         );
+            //      }
 
-        //  var adminEmails = await _authContext.Users.AsNoTracking()
-        //         .Where(u2 => u2.UserRole == global::User.Role.Admin && !string.IsNullOrEmpty(u2.Email))
-        //        .Select(u2 => u2.Email!)
-        //         .ToListAsync(ct);
-   
+            //  var adminEmails = await _authContext.Users.AsNoTracking()
+            //         .Where(u2 => u2.UserRole == global::User.Role.Admin && !string.IsNullOrEmpty(u2.Email))
+            //        .Select(u2 => u2.Email!)
+            //         .ToListAsync(ct);
+
             var warehouseIds = await _authContext.Warehouses
                     .AsNoTracking()
                     .Where(w => w.MetroId == user.MetroId)
@@ -370,20 +441,20 @@ public class UserController : ControllerBase
                     .ToListAsync(ct);
 
 
-       /*      var authorizedEmployeeEmails = await _authContext.Permits
-        .AsNoTracking()
-        .Where(p => p.WarehouseId == user.WarehouseId
-               && p.UserPermit == Permit.Notification) // ó p.UserPermit == 0 si lo manejas como int
-        .Select(p => p.User!.Email)
-        .Where(email => !string.IsNullOrEmpty(email))
-        .Distinct()
-        .ToListAsync(ct);
-          var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
-            companyId: whInfo.CompanyId,
-            warehouseId: user.WarehouseId,
-            eventType: CommunicationEventTypes.NewDriverApplication,
-            channel: CommunicationChannels.Email
-        );*/
+            /*      var authorizedEmployeeEmails = await _authContext.Permits
+             .AsNoTracking()
+             .Where(p => p.WarehouseId == user.WarehouseId
+                    && p.UserPermit == Permit.Notification) // ó p.UserPermit == 0 si lo manejas como int
+             .Select(p => p.User!.Email)
+             .Where(email => !string.IsNullOrEmpty(email))
+             .Distinct()
+             .ToListAsync(ct);
+               var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
+                 companyId: whInfo.CompanyId,
+                 warehouseId: user.WarehouseId,
+                 eventType: CommunicationEventTypes.NewDriverApplication,
+                 channel: CommunicationChannels.Email
+             );*/
 
             var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
                 companyId: whInfo.CompanyId,
@@ -580,9 +651,9 @@ public class UserController : ControllerBase
             Id = user.Id,
             Name = user.Name,
             LastName = user.LastName,
-            Email  = user.Email,
+            Email = user.Email,
             Phone = user.Profile.PhoneNumber,
-            
+
             Avatar = user.AvatarUrl,
             Warehouse = user.Warehouse == null ? null : new WarehouseDTO
             {
@@ -826,7 +897,7 @@ public class UserController : ControllerBase
         u.Id,
         u.Stage,
         u.AvatarUrl,
-        
+
 
         // Recruiter info
         Recruiter = u.RecruiterId != null
@@ -846,10 +917,10 @@ public class UserController : ControllerBase
                 u.Warehouse.Company
             }
             : null,
-        Metro = u.Metro!=null ? new
+        Metro = u.Metro != null ? new
         {
             u.Metro.City,
-        }:null,
+        } : null,
 
         // Profile info
         Profile = u.Profile != null
@@ -985,7 +1056,7 @@ public class UserController : ControllerBase
                     } : null,
 
                     Vehicle = u.Vehicles
-                        .Select(v => new { v.Make, v.Model,v.Type })
+                        .Select(v => new { v.Make, v.Model, v.Type })
                         .FirstOrDefault(),
 
                     Account = u.Accounts
@@ -1067,16 +1138,19 @@ public class UserController : ControllerBase
 
         try
         {
-            if (request.Address != null) { 
+            if (request.Address != null)
+            {
                 user.Profile.Address = request.Address;
             }
-            if (request.City != null) { 
+            if (request.City != null)
+            {
                 user.Profile.City = request.City;
             }
-            if (request.State != null) { 
-                user.Profile.State = request.State; 
+            if (request.State != null)
+            {
+                user.Profile.State = request.State;
             }
-            if( request.ZipCode != null)
+            if (request.ZipCode != null)
             {
                 user.Profile.ZipCode = request.ZipCode;
             }
@@ -1096,7 +1170,8 @@ public class UserController : ControllerBase
                     return BadRequest(new { Message = "Driver license is expired." });
             }
 
-            if (request.ExpInsurance.HasValue) {
+            if (request.ExpInsurance.HasValue)
+            {
                 var expInsurance = request.ExpInsurance.Value.Date;
                 if (expInsurance < DateTime.UtcNow.Date)
                     return BadRequest(new { Message = "Insurance is expired" });
@@ -1191,7 +1266,7 @@ public class UserController : ControllerBase
                 };
 
                 _authContext.Accounts.Add(Account);
-              
+
             }
 
 
@@ -1243,7 +1318,7 @@ public class UserController : ControllerBase
                 .Select(u => u.Email!)
                 .ToListAsync();
 
-            var placeholders = new Dictionary<string, string>
+                    var placeholders = new Dictionary<string, string>
         {
             { "Name", user.Name ?? "" },
             { "LastName", user.LastName ?? "" },
@@ -1252,27 +1327,27 @@ public class UserController : ControllerBase
             { "Locality", GetWarehouseCity1(user) ?? "" }
         };
 
-            foreach (var email in adminEmails)
-            {
-                await _emailService.SendEmailAsync(
-                    toEmail: email,
-                    subject: "Successfully completed profile!",
-                    "CompleteProfileComfirmation.cshtml",
-                    placeholders: placeholders,
-                    copy: false
-                );
-            }
+                    foreach (var email in adminEmails)
+                    {
+                        await _emailService.SendEmailAsync(
+                            toEmail: email,
+                            subject: "Successfully completed profile!",
+                            "CompleteProfileComfirmation.cshtml",
+                            placeholders: placeholders,
+                            copy: false
+                        );
+                    }
 
-            if (!string.IsNullOrWhiteSpace(user.Email))
-            {
-                await _emailService.SendEmailAsync(
-                    toEmail: user.Email,
-                    subject: "Thank you",
-                     "ApplicationConfirmation.cshtml",
-                    placeholders: placeholders,
-                    copy: false
-                );
-            }
+                    if (!string.IsNullOrWhiteSpace(user.Email))
+                    {
+                        await _emailService.SendEmailAsync(
+                            toEmail: user.Email,
+                            subject: "Thank you",
+                             "ApplicationConfirmation.cshtml",
+                            placeholders: placeholders,
+                            copy: false
+                        );
+                    }
                 }
                 catch (Exception ex) { _logger.LogError(ex, "Email notification failed (ignored)."); }
             });
@@ -1425,7 +1500,7 @@ public class UserController : ControllerBase
 
         if (wasInactive && user.IsActive)
         {
-          
+
             var okAccessEmail = await SendAccountActivatedEmail(user, "Account Activated!!");
 
             if (!okAccessEmail)
@@ -1443,19 +1518,50 @@ public class UserController : ControllerBase
     public async Task<IActionResult> ResendPasswordSetup([FromRoute] int id)
     {
         var user = await _authContext.Users
-      .FirstOrDefaultAsync(x => x.Id == id);
+            .FirstOrDefaultAsync(x => x.Id == id);
 
         if (user == null)
             return NotFound(new { Message = "User not found" });
 
-        var ok = await SendAccountActivatedEmail(user, "Setup Your Password");
+        var ok = await SendPasswordSetupEmail(user, "Setup Your Password");
 
         if (!ok)
             return BadRequest(new { Message = "Email could not be sent." });
 
         return Ok(new { Message = "Password setup email resent successfully" });
     }
+    [AllowAnonymous]
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Email))
+            return BadRequest(new { Message = "Email is required." });
 
+        var email = dto.Email.Trim().ToLower();
+
+        var user = await _authContext.Users
+            .FirstOrDefaultAsync(x => x.Email.ToLower() == email);
+
+        if (user == null)
+            return NotFound(new { Message = "User not found" });
+
+        var ok = await SendPasswordSetupEmail(user, "Reset Your Password");
+
+        if (!ok)
+            return BadRequest(new { Message = "Email could not be sent." });
+
+        return Ok(new { Message = "Password reset email sent successfully" });
+    }
+    private async Task<bool> SendPasswordSetupEmail(User user, string subject)
+    {
+        user.PasswordResetToken = Guid.NewGuid().ToString("N");
+        user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddHours(24);
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _authContext.SaveChangesAsync();
+
+        return await SendAccountActivatedEmail(user, subject);
+    }
     [AllowAnonymous]
     [HttpPost("set-password")]
     public async Task<IActionResult> SetPassword([FromBody] SetPasswordDto dto)
@@ -1829,7 +1935,7 @@ public class UserController : ControllerBase
         try
         {
             var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-         
+
         }
         catch (Exception ex)
         {
@@ -2174,9 +2280,9 @@ public class UserController : ControllerBase
         var missing = new List<string>();
         DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
         // Campos del User
-        if (string.IsNullOrWhiteSpace(user.Name))      missing.Add("Name");
-        if (string.IsNullOrWhiteSpace(user.LastName))  missing.Add("Last Name");
-        if (string.IsNullOrWhiteSpace(user.Email))     missing.Add("Email");
+        if (string.IsNullOrWhiteSpace(user.Name)) missing.Add("Name");
+        if (string.IsNullOrWhiteSpace(user.LastName)) missing.Add("Last Name");
+        if (string.IsNullOrWhiteSpace(user.Email)) missing.Add("Email");
         //if (string.IsNullOrWhiteSpace(user.AvatarUrl)) missing.Add("AvatarUrl");
 
 
@@ -2189,30 +2295,30 @@ public class UserController : ControllerBase
         {
             if (string.IsNullOrWhiteSpace(user.Profile.PhoneNumber))
                 missing.Add("Phone Number");
-            if ( user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(user.Profile.DriverLicenseNumber))        
+            if (user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(user.Profile.DriverLicenseNumber))
                 missing.Add("Driver License Number");
             if (user.UserRole == global::User.Role.Driver && (user.Profile.ExpDriverLicense == null || user.Profile.ExpDriverLicense < today))
                 missing.Add("Expired Driver License");
             if (string.IsNullOrWhiteSpace(user.Profile.SsnLast4))
                 missing.Add("SSN Last 4");
-            if (user.UserRole == global::User.Role.Driver &&string.IsNullOrWhiteSpace(user.Profile.InsuranceUrl))   
+            if (user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(user.Profile.InsuranceUrl))
                 missing.Add("Insurance photo");
             if (user.UserRole == global::User.Role.Driver && (user.Profile.ExpInsurance == null || user.Profile.ExpInsurance < today))
                 missing.Add("Expired Insurance");
             if (string.IsNullOrWhiteSpace(user.Profile.SocialSecurityUrl))
                 missing.Add("Social Security photo");
             if (user.UserRole == global::User.Role.Driver && (string.IsNullOrWhiteSpace(user.Profile.DrivingLicenseUrl)))
-                missing.Add("Driving License photo");   
+                missing.Add("Driving License photo");
             if (user.Profile.DateOfBirth == null)
                 missing.Add("Date of Birth");
         }
-        if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner ) && ((user.DocumentSignatures == null || !user.DocumentSignatures.Any())))
+        if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner) && ((user.DocumentSignatures == null || !user.DocumentSignatures.Any())))
         {
             missing.Add("Document Signatures");
         }
 
 
-        if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner ) && user.Warehouse == null)
+        if ((user.UserRole != global::User.Role.Admin && user.UserRole != global::User.Role.CompanyOwner) && user.Warehouse == null)
         {
             missing.Add("Warehouse");
         }
@@ -2227,7 +2333,7 @@ public class UserController : ControllerBase
 
             foreach (var v in user.Vehicles)
             {
-                if (user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(v.Make))  missing.Add($"Vehicles[{i}].Make");
+                if (user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(v.Make)) missing.Add($"Vehicles[{i}].Make");
                 if (user.UserRole == global::User.Role.Driver && string.IsNullOrWhiteSpace(v.Model)) missing.Add($"Vehicles[{i}].Model");
                 i++;
             }
@@ -2265,7 +2371,7 @@ public class UserController : ControllerBase
 
     //     if (userInfo is null)
     //         return NotFound($"User {userId} not found.");
-        
+
     //     var userWarehouseId = userInfo.WarehouseId.Value;
 
 
@@ -2657,7 +2763,7 @@ public class UserController : ControllerBase
                 && l.RouteDate.HasValue
                 && (!start.HasValue || l.RouteDate >= start.Value)
                 && (!endExclusive.HasValue || l.RouteDate < endExclusive.Value)
-                // && pr.Status == "Completed"
+            // && pr.Status == "Completed"
             select new PayRunLineDto
             {
                 Id = l.Id,
@@ -2713,7 +2819,7 @@ public class UserController : ControllerBase
             map[day].PayRunLines.Add(l);
         }
 
-       // ordenar rutas y líneas dentro de cada día (opcional pero recomendado)
+        // ordenar rutas y líneas dentro de cada día (opcional pero recomendado)
         foreach (var d in map.Values)
         {
             d.Routes = d.Routes.OrderByDescending(x => x.Date).ToList();
@@ -2806,9 +2912,10 @@ public class UserController : ControllerBase
             copy: false
         );
     }
-
+    
 }
 
+ 
 public class BulkUpdateWarehouseDto
 {
     public List<int> ApplicantIds { get; set; } = new();
@@ -3027,7 +3134,10 @@ public sealed class UserDailySummaryDto
             .GroupBy(x => x.SourceType ?? "")
             .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
 }
-
+public class ForgotPasswordDto
+{
+    public string Email { get; set; } = string.Empty;
+}
 public sealed class RecoverByPhoneDto
 {
     public string PhoneNumber { get; set; } = null!;

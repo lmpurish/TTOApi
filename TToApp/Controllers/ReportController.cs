@@ -218,6 +218,153 @@ namespace TToApp.Controllers
             return Ok(driverStatistics);
         }
 
+        [HttpGet("dashboard-kpis")]
+        [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]
+        public async Task<IActionResult> GetDashboardKpis()
+        {
+            var role = User.FindFirst(ClaimTypes.Role)?.Value;
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (!int.TryParse(userIdClaim, out var userId))
+                return Unauthorized("Invalid user.");
+
+            var user = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (user == null)
+                return Unauthorized("User not found.");
+
+            var today = DateTime.Today;
+            var yesterday = today.AddDays(-1);
+            var dayBefore = yesterday.AddDays(-1);
+
+            var startOfCurrentMonth = new DateTime(today.Year, today.Month, 1);
+            var startOfPreviousMonth = startOfCurrentMonth.AddMonths(-1);
+
+            IQueryable<Warehouse> warehousesQuery = _context.Warehouses.AsNoTracking();
+
+            if (user.UserRole == global::User.Role.Manager)
+            {
+                if (user.WarehouseId == null)
+                    return BadRequest("Manager does not have a warehouse assigned.");
+
+                warehousesQuery = warehousesQuery
+                    .Where(w => w.Id == user.WarehouseId.Value);
+            }
+            else
+            {
+                warehousesQuery = warehousesQuery
+                    .Where(w => w.CompanyId == user.CompanyId);
+            }
+
+            var warehouseIds = await warehousesQuery
+                .Select(w => w.Id)
+                .ToListAsync();
+
+            if (!warehouseIds.Any())
+                return Ok(new DashboardKpisDto());
+
+            var activeWarehouses = await warehousesQuery
+                .CountAsync(w => w.IsActive == true);
+
+            var warehousesThisMonth = await warehousesQuery
+                .CountAsync(w => w.CreatedAt >= startOfCurrentMonth);
+
+            var currentGross = await _context.PayRuns
+                .AsNoTracking()
+                .Where(p =>
+                    p.PayPeriod != null &&
+                    p.PayPeriod.WarehouseId != null &&
+                    warehouseIds.Contains((int)p.PayPeriod.WarehouseId.Value) &&
+                    p.CalculatedAt >= startOfCurrentMonth)
+                .SumAsync(p => (decimal?)p.GrossAmount) ?? 0;
+
+            var previousGross = await _context.PayRuns
+                .AsNoTracking()
+                .Where(p =>
+                    p.PayPeriod != null &&
+                    p.PayPeriod.WarehouseId != null &&
+                    warehouseIds.Contains((int)p.PayPeriod.WarehouseId.Value) &&
+                    p.CalculatedAt >= startOfPreviousMonth &&
+                    p.CalculatedAt < startOfCurrentMonth)
+                .SumAsync(p => (decimal?)p.GrossAmount) ?? 0;
+
+            var grossPercent = previousGross == 0
+                ? 0
+                : ((currentGross - previousGross) / previousGross) * 100;
+
+            var routesYesterdayQuery = _context.Routes
+                .AsNoTracking()
+                .Where(r =>
+                    r.Date.Date == yesterday &&
+                    r.WarehouseId != null &&
+                    warehouseIds.Contains(r.WarehouseId.Value));
+
+            var routesDayBeforeQuery = _context.Routes
+                .AsNoTracking()
+                .Where(r =>
+                    r.Date.Date == dayBefore &&
+                    r.WarehouseId != null &&
+                    warehouseIds.Contains(r.WarehouseId.Value));
+
+            var stopsYesterday = await routesYesterdayQuery
+                .SumAsync(r => (int?)r.DeliveryStops) ?? 0;
+
+            var stopsDayBefore = await routesDayBeforeQuery
+                .SumAsync(r => (int?)r.DeliveryStops) ?? 0;
+
+            var stopsPercent = stopsDayBefore == 0
+                ? 0
+                : ((decimal)(stopsYesterday - stopsDayBefore) / stopsDayBefore) * 100;
+
+            var avgLosYesterday = await routesYesterdayQuery
+                .AverageAsync(r => (decimal?)r.Los) ?? 0;
+
+            var avgLosDayBefore = await routesDayBeforeQuery
+                .AverageAsync(r => (decimal?)r.Los) ?? 0;
+
+            var losPercent = avgLosDayBefore == 0
+                ? 0
+                : ((avgLosYesterday - avgLosDayBefore) / avgLosDayBefore) * 100;
+
+            var routesYesterday = await routesYesterdayQuery.CountAsync();
+
+            var unassignedRoutes = await routesYesterdayQuery
+                .CountAsync(r => r.UserId == null);
+
+            var cnlYesterday = await routesYesterdayQuery
+                .SumAsync(r => (int?)r.CNL) ?? 0;
+
+            var activeDriversYesterday = await routesYesterdayQuery
+                .Where(r => r.UserId != null)
+                .Select(r => r.UserId)
+                .Distinct()
+                .CountAsync();
+
+            var result = new DashboardKpisDto
+            {
+                TotalGross = Math.Round(currentGross, 2),
+                GrossPercent = Math.Round(grossPercent, 2),
+
+                ActiveWarehouses = activeWarehouses,
+                WarehousesThisMonth = warehousesThisMonth,
+
+                StopsYesterday = stopsYesterday,
+                StopsPercent = Math.Round(stopsPercent, 2),
+
+                AvgLosYesterday = Math.Round(avgLosYesterday, 2),
+                LosPercent = Math.Round(losPercent, 2),
+
+                RoutesYesterday = routesYesterday,
+                UnassignedRoutes = unassignedRoutes,
+                CnlYesterday = cnlYesterday,
+                ActiveDriversYesterday = activeDriversYesterday
+            };
+
+            return Ok(result);
+        }
+
 
         [HttpGet("warehouseStatistics/{startDate?}/{endDate?}")]
         [HttpGet("warehouseStatistics")]
@@ -227,7 +374,6 @@ namespace TToApp.Controllers
     [FromQuery] string? startDateQ,
     [FromQuery] string? endDateQ)
         {
-            // Permitir enviar fechas por ruta o por querystring
             startDate ??= startDateQ;
             endDate ??= endDateQ;
 
@@ -241,7 +387,6 @@ namespace TToApp.Controllers
             if (startDateParsed > endDateParsed)
                 return BadRequest(new { success = false, message = "The start date cannot be greater than the end date." });
 
-            // 🔐 Claims
             var userIdStr = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
             var roleClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
 
@@ -250,19 +395,16 @@ namespace TToApp.Controllers
 
             try
             {
-                // Resolver rol desde claim (nombre o valor numérico del enum)
                 global::User.Role? resolvedRole = null;
+
                 if (!string.IsNullOrWhiteSpace(roleClaim))
                 {
                     if (Enum.TryParse<global::User.Role>(roleClaim, true, out var byName))
                         resolvedRole = byName;
                     else if (int.TryParse(roleClaim, out var asInt))
-                    {
-                        try { resolvedRole = (global::User.Role)asInt; } catch { /* ignore */ }
-                    }
+                        resolvedRole = (global::User.Role)asInt;
                 }
 
-                // Datos mínimos del usuario
                 var userData = await _context.Users
                     .Where(u => u.Id == userId)
                     .Select(u => new { u.CompanyId, u.WarehouseId })
@@ -271,7 +413,6 @@ namespace TToApp.Controllers
                 if (userData == null)
                     return Unauthorized(new { success = false, message = "User not found." });
 
-                // ✅ Determinar warehouses permitidos
                 HashSet<int> allowedWarehouseIds = new();
 
                 if (resolvedRole == global::User.Role.CompanyOwner)
@@ -281,21 +422,20 @@ namespace TToApp.Controllers
                         .Select(c => c.Id)
                         .ToListAsync();
 
-                    if (companyIds.Count > 0)
-                    {
-                        var whIds = await _context.Warehouses
-                            .Where(w => w.CompanyId.HasValue && companyIds.Contains(w.CompanyId.Value))
-                            .Select(w => w.Id)
-                            .ToListAsync();
-
-                        allowedWarehouseIds = whIds.ToHashSet();
-                    }
+                    allowedWarehouseIds = await _context.Warehouses
+                        .Where(w => w.CompanyId.HasValue && companyIds.Contains(w.CompanyId.Value))
+                        .Select(w => w.Id)
+                        .ToHashSetAsync();
                 }
-                else if (resolvedRole == global::User.Role.Admin || resolvedRole == global::User.Role.Manager)
+                else if (resolvedRole == global::User.Role.Manager)
+                {
+                    if (userData.WarehouseId.HasValue)
+                        allowedWarehouseIds.Add(userData.WarehouseId.Value);
+                }
+                else if (resolvedRole == global::User.Role.Admin || resolvedRole == global::User.Role.Assistant)
                 {
                     int? companyId = userData.CompanyId;
 
-                    // Fallback: si no hay CompanyId en Users, inferirlo desde su Warehouse
                     if (!companyId.HasValue && userData.WarehouseId.HasValue)
                     {
                         companyId = await _context.Warehouses
@@ -306,12 +446,10 @@ namespace TToApp.Controllers
 
                     if (companyId.HasValue)
                     {
-                        var whIds = await _context.Warehouses
+                        allowedWarehouseIds = await _context.Warehouses
                             .Where(w => w.CompanyId.HasValue && w.CompanyId.Value == companyId.Value)
                             .Select(w => w.Id)
-                            .ToListAsync();
-
-                        allowedWarehouseIds = whIds.ToHashSet();
+                            .ToHashSetAsync();
                     }
                 }
                 else
@@ -320,99 +458,144 @@ namespace TToApp.Controllers
                         allowedWarehouseIds.Add(userData.WarehouseId.Value);
                 }
 
-                // Si no hay almacenes permitidos, devolver 200 con mensaje
                 if (allowedWarehouseIds.Count == 0)
-                    return Ok(new { success = false, message = "There are no warehouses associated with the user to display statistics.", data = Array.Empty<object>() });
+                {
+                    return Ok(new
+                    {
+                        success = false,
+                        message = "There are no warehouses associated with the user to display statistics.",
+                        data = Array.Empty<object>()
+                    });
+                }
 
-                // 📅 Rango inclusivo
                 var startInclusive = startDateParsed.ToDateTime(TimeOnly.MinValue);
                 var endExclusive = endDateParsed.AddDays(1).ToDateTime(TimeOnly.MinValue);
 
-                // 📦 Rutas
+                var totalDaysInRange = (endDateParsed.DayNumber - startDateParsed.DayNumber) + 1;
+
                 var routes = await _context.Routes
                     .AsNoTracking()
                     .Include(r => r.User)
-                    .Where(r => r.User != null &&
-                                r.User.WarehouseId.HasValue &&
-                                allowedWarehouseIds.Contains(r.User.WarehouseId.Value) &&
-                                r.Date >= startInclusive &&
-                                r.Date < endExclusive && r.routeStatus == RouteStatus.Completed)
+                    .Where(r =>
+                        allowedWarehouseIds.Contains((int)r.WarehouseId) &&
+                        r.Date >= startInclusive &&
+                        r.Date < endExclusive &&
+                        r.routeStatus == RouteStatus.Completed)
                     .ToListAsync();
 
-                var totalDaysInRange = (endDateParsed.DayNumber - startDateParsed.DayNumber) + 1;
-
                 var warehouseStatistics = routes
-                    .GroupBy(r => r.User!.WarehouseId!.Value)
+                    .GroupBy(r => r.WarehouseId)
                     .Select(group =>
                     {
-                        var daysWorked = group
-                            .Where(r => r.Volumen > 0)
-                            .Select(r => r.Date.Date)
-                            .Distinct()
-                            .Count();
-
-                        var rspRoutes = group
-                            .Where(r => r.User!.UserRole.HasValue && r.User.UserRole == global::User.Role.Rsp)
+                        var normalRoutes = group
+                            .Where(r => r.User == null || r.User.UserRole != global::User.Role.Rsp)
                             .ToList();
 
-                        double rspAvgBranchOnTimePerDay = 0;
-                        double rspAvgLosPerDay = 0;
+                        var rspRoutes = group
+                            .Where(r =>
+                                r.User != null &&
+                                r.User.UserRole.HasValue &&
+                                r.User.UserRole == global::User.Role.Rsp)
+                            .ToList();
 
-                        if (rspRoutes.Count > 0 && totalDaysInRange > 0)
+                        var totalVolume = normalRoutes.Sum(r => r.Volumen);
+                        var totalStops = normalRoutes.Sum(r => r.DeliveryStops);
+                        var totalAttempts = normalRoutes.Sum(r => r.Attempts);
+                        var totalCnl = normalRoutes.Sum(r => r.CNL);
+
+                        double losPercentage = 0;
+
+                        // Si tiene ruta RSP con LOS, usar ese valor
+                        if (rspRoutes.Any(r => r.Los > 0))
                         {
-                            var rspTotalBranchOnTime = rspRoutes.Sum(r => (double)r.BranchOnTime);
-                            var rspTotalLos = rspRoutes.Sum(r => (double)r.Los);
-                            rspAvgBranchOnTimePerDay = Math.Round(rspTotalBranchOnTime / totalDaysInRange, 2);
-                            rspAvgLosPerDay = Math.Round(rspTotalLos / totalDaysInRange, 2);
+                            losPercentage = rspRoutes
+                                .Where(r => r.Los > 0)
+                                .Average(r => (double)r.Los);
+                        }
+                        else
+                        {
+                            // Si no hay RSP, calcular LOS para warehouses normales
+                            losPercentage = totalVolume > 0
+                                ? ((double)(totalVolume - (totalAttempts + totalCnl)) / totalVolume) * 100
+                                : 0;
                         }
 
-                        var totalLosAll = group.Sum(r => (double)r.Los);
-                        var totalBranchAll = group.Sum(r => (double)r.BranchOnTime);
+                        double branchOnTimePercentage = 0;
 
-                        var avgLosPerWorkedDay = daysWorked > 0 ? Math.Round(totalLosAll / daysWorked, 2) : 0;
-                        var avgLosPerCalendarDay = totalDaysInRange > 0 ? Math.Round(totalLosAll / totalDaysInRange, 2) : 0;
+                        // Branch On Time solo desde RSP si existe
+                        if (rspRoutes.Any(r => r.BranchOnTime > 0))
+                        {
+                            branchOnTimePercentage = rspRoutes
+                                .Where(r => r.BranchOnTime > 0)
+                                .Average(r => (double)r.BranchOnTime);
+                        }
 
                         return new
                         {
                             WarehouseId = group.Key,
-                            TotalDrivers = group.Select(r => r.UserId).Distinct().Count(),
-                            TotalVolume = group.Sum(r => r.Volumen),
-                            TotalAttempts = group.Sum(r => r.Attempts),
-                            TotalStops = group.Sum(r => r.DeliveryStops),
-                            TotalOnTimeDeliveries = group.Sum(r => r.CustomerOnTime),
-                            TotalBranchOnTime = totalBranchAll,
-                            TotalCNL = group.Sum(r => r.CNL),
 
-                            TotalDaysWorked = daysWorked,
+                            TotalDrivers = normalRoutes
+                                .Where(r => r.UserId != null)
+                                .Select(r => r.UserId)
+                                .Distinct()
+                                .Count(),
+
+                            TotalVolume = totalVolume,
+                            TotalAttempts = totalAttempts,
+                            TotalStops = totalStops,
+                            TotalOnTimeDeliveries = normalRoutes.Sum(r => r.CustomerOnTime),
+                            TotalBranchOnTime = branchOnTimePercentage,
+                            TotalCNL = totalCnl,
+
+                            TotalDaysWorked = normalRoutes
+                                .Where(r => r.Volumen > 0 || r.DeliveryStops > 0)
+                                .Select(r => r.Date.Date)
+                                .Distinct()
+                                .Count(),
+
                             TotalDaysInRange = totalDaysInRange,
 
-                            // Claros
-                            AvgLOSPerWorkedDay = avgLosPerWorkedDay,
-                            AvgLOSPerCalendarDay = avgLosPerCalendarDay,
-                            RspAvgBranchOnTimePerDay = rspAvgBranchOnTimePerDay,
-                            RspAvgLosPerDay = rspAvgLosPerDay,
+                            // Valores finales correctos para Angular
+                            LosPercentage = Math.Round(losPercentage, 2),
+                            AverageLOSPerDay = Math.Round(losPercentage, 2),
+                            SumLOS = Math.Round(losPercentage, 2),
 
-                            // Legacy para tu UI actual
-                            SumLOS = rspAvgLosPerDay,
-                            AverageLOSPerDay = avgLosPerWorkedDay,
-                            AverageBranchOnTimePerDay = rspAvgBranchOnTimePerDay
+                            AverageBranchOnTimePerDay = Math.Round(branchOnTimePercentage, 2),
+                            RspAvgBranchOnTimePerDay = Math.Round(branchOnTimePercentage, 2)
                         };
                     })
                     .OrderByDescending(stat => stat.AverageLOSPerDay)
                     .ToList();
 
                 if (warehouseStatistics.Count == 0)
-                    return Ok(new { success = false, message = "No records were found for the selected date range.", data = Array.Empty<object>() });
+                {
+                    return Ok(new
+                    {
+                        success = false,
+                        message = "No records were found for the selected date range.",
+                        data = Array.Empty<object>()
+                    });
+                }
 
-                return Ok(new { success = true, data = warehouseStatistics });
+                return Ok(new
+                {
+                    success = true,
+                    data = warehouseStatistics
+                });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = "An error occurred while processing the request.", error = ex.Message });
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "An error occurred while processing the request.",
+                    error = ex.Message,
+                    innerException = ex.InnerException?.Message
+                });
             }
         }
 
-
+        [Authorize]
         [HttpGet("driverStatistics/{date?}")]
         public async Task<IActionResult> GetDriverStatistics(string? date, [FromQuery] string tz = "Central Standard Time")
         {
@@ -631,7 +814,7 @@ namespace TToApp.Controllers
             return Ok(warehouseStatistics);
         }
 
-
+        [Authorize]
         [HttpGet("driverIncome/{id:int}")]
         public async Task<IActionResult> GetDriverIncome(int id)
         {
@@ -683,6 +866,7 @@ namespace TToApp.Controllers
             }
         }
 
+        [Authorize]
         [HttpGet("driverIncome/{id:int}/byPayPeriod")]
         public async Task<IActionResult> GetDriverIncomeByPayPeriod(
             int id,
@@ -812,6 +996,7 @@ namespace TToApp.Controllers
             return Ok(result);
         }
 
+        [Authorize]
         [HttpGet("runPayroll")]
         public async Task<IActionResult> EnviarCorreosResumenAsync(DateTime? startDate, DateTime? endDate)
         {
@@ -940,7 +1125,27 @@ namespace TToApp.Controllers
         public string Message { get; set; }
     }
 
-   
+    public class DashboardKpisDto
+    {
+        public decimal TotalGross { get; set; }
+        public decimal GrossPercent { get; set; }
+
+        public int ActiveWarehouses { get; set; }
+        public int WarehousesThisMonth { get; set; }
+
+        public int StopsYesterday { get; set; }
+        public decimal StopsPercent { get; set; }
+
+        public decimal AvgLosYesterday { get; set; }
+        public decimal LosPercent { get; set; }
+
+        public int RoutesYesterday { get; set; }
+        public int UnassignedRoutes { get; set; }
+        public int CnlYesterday { get; set; }
+        public int ActiveDriversYesterday { get; set; }
+    }
+
+
 }
 
 

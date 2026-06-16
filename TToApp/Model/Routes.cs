@@ -29,7 +29,7 @@ namespace TToApp.Model
         public int? UserId {  get; set; }
         [ForeignKey("UserId")]
         public User? User { get; set; }
-
+        public string? DriverIdentificationNumber { get; set; }
         public int Attempts { get; set; }
 
         public RouteStatus? routeStatus { get; set; }

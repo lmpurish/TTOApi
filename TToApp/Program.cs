@@ -11,14 +11,15 @@ using System.Text.Json.Serialization;
 using TToApp.Helpers;
 using TToApp.Model;
 using TToApp.Services;
+using TToApp.Services.Audit;
 using TToApp.Services.Auth;
+using TToApp.Services.CommunicationRecipient;
+using TToApp.Services.EarlyWarnings;
 using TToApp.Services.Notifications;
 using TToApp.Services.Payroll;
 using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
 using TToApp.Services.Vehicle;
-using TToApp.Services.EarlyWarnings;
-using TToApp.Services.CommunicationRecipient;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -121,7 +122,8 @@ builder.Services.AddScoped<IVehicleService, VehicleService>();
 builder.Services.AddScoped<IEarlyWarningService, EarlyWarningService>();
 builder.Services.AddScoped<IEarlyWarningNotificationService, EarlyWarningNotificationService>();
 builder.Services.AddScoped<ICommunicationRecipientService, CommunicationRecipientService>();
-
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<AuditService>();
 
 // Auth / JWT
 var key = Encoding.ASCII.GetBytes(builder.Configuration["JwtSettings:Secret"]);

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Playwright;
 using Microsoft.VisualStudio.Web.CodeGenerators.Mvc.Templates.Blazor;
 using Microsoft.VisualStudio.Web.CodeGenerators.Mvc.Templates.BlazorIdentity.Pages.Manage;
 using System;
@@ -15,12 +16,15 @@ using System.Linq;
 using System.Security.Claims;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using TToApp.Constants;
 using TToApp.DTOs;
 using TToApp.Model;
-
+using TToApp.Services.Audit;
+using UglyToad.PdfPig;
 
 
 
@@ -33,12 +37,13 @@ namespace TToApp.Controllers
         private readonly ApplicationDbContext _context;
         private readonly EmailService _emailService;
         private readonly INotificationService _notificationService;
-
-        public RoutesController(ApplicationDbContext context, EmailService emailService, INotificationService notificationService)
+        private readonly AuditService _auditService;
+        public RoutesController(ApplicationDbContext context, EmailService emailService, INotificationService notificationService, AuditService auditService)
         {
             _context = context;
             _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
             _notificationService = notificationService;
+            _auditService = auditService;
         }
 
         // GET: api/Routes
@@ -162,37 +167,50 @@ namespace TToApp.Controllers
         public async Task<IActionResult> AssignRoutes([FromBody] List<RouteUpdateDto> routeUpdates)
         {
             var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (!int.TryParse(userIdStr, out _))
+            if (!int.TryParse(userIdStr, out var currentUserId))
                 return Unauthorized(new { message = "Invalid or missing user." });
 
             if (routeUpdates == null || routeUpdates.Count == 0)
                 return BadRequest(new { message = "No routes provided." });
 
             var ids = routeUpdates.Select(x => x.Id).Distinct().ToList();
-            var routes = await _context.Routes.Where(r => ids.Contains(r.Id)).ToListAsync();
+
+            var routes = await _context.Routes
+                .Where(r => ids.Contains(r.Id))
+                .ToListAsync();
+
             if (routes.Count == 0)
                 return NotFound(new { message = "No matching routes found." });
 
             var updatesById = routeUpdates.ToDictionary(x => x.Id);
             var updated = new List<object>();
+            var auditLogs = new List<(AuditLogDto Dto, object OldData, object NewData)>();
 
             foreach (var route in routes)
             {
                 var u = updatesById[route.Id];
                 bool changed = false;
 
-                // 1) APLICA PRIMERO EL USERID (permite desasignar en esta misma petición)
+                var oldData = new
+                {
+                    route.UserId,
+                    route.ZoneId,
+                    route.CNL,
+                    route.routeStatus,
+                    route.PaymentType,
+                    route.PriceRoute
+                };
+
                 if (route.UserId != u.UserId)
                 {
-                    route.UserId = u.UserId; // admite null
+                    route.UserId = u.UserId;
                     changed = true;
                 }
 
-                // 2) VALIDA/APLICA STATUS EN FUNCIÓN DEL USERID RESULTANTE
-                var requestedStatus = ParseRouteStatus(u.RouteStatus); // usa tu helper existente
+                var requestedStatus = ParseRouteStatus(u.RouteStatus);
+
                 if (requestedStatus.HasValue)
                 {
-                    // Con driver: solo Assigned, InProgress o Completed
                     if (route.UserId.HasValue &&
                         requestedStatus is not (RouteStatus.Assigned or RouteStatus.InProgress or RouteStatus.Completed))
                     {
@@ -204,7 +222,6 @@ namespace TToApp.Controllers
                         });
                     }
 
-                    // Sin driver: NO permitir Assigned/InProgress/Completed
                     if (!route.UserId.HasValue &&
                         requestedStatus is (RouteStatus.Assigned or RouteStatus.InProgress or RouteStatus.Completed))
                     {
@@ -223,14 +240,18 @@ namespace TToApp.Controllers
                     }
                 }
 
-                // 3) RESTO DE CAMPOS
-                if (route.ZoneId != u.ZoneId) { route.ZoneId = u.ZoneId; changed = true; }
+                if (route.ZoneId != u.ZoneId)
+                {
+                    route.ZoneId = u.ZoneId;
+                    changed = true;
+                }
+
                 if (route.CNL != u.CNL)
                 {
                     route.CNL = (int)u.CNL;
                     changed = true;
                 }
-                // Payment Type
+
                 if (!string.IsNullOrWhiteSpace(u.PaymentType))
                 {
                     var normalizedPaymentType = u.PaymentType.Trim();
@@ -279,8 +300,19 @@ namespace TToApp.Controllers
                         }
                     }
                 }
+
                 if (changed)
                 {
+                    var newData = new
+                    {
+                        route.UserId,
+                        route.ZoneId,
+                        route.CNL,
+                        route.routeStatus,
+                        route.PaymentType,
+                        route.PriceRoute
+                    };
+
                     updated.Add(new
                     {
                         route.Id,
@@ -291,10 +323,28 @@ namespace TToApp.Controllers
                         paymentType = route.PaymentType,
                         priceRoute = route.PriceRoute
                     });
+
+                    auditLogs.Add((
+                        new AuditLogDto
+                        {
+                            UserId = currentUserId,
+                            Action = AuditLogAction.RouteUpdated,
+                            Entity = "Route",
+                            EntityId = route.Id.ToString(),
+                            Description = $"Route {route.Id} updated"
+                        },
+                        oldData,
+                        newData
+                    ));
                 }
             }
 
             await _context.SaveChangesAsync();
+
+            foreach (var log in auditLogs)
+            {
+                await _auditService.LogChangeAsync(log.Dto, log.OldData, log.NewData);
+            }
 
             return Ok(new
             {
@@ -315,24 +365,58 @@ namespace TToApp.Controllers
 
             await using var tx = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
 
-            // ⚠️ RouteStatus es enum -> columna int en DB
-            var available = (int)RouteStatus.Available;
-            var assigned = (int)RouteStatus.Assigned;
+            var oldData = await _context.Routes
+                .AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.UserId,
+                    r.routeStatus,
+                    r.WarehouseId,
+                    r.ZoneId,
+                    r.Date
+                })
+                .FirstOrDefaultAsync();
 
-            // Toma la ruta solo si sigue disponible y sin usuario
             var rows = await _context.Routes
-          .Where(r => r.Id == id && r.UserId == null && (r.routeStatus == RouteStatus.Available || r.routeStatus == RouteStatus.Future))
-          .ExecuteUpdateAsync(upd => upd
-          .SetProperty(r => r.UserId, userId)
-          .SetProperty(r => r.routeStatus, RouteStatus.Assigned));
+                .Where(r => r.Id == id
+                    && r.UserId == null
+                    && (r.routeStatus == RouteStatus.Available || r.routeStatus == RouteStatus.Future))
+                .ExecuteUpdateAsync(upd => upd
+                    .SetProperty(r => r.UserId, userId)
+                    .SetProperty(r => r.routeStatus, RouteStatus.Assigned));
 
             if (rows == 1)
             {
                 await tx.CommitAsync();
 
                 var route = await _context.Routes
+                    .AsNoTracking()
                     .Include(r => r.User)
                     .FirstOrDefaultAsync(r => r.Id == id);
+
+                await _auditService.LogChangeAsync(
+                    new AuditLogDto
+                    {
+                        UserId = userId,
+                        Action = AuditLogAction.RouteAssigned,
+                        Entity = "Route",
+                        EntityId = id.ToString(),
+                        Description = $"Route {id} claimed by driver {userId}",
+                        WarehouseId = route?.WarehouseId
+                    },
+                    oldData,
+                    new
+                    {
+                        route?.Id,
+                        route?.UserId,
+                        route?.routeStatus,
+                        route?.WarehouseId,
+                        route?.ZoneId,
+                        route?.Date
+                    }
+                );
 
                 return Ok(new
                 {
@@ -343,9 +427,9 @@ namespace TToApp.Controllers
 
             await tx.RollbackAsync();
 
-            // Mensajes claros
             var exists = await _context.Routes.AnyAsync(r => r.Id == id);
-            if (!exists) return NotFound(new { message = "Route not found." });
+            if (!exists)
+                return NotFound(new { message = "Route not found." });
 
             return Conflict(new { message = "Route has already been claimed or is not available." });
         }
@@ -360,7 +444,20 @@ namespace TToApp.Controllers
 
             await using var tx = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable);
 
-            // Solo desasigna si: es la misma ruta, el mismo usuario y estado EXACTO = Assigned
+            var oldData = await _context.Routes
+                .AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.UserId,
+                    r.routeStatus,
+                    r.WarehouseId,
+                    r.ZoneId,
+                    r.Date
+                })
+                .FirstOrDefaultAsync();
+
             var rows = await _context.Routes
                 .Where(r => r.Id == id
                             && r.UserId == userId
@@ -377,6 +474,28 @@ namespace TToApp.Controllers
                     .AsNoTracking()
                     .FirstOrDefaultAsync(r => r.Id == id);
 
+                await _auditService.LogChangeAsync(
+                    new AuditLogDto
+                    {
+                        UserId = userId,
+                        Action = AuditLogAction.RouteUpdated,
+                        Entity = "Route",
+                        EntityId = id.ToString(),
+                        Description = $"Route {id} unassigned by driver {userId}",
+                        WarehouseId = route?.WarehouseId
+                    },
+                    oldData,
+                    new
+                    {
+                        route?.Id,
+                        route?.UserId,
+                        route?.routeStatus,
+                        route?.WarehouseId,
+                        route?.ZoneId,
+                        route?.Date
+                    }
+                );
+
                 return Ok(new
                 {
                     message = "Route was unassigned successfully.",
@@ -386,7 +505,6 @@ namespace TToApp.Controllers
 
             await tx.RollbackAsync();
 
-            // Explica por qué no se pudo
             var info = await _context.Routes
                 .AsNoTracking()
                 .Where(r => r.Id == id)
@@ -479,10 +597,12 @@ namespace TToApp.Controllers
             return _context.Routes.Any(e => e.Id == id);
         }
 
-
+        [Authorize]
         [HttpPost("upload/{warehouseId}")]
         public async Task<IActionResult> UploadXmlFile(IFormFile file, int warehouseId)
         {
+            var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int.TryParse(userIdStr, out var currentUserId);
             if (file == null || file.Length == 0 || Path.GetExtension(file.FileName).ToLower() != ".xml")
                 return BadRequest(new { message = "Debe subir un archivo XML válido con extensión .xml." });
 
@@ -578,10 +698,14 @@ namespace TToApp.Controllers
 
 
                 // IMPORTANTE: filtrar por warehouse
-                var existingRoutes = await _context.Routes
-                    .Where(r => r.Date.Date == reportDate.Date && r.WarehouseId == warehouseId)
-                    .Select(r => r.UserId)
-                    .ToHashSetAsync();
+                var existingRouteKeys = await _context.Routes
+                     .Where(r => r.Date.Date == reportDate.Date && r.WarehouseId == warehouseId)
+                     .Select(r => new
+                     {
+                         r.UserId,
+                         r.DriverIdentificationNumber
+                     })
+                     .ToListAsync();
 
                 var routesToSave = new List<Routes>();
                 var Packages = new List<Packages>();
@@ -593,16 +717,22 @@ namespace TToApp.Controllers
                     int volume3 = SafeParseInt(detail.Attribute("Volume3")?.Value);
                     int deliveryPieces = SafeParseInt(detail.Attribute("Delivery_Pieces3")?.Value);
                     int attempts = SafeParseInt(detail.Attribute("Incomplete_D5")?.Value);
-                    int volumen = deliveryPieces > 0 ? deliveryPieces : volume3;
+                    int volumen = volume3 > 0 ? volume3 : deliveryPieces;
                     int? userId = null;
 
                     if (userIds.TryGetValue((spValue, warehouseId), out int foundUserId))
                     {
                         userId = foundUserId;
-
-                        if (existingRoutes.Contains(foundUserId))
-                            continue;
                     }
+
+                    bool routeAlreadyExists = existingRouteKeys.Any(r =>
+                        (userId != null && r.UserId == userId) ||
+                        (!string.IsNullOrWhiteSpace(r.DriverIdentificationNumber) &&
+                         r.DriverIdentificationNumber == spValue)
+                    );
+
+                    if (routeAlreadyExists)
+                        continue;
 
                     double los = SafeParseDouble(detail.Attribute("LOS3")?.Value) * 100;
 
@@ -624,17 +754,15 @@ namespace TToApp.Controllers
                     {
                         Date = reportDate,
                         DeliveryStops = volumen > 0
-                            ? SafeParseInt(detail.Attribute("Delivery_Stops3")?.Value)
-                            : 0,
+                        ? SafeParseInt(detail.Attribute("Delivery_Stops3")?.Value)
+                        : 0,
 
                         Volumen = volumen,
                         Los = los,
                         CustomerOnTime = customerOnTime,
 
-                        // Aquí está la clave:
-                        // Si encontró el SP, asigna conductor.
-                        // Si no lo encontró, queda null.
                         UserId = userId,
+                        DriverIdentificationNumber = spValue,
 
                         routeStatus = RouteStatus.Completed,
                         Attempts = attempts,
@@ -948,6 +1076,38 @@ namespace TToApp.Controllers
                     }
                 }
 
+                await _auditService.LogAsync(new AuditLogDto
+                {
+                    UserId = currentUserId,
+                    Action = AuditLogAction.XmlImport,
+                    Entity = "Routes",
+
+                    Description =
+                        $"XML imported successfully. Warehouse={warehouseId}, " +
+                        $"RoutesCreated={routesToSave.Count}, " +
+                        $"PackagesCreated={Packages.Count}, " +
+                        $"DriversNotFound={notFoundInUsers.Count}",
+
+                    NewValue = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        FileName = file.FileName,
+                        WarehouseId = warehouseId,
+                        ReportDate = reportDate,
+
+                        RoutesCreated = routesToSave.Count,
+                        PackagesCreated = Packages.Count,
+
+                        DriversNotFound = notFoundInUsers,
+
+                        Rsp = new
+                        {
+                            rsp.Id,
+                            rsp.IdentificationNumber,
+                            BranchOnTime = branchOnTimeForRSP,
+                            Los = LosForRSP
+                        }
+                    })
+                });
                 return Ok(new
                 {
                     message = $"{routesToSave.Count} registros guardados/actualizados en Routes, incluyendo el RSP.",
@@ -1013,15 +1173,18 @@ namespace TToApp.Controllers
 
             return Ok(results);
         }
+        [Authorize]
         [HttpPost]
         public async Task<IActionResult> PostRoutes(RoutesDto routesDto)
         {
             if (routesDto == null)
                 return BadRequest("Datos inválidos.");
 
+            var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int.TryParse(userIdStr, out var userId);
+
             try
             {
-                // Crear la ruta
                 var routes = new Routes
                 {
                     Date = routesDto.Date,
@@ -1031,11 +1194,30 @@ namespace TToApp.Controllers
                     routeStatus = RouteStatus.Created,
                     PriceRoute = routesDto.PriceRoute,
                     PaymentType = routesDto.paymentType
-
                 };
 
                 _context.Routes.Add(routes);
                 await _context.SaveChangesAsync();
+
+                await _auditService.LogAsync(new AuditLogDto
+                {
+                    UserId = userId,
+                    Action = AuditLogAction.RouteCreated,
+                    Entity = "Route",
+                    EntityId = routes.Id.ToString(),
+                    Description = $"Route {routes.Id} created manually",
+                    NewValue = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        routes.Id,
+                        routes.Date,
+                        routes.Volumen,
+                        routes.DeliveryStops,
+                        routes.ZoneId,
+                        routes.routeStatus,
+                        routes.PriceRoute,
+                        routes.PaymentType
+                    })
+                });
 
                 return Ok(new { message = "Route added successfully" });
             }
@@ -1045,7 +1227,7 @@ namespace TToApp.Controllers
                 return StatusCode(500, "Error interno del servidor.");
             }
         }
-
+        [Authorize]
         [HttpPost("{id:int}/{actionSegment}")]
         public async Task<IActionResult> ChangeStatus(int id, string actionSegment)
         {
@@ -1209,7 +1391,7 @@ namespace TToApp.Controllers
 
         // ===== Helpers de Claims =====
 
-
+        [Authorize]
         [HttpGet("available-routes")]
         public async Task<ActionResult<IEnumerable<object>>> GetAvailableRoutes()
         {
@@ -1313,11 +1495,14 @@ namespace TToApp.Controllers
         [Authorize]
         [HttpPost("import-UniUni-DailyRoutes")]
         public async Task<IActionResult> ImportDailyRoutes(
-            [FromForm] ImportDailyRoutesRequest req,
-            CancellationToken ct)
+    [FromForm] ImportDailyRoutesRequest req,
+    CancellationToken ct)
         {
             if (req.File == null || req.File.Length == 0)
                 return BadRequest(new { Message = "File required." });
+
+            var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int.TryParse(userIdStr, out var currentUserId);
 
             // 1) Leer Excel
             using var ms = new MemoryStream();
@@ -1363,12 +1548,15 @@ namespace TToApp.Controllers
                 var cell = row.Cell(i);
                 if (cell.IsEmpty()) return null;
                 if (cell.DataType == XLDataType.Number) return cell.GetDouble();
-                return double.TryParse(cell.GetString().Trim(),
+
+                return double.TryParse(
+                    cell.GetString().Trim(),
                     System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var v
+                ) ? v : null;
             }
 
-            // 3) Precargar usuarios por IdentificationNumber (sin filtro de warehouse)
             var users = await _context.Users
                 .AsNoTracking()
                 .Where(u => !string.IsNullOrEmpty(u.IdentificationNumber))
@@ -1379,7 +1567,6 @@ namespace TToApp.Controllers
                 .GroupBy(u => u.IdentificationNumber!.Trim())
                 .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
 
-            // 4) Leer filas
             var lastRow = ws.LastRowUsed()?.RowNumber() ?? 1;
             var created = 0;
             var updated = 0;
@@ -1394,9 +1581,18 @@ namespace TToApp.Controllers
                 var row = ws.Row(r);
                 var driverId = S(row, "driver_id");
                 var date = D(row, "date");
-                if (date == null) continue;
 
-                rawRows.Add((driverId, date.Value.Date, I(row, "total_order_cnt"), I(row, "first_order_cnt"), Dbl(row, "total_delivery_price")));
+                if (date == null)
+                    continue;
+
+                rawRows.Add((
+                    driverId,
+                    date.Value.Date,
+                    I(row, "total_order_cnt"),
+                    I(row, "first_order_cnt"),
+                    Dbl(row, "total_delivery_price")
+                ));
+
                 if (date.Value < minDate) minDate = date.Value;
                 if (date.Value > maxDate) maxDate = date.Value;
             }
@@ -1404,16 +1600,16 @@ namespace TToApp.Controllers
             if (rawRows.Count == 0)
                 return BadRequest(new { Message = "No valid rows found." });
 
-            // 5) Precargar rutas existentes en el rango
             var existingRoutes = await _context.Routes
                 .Where(r => r.WarehouseId == req.WarehouseId
-                         && r.Date >= minDate && r.Date <= maxDate.AddDays(1))
+                         && r.Date >= minDate
+                         && r.Date <= maxDate.AddDays(1))
                 .ToListAsync(ct);
 
-            // 6) Crear o actualizar rutas (una por driver+date)
             foreach (var row in rawRows)
             {
                 int? userId = null;
+
                 if (!string.IsNullOrWhiteSpace(row.DriverId))
                 {
                     if (userByIdNumber.TryGetValue(row.DriverId, out var uid))
@@ -1429,38 +1625,72 @@ namespace TToApp.Controllers
 
                 if (existing != null)
                 {
-                    existing.Volumen      = row.Volume;
+                    existing.Volumen = row.Volume;
                     existing.DeliveryStops = row.Stops;
-                    existing.PriceRoute   = row.Price;
+                    existing.PriceRoute = row.Price;
                     updated++;
                 }
                 else
                 {
                     _context.Routes.Add(new Routes
                     {
-                        WarehouseId    = req.WarehouseId,
-                        UserId         = userId,
-                        Date           = row.Date,
-                        Volumen        = row.Volume,
-                        DeliveryStops  = row.Stops,
-                        CNL            = 0,
-                        Attempts       = 0,
-                        routeStatus    = RouteStatus.Completed,
-                        PaymentType    = Model.PaymentType.PerRoute,
-                        PriceRoute     = row.Price
+                        WarehouseId = req.WarehouseId,
+                        UserId = userId,
+                        Date = row.Date,
+                        Volumen = row.Volume,
+                        DeliveryStops = row.Stops,
+                        CNL = 0,
+                        Attempts = 0,
+                        routeStatus = RouteStatus.Completed,
+                        PaymentType = Model.PaymentType.PerRoute,
+                        PriceRoute = row.Price
                     });
+
                     created++;
                 }
             }
 
             await _context.SaveChangesAsync(ct);
 
+            var distinctDriverNotFound = driverNotFound
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            await _auditService.LogAsync(new AuditLogDto
+            {
+                UserId = currentUserId,
+                Action = AuditLogAction.ExcelImport,
+                Entity = "Routes",
+                Description =
+                    $"UniUni Daily Routes imported. Warehouse={req.WarehouseId}, " +
+                    $"Created={created}, Updated={updated}, Rows={rawRows.Count}, " +
+                    $"DriversNotFound={distinctDriverNotFound.Count}",
+
+                WarehouseId = req.WarehouseId,
+
+                NewValue = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    FileName = req.File.FileName,
+                    WarehouseId = req.WarehouseId,
+                    Worksheet = ws.Name,
+                    DateRange = new
+                    {
+                        MinDate = minDate,
+                        MaxDate = maxDate
+                    },
+                    Created = created,
+                    Updated = updated,
+                    TotalRows = rawRows.Count,
+                    DriversNotFound = distinctDriverNotFound
+                })
+            });
+
             return Ok(new
             {
                 created,
                 updated,
                 totalRows = rawRows.Count,
-                driverNotFound = driverNotFound.Distinct().ToList()
+                driverNotFound = distinctDriverNotFound
             });
         }
 
@@ -1474,17 +1704,18 @@ namespace TToApp.Controllers
             if (req.File == null || req.File.Length == 0)
                 return BadRequest(new { Message = "Archivo requerido." });
 
+            var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int.TryParse(userIdStr, out var currentUserId);
+
             var warehouseId = req.WarehouseId;
 
-            // 1) Leer excel
             using var ms = new MemoryStream();
             await req.File.CopyToAsync(ms, ct);
             ms.Position = 0;
 
             using var wb = new XLWorkbook(ms);
-            var ws = wb.Worksheets.First(); // normalmente "result"
+            var ws = wb.Worksheets.First();
 
-            // 2) Headers -> índice (AQUÍ es donde nace headerMap)
             var headerRow = ws.Row(1);
             var headerMap = headerRow.CellsUsed()
                 .ToDictionary(
@@ -1492,15 +1723,14 @@ namespace TToApp.Controllers
                     c => c.Address.ColumnNumber,
                     StringComparer.OrdinalIgnoreCase);
 
-            // Helpers que dependen de headerMap (DESPUÉS de headerMap)
             string S(IXLRow row, string col) =>
                 headerMap.TryGetValue(col, out var i) ? row.Cell(i).GetString().Trim() : "";
 
             DateTime? D(IXLRow row, string col)
             {
                 if (!headerMap.TryGetValue(col, out var i)) return null;
-                var cell = row.Cell(i);
 
+                var cell = row.Cell(i);
                 if (cell.IsEmpty()) return null;
 
                 if (cell.DataType == XLDataType.DateTime)
@@ -1517,15 +1747,12 @@ namespace TToApp.Controllers
                 var cell = row.Cell(i);
                 if (cell.IsEmpty()) return null;
 
-                // Si viene numérico
                 if (cell.DataType == XLDataType.Number)
                     return Convert.ToDecimal(cell.GetDouble());
 
-                // Si viene string
                 var s = cell.GetString()?.Trim();
                 if (string.IsNullOrWhiteSpace(s)) return null;
 
-                // soporte "1,23" o "1.23"
                 s = s.Replace(",", ".");
 
                 return decimal.TryParse(
@@ -1536,7 +1763,6 @@ namespace TToApp.Controllers
                 ) ? val : null;
             }
 
-            // 3) Leer filas válidas
             var lastRow = ws.LastRowUsed()?.RowNumber() ?? 1;
             var rawRows = new List<RouteParcelRow>();
 
@@ -1552,8 +1778,8 @@ namespace TToApp.Controllers
                     string.IsNullOrWhiteSpace(routeCode) ||
                     planDate == null)
                     continue;
-                var statusEnum = MapPackageStatus(S(row, "FinalStatus"));
 
+                var statusEnum = MapPackageStatus(S(row, "FinalStatus"));
 
                 rawRows.Add(new RouteParcelRow
                 {
@@ -1570,9 +1796,8 @@ namespace TToApp.Controllers
                     City = S(row, "City"),
                     State = S(row, "State"),
                     Zip = S(row, "ZipCode"),
-                    Status = statusEnum,
 
-                    // ✅ Peso (NO weightType)
+                    Status = statusEnum,
                     Weight = Dec(row, "Weight")
                 });
             }
@@ -1583,7 +1808,6 @@ namespace TToApp.Controllers
             var minDate = rawRows.Min(x => x.Date);
             var maxDate = rawRows.Max(x => x.Date);
 
-            // 4) Precargar usuarios (drivers) y construir mapa por nombre normalizado
             var users = await _context.Users
                 .AsNoTracking()
                 .Select(u => new
@@ -1595,16 +1819,19 @@ namespace TToApp.Controllers
                 })
                 .ToListAsync(ct);
 
-            var filteredUsers = users.Where(u => u.WarehouseId == warehouseId).ToList();
+            var filteredUsers = users
+                .Where(u => u.WarehouseId == warehouseId)
+                .ToList();
 
             var userMap = filteredUsers
-                .GroupBy(u => NormName($"{u.Name} {u.LastName}"))
-                .ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList(), StringComparer.OrdinalIgnoreCase);
+                .GroupBy(u => NormalizeDriverFullName($"{u.Name} {u.LastName}"))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(x => x.Id).ToList(),
+                    StringComparer.OrdinalIgnoreCase);
 
-            // 5) Agrupar por ruta (RouteCode + Date)
             var groups = rawRows.GroupBy(x => new { x.RouteCode, x.Date });
 
-            // 6) Precargar rutas existentes en rango
             var existingRoutes = await _context.Routes
                 .Where(r => r.WarehouseId == warehouseId
                          && r.Date.Date >= minDate
@@ -1629,7 +1856,6 @@ namespace TToApp.Controllers
                 var routeCode = g.Key.RouteCode;
                 var date = g.Key.Date;
 
-                // ✅ VOLUMEN = paquetes (trackings únicos) por ruta
                 var volume = g
                     .Select(x => x.Tracking)
                     .Where(t => !string.IsNullOrWhiteSpace(t))
@@ -1638,28 +1864,35 @@ namespace TToApp.Controllers
 
                 var delivered = g.Where(x => x.Status == PackageStatus.CL);
 
-                // ✅ STOPS = tu lógica (NO la cambio): StopKey con BuildStopKey(x)
                 var stopGroups = delivered
-                    .Select(x => new { x.Tracking, StopKey = BuildStopKey(x) })
-                    .Where(x => !string.IsNullOrWhiteSpace(x.Tracking) && !string.IsNullOrWhiteSpace(x.StopKey))
+                    .Select(x => new
+                    {
+                        x.Tracking,
+                        StopKey = BuildStopKey(x)
+                    })
+                    .Where(x => !string.IsNullOrWhiteSpace(x.Tracking) &&
+                                !string.IsNullOrWhiteSpace(x.StopKey))
                     .GroupBy(x => x.StopKey, StringComparer.OrdinalIgnoreCase);
 
                 var stops = stopGroups.Count();
 
-                // (Opcional: solo para métricas, NO cambia tu stop)
                 var multiPackageStops = stopGroups.Count(sg =>
-                    sg.Select(z => z.Tracking).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1);
+                    sg.Select(z => z.Tracking)
+                      .Distinct(StringComparer.OrdinalIgnoreCase)
+                      .Count() > 1);
 
                 var extraPackagesInMultiStops = stopGroups.Sum(sg =>
                 {
-                    var c = sg.Select(z => z.Tracking).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                    return c > 1 ? (c - 1) : 0;
+                    var c = sg.Select(z => z.Tracking)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count();
+
+                    return c > 1 ? c - 1 : 0;
                 });
 
                 var cnl = g.Count(x => x.Status == PackageStatus.CNL);
                 var attempts = g.Count(x => x.Status == PackageStatus.RTN);
 
-                // DriverName (toma el primero no vacío dentro del grupo)
                 var driverRaw = g.Select(x => x.DriverNameRaw)
                     .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? "";
 
@@ -1689,7 +1922,6 @@ namespace TToApp.Controllers
                     }
                     else
                     {
-                        // 🔹 intentar quitando middle name
                         var withoutMiddle = NormName(RemoveMiddleName(driverRaw));
 
                         if (userMap.TryGetValue(withoutMiddle, out var ids2))
@@ -1745,7 +1977,7 @@ namespace TToApp.Controllers
                         RouteCode = routeCode,
 
                         DeliveryStops = stops,
-                        Volumen = volume, // ✅ volumen correcto
+                        Volumen = volume,
                         CNL = cnl,
 
                         Los = 0,
@@ -1754,7 +1986,9 @@ namespace TToApp.Controllers
 
                         Attempts = attempts,
                         PaymentType = PaymentType.PerStop,
-                        routeStatus = driverId.HasValue ? RouteStatus.Completed : RouteStatus.Pending,
+                        routeStatus = driverId.HasValue
+                            ? RouteStatus.Completed
+                            : RouteStatus.Pending,
                         UserId = driverId
                     };
 
@@ -1762,12 +1996,13 @@ namespace TToApp.Controllers
                     existingRoutes.Add(route);
                     createdRoutes++;
 
-                    if (driverId.HasValue) driverAssigned++;
+                    if (driverId.HasValue)
+                        driverAssigned++;
                 }
                 else
                 {
                     route.DeliveryStops = stops;
-                    route.Volumen = volume; // ✅ NO “stops”
+                    route.Volumen = volume;
                     route.CNL = cnl;
                     route.Attempts = attempts;
 
@@ -1785,15 +2020,12 @@ namespace TToApp.Controllers
                     updatedRoutes++;
                 }
 
-                // Si quieres devolver métricas opcionales por ruta, aquí podrías guardarlas
-                // (por ahora NO toco tu modelo Routes)
                 _ = multiPackageStops;
                 _ = extraPackagesInMultiStops;
             }
 
             await _context.SaveChangesAsync(ct);
 
-            // 7) Crear Packages (link con RoutesId)
             var routeLookup = existingRoutes
                 .Where(r => r.WarehouseId == warehouseId && r.RouteCode != null)
                 .ToDictionary(r => (r.RouteCode!, r.Date.Date), r => r.Id);
@@ -1864,6 +2096,56 @@ namespace TToApp.Controllers
 
             await _context.SaveChangesAsync(ct);
 
+            await _auditService.LogAsync(new AuditLogDto
+            {
+                UserId = currentUserId,
+                Action = AuditLogAction.RouteParcelImport,
+                Entity = "RouteParcelImport",
+
+                Description =
+                    $"Route Parcel Import completed. Warehouse={warehouseId}, " +
+                    $"RowsRead={rawRows.Count}, " +
+                    $"RoutesCreated={createdRoutes}, " +
+                    $"RoutesUpdated={updatedRoutes}, " +
+                    $"PackagesAdded={packagesAdded}, " +
+                    $"PackagesUpdated={packagesUpdated}, " +
+                    $"DriversAssigned={driverAssigned}, " +
+                    $"DriversNotFound={driverNotFound.Count}",
+
+                WarehouseId = warehouseId,
+
+                NewValue = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    FileName = req.File.FileName,
+                    WarehouseId = warehouseId,
+
+                    DateRange = new
+                    {
+                        MinDate = minDate,
+                        MaxDate = maxDate
+                    },
+
+                    RowsRead = rawRows.Count,
+
+                    RoutesCreated = createdRoutes,
+                    RoutesUpdated = updatedRoutes,
+
+                    PackagesAdded = packagesAdded,
+                    PackagesUpdated = packagesUpdated,
+                    SkippedNoRoute = skippedNoRoute,
+
+                    DriverAssignedRoutes = driverAssigned,
+
+                    DriverNotFound = driverNotFound
+                        .Take(100)
+                        .ToList(),
+
+                    DriverAmbiguous = driverAmbiguous
+                        .Take(100)
+                        .ToList()
+                })
+            });
+
             return Ok(new
             {
                 Message = "Import OK",
@@ -1873,6 +2155,8 @@ namespace TToApp.Controllers
                 RoutesCreated = createdRoutes,
                 RoutesUpdated = updatedRoutes,
                 PackagesAdded = packagesAdded,
+                PackagesUpdated = packagesUpdated,
+                SkippedNoRoute = skippedNoRoute,
 
                 DriverAssignedRoutes = driverAssigned,
                 DriverNotFound = driverNotFound.Take(50),
@@ -2279,6 +2563,9 @@ namespace TToApp.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest(new { message = "No file uploaded." });
 
+            var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int.TryParse(userIdStr, out var currentUserId);
+
             var warehouse = await _context.Warehouses
                 .FirstOrDefaultAsync(w => w.Id == warehouseId);
 
@@ -2314,9 +2601,7 @@ namespace TToApp.Controllers
                 if (cell.DataType == XLDataType.Number)
                     return Convert.ToInt32(cell.GetDouble());
 
-                var text = cell.GetString()
-                    .Trim()
-                    .Replace(",", "");
+                var text = cell.GetString().Trim().Replace(",", "");
 
                 if (int.TryParse(text, out var value))
                     return value;
@@ -2324,35 +2609,12 @@ namespace TToApp.Controllers
                 return 0;
             }
 
-            var dateCol = GetColumnIndex(
-                "Fecha de entrega",
-                "Delivery Date"
-            );
-
-            var driverIdCol = GetColumnIndex(
-                "ID del conductor",
-                "Driver ID"
-            );
-
-            var driverNameCol = GetColumnIndex(
-                "Nombre del conductor",
-                "Driver Name"
-            );
-
-            var routeCodeCol = GetColumnIndex(
-                "Nombre de la ruta",
-                "Route Name"
-            );
-
-            // ✅ Volumen viene de "Paquetes entregados"
-            var volumeCol = GetColumnIndex(
-                "Cantidad de paquetes entregados"
-            );
-
-            // ✅ DeliveryStops viene de "Paquetes entregados (precio estándar)"
-            var deliveryStopsCol = GetColumnIndex(
-               "Paquetes entregados (precio estándar)"
-            );
+            var dateCol = GetColumnIndex("Fecha de entrega", "Delivery Date");
+            var driverIdCol = GetColumnIndex("ID del conductor", "Driver ID");
+            var driverNameCol = GetColumnIndex("Nombre del conductor", "Driver Name");
+            var routeCodeCol = GetColumnIndex("Nombre de la ruta", "Route Name");
+            var volumeCol = GetColumnIndex("Cantidad de paquetes entregados");
+            var deliveryStopsCol = GetColumnIndex("Paquetes entregados (precio estándar)");
 
             if (dateCol == -1 ||
                 driverIdCol == -1 ||
@@ -2446,11 +2708,11 @@ namespace TToApp.Controllers
                         .FirstOrDefaultAsync(r =>
                             r.Date.Date == deliveryDate.Date &&
                             r.WarehouseId == warehouseId &&
-                            r.RouteCode == routeCode &&
-                            r.UserId == userId);
+                            r.RouteCode == routeCode);
 
                     if (existingRoute != null)
                     {
+                        existingRoute.UserId = userId ?? existingRoute.UserId;
                         existingRoute.Volumen = volumenPackages;
                         existingRoute.DeliveryStops = deliveryStops;
                         existingRoute.Attempts = 0;
@@ -2484,7 +2746,9 @@ namespace TToApp.Controllers
                             BranchOnTime = 100,
                             CNL = 0,
 
-                            routeStatus = RouteStatus.Completed,
+                            routeStatus = userId.HasValue
+                                ? RouteStatus.Completed
+                                : RouteStatus.PendingCompletion,
                             PaymentType = PaymentType.PerStop
                         });
 
@@ -2503,6 +2767,40 @@ namespace TToApp.Controllers
 
             await _context.SaveChangesAsync();
 
+            await _auditService.LogAsync(new AuditLogDto
+            {
+                UserId = currentUserId,
+                Action = AuditLogAction.SwiftXDspSummaryImport,
+                Entity = "Routes",
+                WarehouseId = warehouseId,
+                WarehouseName = $"{warehouse.Company} - {warehouse.City}",
+
+                Description =
+                    $"SwiftX DSP summary imported. Warehouse={warehouseId}, " +
+                    $"RowsRead={rowsRead}, RoutesCreated={routesCreated}, " +
+                    $"RoutesUpdated={routesUpdated}, DriversNotFound={driverNotFound.Count}, " +
+                    $"Errors={errors.Count}",
+
+                NewValue = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    FileName = file.FileName,
+                    WarehouseId = warehouseId,
+                    Warehouse = new
+                    {
+                        warehouse.Id,
+                        warehouse.Company,
+                        warehouse.City
+                    },
+                    RowsRead = rowsRead,
+                    RoutesCreated = routesCreated,
+                    RoutesUpdated = routesUpdated,
+                    DriversNotFoundCount = driverNotFound.Count,
+                    DriverNotFound = driverNotFound.Take(100).ToList(),
+                    ErrorsCount = errors.Count,
+                    Errors = errors.Take(100).ToList()
+                })
+            });
+
             return Ok(new
             {
                 message = "SwiftX DSP summary imported successfully.",
@@ -2515,8 +2813,648 @@ namespace TToApp.Controllers
                 errors
             });
         }
-    }
-    }
+    
+
+    [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]
+        [HttpPost("upload-route-manifest-pdf/{warehouseId:int}")]
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> UploadRouteManifestPdf(
+    [FromRoute] int warehouseId,
+    [FromForm] List<IFormFile> files,
+    CancellationToken ct)
+        {
+            if (files == null || files.Count == 0)
+                return BadRequest(new { message = "No files uploaded." });
+
+            var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int.TryParse(userIdStr, out var currentUserId);
+
+            var warehouse = await _context.Warehouses
+                .FirstOrDefaultAsync(w => w.Id == warehouseId, ct);
+
+            if (warehouse == null)
+                return NotFound(new { message = "Warehouse not found." });
+
+            var routesCreated = 0;
+            var routesUpdated = 0;
+            var packagesAdded = 0;
+            var packagesUpdated = 0;
+            var rowsRead = 0;
+
+            var driverNotFound = new List<object>();
+            var errors = new List<object>();
+
+            foreach (var file in files)
+            {
+                if (file == null || file.Length == 0)
+                    continue;
+
+                if (Path.GetExtension(file.FileName).ToLower() != ".pdf")
+                {
+                    errors.Add(new
+                    {
+                        file = file.FileName,
+                        message = "Invalid file type. Only PDF files are allowed."
+                    });
+                    continue;
+                }
+
+                try
+                {
+                    using var stream = new MemoryStream();
+                    await file.CopyToAsync(stream, ct);
+                    stream.Position = 0;
+
+                    var text = ExtractPdfText(stream);
+
+                    var routeDate = ExtractDate(text);
+                    var driverCode = ExtractDriver(text);
+
+                    if (routeDate == null || string.IsNullOrWhiteSpace(driverCode))
+                    {
+                        errors.Add(new
+                        {
+                            file = file.FileName,
+                            message = "Could not read Date or Driver from PDF."
+                        });
+                        continue;
+                    }
+
+                    var pdfRows = ExtractPackageRows(text);
+
+                    if (pdfRows.Count == 0)
+                    {
+                        errors.Add(new
+                        {
+                            file = file.FileName,
+                            message = "No valid package rows found."
+                        });
+                        continue;
+                    }
+
+                    rowsRead += pdfRows.Count;
+
+                    var user = await _context.Users
+                        .FirstOrDefaultAsync(u =>
+                            u.IdentificationNumber == driverCode &&
+                            u.WarehouseId == warehouseId,
+                            ct);
+
+                    if (user == null)
+                    {
+                        driverNotFound.Add(new
+                        {
+                            file = file.FileName,
+                            driverCode,
+                            date = routeDate.Value.ToString("yyyy-MM-dd")
+                        });
+                    }
+
+                    var trackingList = pdfRows
+                        .Where(x => !string.IsNullOrWhiteSpace(x.OrderId))
+                        .Select(x => x.OrderId.Trim())
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    var volume = trackingList.Count;
+
+                    var stops = pdfRows
+                        .Where(x => !string.IsNullOrWhiteSpace(x.Address))
+                        .Select(x => NormalizeAddress(x.Address))
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count();
+
+                    var existingRoute = await _context.Routes
+                        .FirstOrDefaultAsync(r =>
+                            r.WarehouseId == warehouseId &&
+                            r.Date.Date == routeDate.Value.Date &&
+                            r.RouteCode == driverCode,
+                            ct);
+
+                    Routes route;
+
+                    if (existingRoute == null)
+                    {
+                        route = new Routes
+                        {
+                            WarehouseId = warehouseId,
+                            Date = routeDate.Value.Date,
+
+                            RouteCode = driverCode,
+                            DriverIdentificationNumber = driverCode,
+                            UserId = user?.Id,
+
+                            Volumen = volume,
+                            DeliveryStops = stops,
+                            Attempts = 0,
+                            CNL = 0,
+
+                            Los = 100,
+                            CustomerOnTime = 100,
+                            BranchOnTime = 100,
+
+                            PaymentType = PaymentType.PerStop,
+                            routeStatus = user != null
+                                ? RouteStatus.Completed
+                                : RouteStatus.PendingCompletion
+                        };
+
+                        _context.Routes.Add(route);
+                        await _context.SaveChangesAsync(ct);
+
+                        routesCreated++;
+                    }
+                    else
+                    {
+                        route = existingRoute;
+
+                        route.UserId = user?.Id ?? route.UserId;
+                        route.DriverIdentificationNumber = driverCode;
+
+                        route.Volumen = volume;
+                        route.DeliveryStops = stops;
+                        route.Attempts = 0;
+                        route.CNL = 0;
+
+                        route.Los = 100;
+                        route.CustomerOnTime = 100;
+                        route.BranchOnTime = 100;
+
+                        route.PaymentType = PaymentType.PerStop;
+                        route.routeStatus = route.UserId.HasValue
+                            ? RouteStatus.Completed
+                            : RouteStatus.Pending;
+
+                        routesUpdated++;
+                    }
+
+                    var existingPackages = await _context.Packages
+                        .Where(p => p.RoutesId == route.Id)
+                        .ToListAsync(ct);
+
+                    var existingPackageMap = existingPackages
+                        .Where(p => !string.IsNullOrWhiteSpace(p.Tracking))
+                        .ToDictionary(
+                            p => p.Tracking.Trim().ToUpperInvariant(),
+                            p => p
+                        );
+
+                    foreach (var row in pdfRows)
+                    {
+                        if (string.IsNullOrWhiteSpace(row.OrderId))
+                            continue;
+
+                        var tracking = row.OrderId.Trim();
+                        var packageKey = tracking.ToUpperInvariant();
+
+                        var parsedAddress = ParseAddress(row.Address);
+
+                        if (existingPackageMap.TryGetValue(packageKey, out var existingPackage))
+                        {
+                            existingPackage.Address = parsedAddress.Address;
+                            existingPackage.City = parsedAddress.City;
+                            existingPackage.State = parsedAddress.State;
+                            existingPackage.ZipCode = parsedAddress.ZipCode;
+                            existingPackage.IncidentDate = routeDate.Value.Date;
+                            existingPackage.Status = PackageStatus.CL;
+
+                            packagesUpdated++;
+                            continue;
+                        }
+
+                        var newPackage = new Packages
+                        {
+                            RoutesId = route.Id,
+                            Tracking = tracking,
+
+                            Address = parsedAddress.Address,
+                            City = parsedAddress.City,
+                            State = parsedAddress.State,
+                            ZipCode = parsedAddress.ZipCode,
+
+                            IncidentDate = routeDate.Value.Date,
+                            Status = PackageStatus.CL,
+                            DaysElapsed = 0,
+                            Notified = false,
+                            ReviewStatus = ReviewStatus.Open
+                        };
+
+                        _context.Packages.Add(newPackage);
+                        existingPackageMap[packageKey] = newPackage;
+
+                        packagesAdded++;
+                    }
+
+                    await _context.SaveChangesAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(new
+                    {
+                        file = file.FileName,
+                        message = ex.Message,
+                        innerException = ex.InnerException?.Message
+                    });
+                }
+            }
+
+            await _auditService.LogAsync(new AuditLogDto
+            {
+                UserId = currentUserId,
+                Action = AuditLogAction.RouteParcelImport,
+                Entity = "Routes",
+                WarehouseId = warehouseId,
+                WarehouseName = $"{warehouse.Company} - {warehouse.City}",
+
+                Description =
+                    $"Route Manifest PDF import completed. Warehouse={warehouseId}, " +
+                    $"Files={files.Count}, RowsRead={rowsRead}, RoutesCreated={routesCreated}, " +
+                    $"RoutesUpdated={routesUpdated}, PackagesAdded={packagesAdded}, " +
+                    $"PackagesUpdated={packagesUpdated}, DriversNotFound={driverNotFound.Count}, Errors={errors.Count}",
+
+                NewValue = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Files = files.Select(f => f.FileName).ToList(),
+                    WarehouseId = warehouseId,
+                    RoutesCreated = routesCreated,
+                    RoutesUpdated = routesUpdated,
+                    PackagesAdded = packagesAdded,
+                    PackagesUpdated = packagesUpdated,
+                    RowsRead = rowsRead,
+                    DriverNotFound = driverNotFound.Take(100).ToList(),
+                    Errors = errors.Take(100).ToList()
+                })
+            });
+
+            return Ok(new
+            {
+                message = "Route manifest PDF imported successfully.",
+                warehouseId,
+                rowsRead,
+                routesCreated,
+                routesUpdated,
+                packagesAdded,
+                packagesUpdated,
+                driversNotFoundCount = driverNotFound.Count,
+                driverNotFound,
+                errors
+            });
+        }
+
+        [HttpGet("test-business-report")]
+        public async Task<IActionResult> TestBusinessReport(
+    string username,
+    string password,
+    int driverId = 1084,
+    string beginDate = "2026-06-13",
+    string endDate = "2026-06-13")
+        {
+            try
+            {
+                using var playwright = await Playwright.CreateAsync();
+
+                await using var browser = await playwright.Chromium.LaunchAsync(new()
+                {
+                    Headless = false,
+                    Channel = "chrome",
+                    SlowMo = 100
+                });
+
+                var page = await browser.NewPageAsync(new()
+                {
+                    ViewportSize = new ViewportSize
+                    {
+                        Width = 1366,
+                        Height = 768
+                    }
+                });
+
+                await page.GotoAsync(
+                    "https://fastrac.ontrac.com/identityserver/Account/Login",
+                    new()
+                    {
+                        WaitUntil = WaitUntilState.NetworkIdle,
+                        Timeout = 60000
+                    });
+
+                // Abrir panel RSP Login
+                await page.ClickAsync("a[data-target='#collapseOne']", new()
+                {
+                    Force = true
+                });
+
+                await page.WaitForTimeoutAsync(1000);
+
+                await page.WaitForSelectorAsync("#Username");
+                await page.WaitForSelectorAsync("#Password");
+
+                // Llenar credenciales simulando usuario real
+                await page.EvaluateAsync(@"({ username, password }) => {
+
+            const user = document.querySelector('#Username');
+            const pass = document.querySelector('#Password');
+            const btn = document.querySelector('#loginBtn');
+
+            user.focus();
+            user.value = username;
+            user.classList.add('has-val');
+
+            user.dispatchEvent(new KeyboardEvent('keydown', { bubbles:true }));
+            user.dispatchEvent(new KeyboardEvent('keyup', { bubbles:true }));
+            user.dispatchEvent(new Event('input', { bubbles:true }));
+            user.dispatchEvent(new Event('change', { bubbles:true }));
+            user.blur();
+
+            pass.focus();
+            pass.value = password;
+            pass.classList.add('has-val');
+
+            pass.dispatchEvent(new KeyboardEvent('keydown', { bubbles:true }));
+            pass.dispatchEvent(new KeyboardEvent('keyup', { bubbles:true }));
+            pass.dispatchEvent(new Event('input', { bubbles:true }));
+            pass.dispatchEvent(new Event('change', { bubbles:true }));
+            pass.blur();
+
+            if(btn){
+                btn.disabled = false;
+                btn.removeAttribute('disabled');
+            }
+
+        }", new
+                {
+                    username,
+                    password
+                });
+
+                await page.WaitForTimeoutAsync(1500);
+
+                var isDisabled = await page.EvaluateAsync<bool>(
+                    "() => document.querySelector('#loginBtn')?.disabled ?? true");
+
+                if (isDisabled)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Login button still disabled."
+                    });
+                }
+
+                // Click en botón login real
+                await page.ClickAsync("#loginBtn", new()
+                {
+                    Force = true,
+                    Timeout = 30000
+                });
+
+                await page.WaitForTimeoutAsync(8000);
+
+                var afterLoginUrl = page.Url;
+
+                if (afterLoginUrl.Contains("Account/Login"))
+                {
+                    var loginErrorText = await page.EvaluateAsync<string>(@"() => {
+                const el = document.querySelector('#loginErrorText');
+                return el ? el.innerText : '';
+            }");
+
+                    var screenshotPath = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        "ontrac-login-failed.png");
+
+                    await page.ScreenshotAsync(new()
+                    {
+                        Path = screenshotPath,
+                        FullPage = true
+                    });
+
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Login failed.",
+                        loginErrorText,
+                        currentUrl = page.Url,
+                        screenshotPath
+                    });
+                }
+
+                var reportUrl =
+                    $"https://fastrac.ontrac.com/reportviewer/Report" +
+                    $"?reportname=Business%20Report" +
+                    $"&driverId={driverId}" +
+                    $"&beginDate={beginDate}" +
+                    $"&endDate={endDate}";
+
+                await page.GotoAsync(reportUrl, new()
+                {
+                    WaitUntil = WaitUntilState.NetworkIdle,
+                    Timeout = 60000
+                });
+
+                await page.WaitForTimeoutAsync(5000);
+
+                var reportScreenshot = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    $"business-report-{driverId}.png");
+
+                await page.ScreenshotAsync(new()
+                {
+                    Path = reportScreenshot,
+                    FullPage = true
+                });
+
+                return Ok(new
+                {
+                    success = true,
+                    afterLoginUrl,
+                    currentUrl = page.Url,
+                    title = await page.TitleAsync(),
+                    reportUrl,
+                    screenshotPath = reportScreenshot
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        private static string ExtractPdfText(Stream stream)
+        {
+            stream.Position = 0;
+
+            using var document = PdfDocument.Open(stream);
+            var sb = new StringBuilder();
+
+            foreach (var page in document.GetPages())
+            {
+                var words = page.GetWords()
+                    .Select(w => w.Text)
+                    .Where(x => !string.IsNullOrWhiteSpace(x));
+
+                sb.AppendLine(string.Join(" ", words));
+            }
+
+            return sb.ToString();
+        }
+
+        private static DateTime? ExtractDate(string text)
+        {
+            text = Regex.Replace(text ?? "", @"\s+", " ").Trim();
+
+            var match = Regex.Match(
+                text,
+                @"Date\s+(\d{1,2}/\d{1,2}/\d{4})",
+                RegexOptions.IgnoreCase
+            );
+
+            if (!match.Success)
+            {
+                match = Regex.Match(
+                    text,
+                    @"(\d{1,2}/\d{1,2}/\d{4})",
+                    RegexOptions.IgnoreCase
+                );
+            }
+
+            if (!match.Success)
+                return null;
+
+            return DateTime.TryParse(match.Groups[1].Value, out var date)
+                ? date.Date
+                : null;
+        }
+
+        private static string ExtractDriver(string text)
+        {
+            text = Regex.Replace(text ?? "", @"\s+", " ").Trim();
+
+            var match = Regex.Match(
+                text,
+                @"Driver\s+([A-Z]{2,}[A-Z0-9]*\d+)",
+                RegexOptions.IgnoreCase
+            );
+
+            if (match.Success)
+                return match.Groups[1].Value.Trim().ToUpper();
+
+            match = Regex.Match(
+                text,
+                @"\b(ST[A-Z]{2}\d{2})\b",
+                RegexOptions.IgnoreCase
+            );
+
+            return match.Success
+                ? match.Groups[1].Value.Trim().ToUpper()
+                : "";
+        }
+
+        private static List<PdfPackageRow> ExtractPackageRows(string text)
+        {
+            var result = new List<PdfPackageRow>();
+
+            text = Regex.Replace(text ?? "", @"\s+", " ").Trim();
+
+            // Corta desde después del header de tabla
+            var headerIndex = text.IndexOf("Stop Number", StringComparison.OrdinalIgnoreCase);
+            if (headerIndex >= 0)
+                text = text.Substring(headerIndex);
+
+            // Busca cada paquete por patrón:
+            // StopNumber + OrderId + Address hasta USA
+            var matches = Regex.Matches(
+                text,
+                @"(?<stop>\d{1,3})\s+(?<order>(?:WP|ZX)\d+)\s+(?<address>.*?\bUSA\b)",
+                RegexOptions.IgnoreCase
+            );
+
+            foreach (Match match in matches)
+            {
+                var stopNumber = int.TryParse(match.Groups["stop"].Value, out var sn)
+                    ? sn
+                    : 0;
+
+                var orderId = match.Groups["order"].Value.Trim();
+                var address = match.Groups["address"].Value.Trim();
+
+                if (string.IsNullOrWhiteSpace(orderId) || string.IsNullOrWhiteSpace(address))
+                    continue;
+
+                result.Add(new PdfPackageRow
+                {
+                    StopNumber = stopNumber,
+                    OrderId = orderId,
+                    Address = address,
+                    Phone = "",
+                    Notes = ""
+                });
+            }
+
+            return result
+                .GroupBy(x => x.OrderId.Trim().ToUpperInvariant())
+                .Select(g => g.First())
+                .OrderBy(x => x.StopNumber)
+                .ToList();
+        }
+
+        private static string NormalizeAddress(string address)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                return "";
+
+            var value = address.Trim().ToUpperInvariant();
+
+            value = Regex.Replace(value, @"\s+", " ");
+            value = value.Replace(", USA", "");
+            value = value.Replace(" USA", "");
+
+            return value.Trim();
+        }
+
+        private static ParsedAddress ParseAddress(string rawAddress)
+        {
+            if (string.IsNullOrWhiteSpace(rawAddress))
+                return new ParsedAddress();
+
+            var address = rawAddress.Trim();
+
+            address = Regex.Replace(address, @"\s+", " ");
+            address = address.Replace(", USA", "", StringComparison.OrdinalIgnoreCase)
+                             .Replace(" USA", "", StringComparison.OrdinalIgnoreCase)
+                             .Trim();
+
+            var match = Regex.Match(
+                address,
+                @"^(?<street>.*?),\s*(?<city>[^,]+),\s*(?<state>[A-Z]{2})\s*(?<zip>\d{5}(?:-\d{4})?)?",
+                RegexOptions.IgnoreCase
+            );
+
+            if (!match.Success)
+            {
+                return new ParsedAddress
+                {
+                    Address = address
+                };
+            }
+
+            return new ParsedAddress
+            {
+                Address = match.Groups["street"].Value.Trim(),
+                City = match.Groups["city"].Value.Trim(),
+                State = match.Groups["state"].Value.Trim().ToUpperInvariant(),
+                ZipCode = match.Groups["zip"].Value.Trim()
+            };
+        }
+
+
+    } 
+}
 internal static class ClaimsExtensions
 {
     public static int? GetUserId(this ClaimsPrincipal user)
@@ -2532,6 +3470,23 @@ internal static class ClaimsExtensions
 
     public static bool HasAnyRole(this ClaimsPrincipal user, params string[] roles)
         => roles.Any(r => user.IsInRole(r));
+}
+
+public class PdfPackageRow
+{
+    public int StopNumber { get; set; }
+    public string OrderId { get; set; } = "";
+    public string Address { get; set; } = "";
+    public string Phone { get; set; } = "";
+    public string Notes { get; set; } = "";
+}
+
+public class ParsedAddress
+{
+    public string Address { get; set; } = "";
+    public string City { get; set; } = "";
+    public string State { get; set; } = "";
+    public string ZipCode { get; set; } = "";
 }
 
 

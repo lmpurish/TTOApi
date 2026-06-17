@@ -30,6 +30,7 @@ namespace TToApp.Model
 
         public int? ApprovedByUserId { get; set; }
         public DateTime? ApprovedAt { get; set; }
+        public string? ApprovalToken { get; set; }
     }
 }
 

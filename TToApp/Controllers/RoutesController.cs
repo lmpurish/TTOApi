@@ -2330,13 +2330,14 @@ namespace TToApp.Controllers
 
             var bonus = new RouteBonus
             {
-                RouteId = routeId,
-                Type = dto.Type,
-                Amount = dto.Amount,
-                Note = dto.Note,
+                RouteId          = routeId,
+                Type             = dto.Type,
+                Amount           = dto.Amount,
+                Note             = dto.Note,
                 AssignedByUserId = userId,
-                AssignedAt = route.Date,
-                IsActive = true
+                AssignedAt       = route.Date,
+                IsActive         = true,
+                ApprovalToken    = Guid.NewGuid().ToString("N")
             };
 
             _context.RouteBonuses.Add(bonus);
@@ -2383,7 +2384,9 @@ namespace TToApp.Controllers
                         { "Note",          bonus.Note ?? "" },
                         { "AssignedBy",    assignedByUser != null ? $"{assignedByUser.Name} {assignedByUser.LastName}".Trim() : userId.ToString() },
                         { "DriverName",    driver != null ? $"{driver.Name} {driver.LastName}".Trim() : "N/A" },
-                        { "WarehouseName", warehouseData?.Name ?? "" }
+                        { "WarehouseName", warehouseData?.Name ?? "" },
+                        { "ApproveUrl",    $"https://ttologistics.online/api/routes/bonus/{bonus.Id}/approve-token?token={bonus.ApprovalToken}" },
+                        { "RejectUrl",     $"https://ttologistics.online/api/routes/bonus/{bonus.Id}/reject-token?token={bonus.ApprovalToken}" }
                     };
 
                     foreach (var email in recipients
@@ -2404,6 +2407,44 @@ namespace TToApp.Controllers
             catch { /* no bloquear la respuesta si falla el email */ }
 
             return Ok(bonus);
+        }
+
+        [HttpGet("routes/bonus/{bonusId}/approve-token")]
+        public async Task<IActionResult> ApproveBonusByToken(int bonusId, [FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { Message = "Token required." });
+
+            var bonus = await _context.RouteBonuses.FindAsync(bonusId);
+            if (bonus == null) return NotFound(new { Message = "Bonus not found." });
+            if (bonus.ApprovalToken != token) return Unauthorized(new { Message = "Invalid token." });
+            if (bonus.Status != RouteBonusStatus.Pending)
+                return BadRequest(new { Message = $"Bonus is already {bonus.Status}." });
+
+            bonus.Status    = RouteBonusStatus.Approved;
+            bonus.ApprovedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { Message = "Bonus approved successfully." });
+        }
+
+        [HttpGet("routes/bonus/{bonusId}/reject-token")]
+        public async Task<IActionResult> RejectBonusByToken(int bonusId, [FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { Message = "Token required." });
+
+            var bonus = await _context.RouteBonuses.FindAsync(bonusId);
+            if (bonus == null) return NotFound(new { Message = "Bonus not found." });
+            if (bonus.ApprovalToken != token) return Unauthorized(new { Message = "Invalid token." });
+            if (bonus.Status != RouteBonusStatus.Pending)
+                return BadRequest(new { Message = $"Bonus is already {bonus.Status}." });
+
+            bonus.Status    = RouteBonusStatus.Rejected;
+            bonus.ApprovedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { Message = "Bonus rejected successfully." });
         }
 
         [Authorize]

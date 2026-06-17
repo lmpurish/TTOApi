@@ -78,7 +78,19 @@
             <p><strong>🔧 Submitted by:</strong> {{AssignedBy}}</p>
         </div>
 
-        <p style="margin-top:20px;">Please log in to review and approve or reject this bonus.</p>
+        <div style="text-align:center; margin-top:25px;">
+            <a href="{{ApproveUrl}}"
+               style="background-color:#16a34a;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;margin-right:12px;">
+                ✅ Approve
+            </a>
+            <a href="{{RejectUrl}}"
+               style="background-color:#dc2626;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;">
+                ❌ Reject
+            </a>
+        </div>
+        <p style="margin-top:16px;font-size:13px;color:#888;text-align:center;">
+            These links can only be used once and will expire if the bonus is already processed.
+        </p>
 
         <div class="footer">
             &copy; 2025 TTO Logistics. All rights reserved.

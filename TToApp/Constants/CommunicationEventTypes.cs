@@ -7,6 +7,6 @@ namespace TToApp.Constants
     public const string CompletedProfile = "CompletedProfile";
     public const string AttendanceConfirmed = "AttendanceConfirmed";
     public const string PakagesInformationLoaded = "PakagesInformationLoaded";
-    
+    public const string RouteBonusPending = "RouteBonusPending";
     }
 }

@@ -180,8 +180,6 @@ namespace TToApp.Services.Payroll
             }
 
             var hasRoutesInThisPayRun = routes.Any();
-            // _logger.LogInformation("Driver {DriverId} | Routes found: {Count} | HasRoutes: {HasRoutes}", driverId, routes.Count, hasRoutesInThisPayRun);
-
             // 5a) Cargar ZonePayRules para las zonas de las rutas
             var zoneIds = routes.Where(r => r.ZoneId.HasValue).Select(r => r.ZoneId!.Value).Distinct().ToList();
             List<ZonePayRule> zonePayRules = new();
@@ -196,36 +194,53 @@ namespace TToApp.Services.Payroll
                     .ToListAsync();
             }
 
-            // 5) Precargar pesos por ruta (solo si weightRules aplica)
-            var routeIds = routes.Select(r => r.Id).Distinct().ToList(); // Id de Routes (int)
+            // 5b) Cargar ZoneWeightRules para las zonas de las rutas
+            List<ZoneWeightRule> zoneWeightRules = new();
+            if (zoneIds.Any())
+            {
+                zoneWeightRules = await _db.Set<ZoneWeightRule>()
+                    .AsNoTracking()
+                    .Where(r => zoneIds.Contains(r.ZoneId) && r.IsActive)
+                    .OrderByDescending(r => r.Priority)
+                    .ThenByDescending(r => r.MinWeight)
+                    .ToListAsync();
+            }
+
+            // 5) Precargar pesos por ruta
+            var routeIds = routes.Select(r => r.Id).Distinct().ToList();
+
+            // 5c) Precargar bonos aprobados por ruta
+            var approvedBonusesByRoute = (await _db.RouteBonuses
+                .AsNoTracking()
+                .Where(b => routeIds.Contains(b.RouteId) && b.IsActive && b.Status == RouteBonusStatus.Approved)
+                .ToListAsync())
+                .GroupBy(b => b.RouteId)
+                .ToDictionary(g => g.Key, g => g.ToList());
 
             Dictionary<int, List<decimal>> weightsByRoute = new();
-              
-            // 🔧 get all RoutesId/Weight and PackageId per route
 
-            var packs = await _db.Set<Packages>()   // <-- cambia si tu entidad real es Package
+            var hasAnyWeightRules = weightRules.Count > 0 || zoneWeightRules.Count > 0;
+
+            var packs = await _db.Set<Packages>()
                 .AsNoTracking()
                 .Where(p => p.RoutesId != null && routeIds.Contains((int)p.RoutesId))
                 .Select(p => new
                 {
-                    RouteId = (int)p.RoutesId!,       // ✅ key NO nullable
-                    Weight = p.Weight,                // asumo decimal? o decimal
+                    RouteId = (int)p.RoutesId!,
+                    Weight = p.Weight,
                     PackageId = p.Id
                 })
                 .ToListAsync();
-            
-            if (weightRules.Count > 0  && routeIds.Count > 0)
+
+            if (hasAnyWeightRules && routeIds.Count > 0)
             {
-              
-                // ✅ filtra weights null y arma Dictionary<int, List<decimal>>
                 weightsByRoute = packs
-                    .Where(x => x.Weight.HasValue) // si Weight es decimal? (si es decimal, cambia esto)
+                    .Where(x => x.Weight.HasValue)
                     .GroupBy(x => x.RouteId)
                     .ToDictionary(
                         g => g.Key,
                         g => g.Select(x => x.Weight!.Value).ToList()
                     );
-
             }
 
             var payRun = await _db.PayRuns.FirstOrDefaultAsync(x => x.PayPeriodId == period.Id && x.DriverId == driverId);
@@ -246,7 +261,8 @@ namespace TToApp.Services.Payroll
             {
                 var oldLines = _db.PayRunLines.Where(l => l.PayRunId == payRun.Id);
                 _db.PayRunLines.RemoveRange(oldLines);
-                // borra ajustes anteriores (bonus/penalty/loan/etc)
+                // borra ajustes auto-generados (loans, etc.) pero preserva Manual y Penalty
+                // los bonos de ruta (RefType=RouteBonus) se borran por separado
                 var oldAdjs = _db.PayrollAdjustments
                 .Where(a => a.PayRunId == payRun.Id && a.Type != "Manual" && a.Type != "Bonus" && a.Type != "Penalty");
 
@@ -418,30 +434,42 @@ namespace TToApp.Services.Payroll
                         {
                             if (delivered > 0)
                             {
-                                if (weightRules.Count > 0 && weightsByRoute.TryGetValue(route.Id, out var weightsForRoute))
+                                if (weightsByRoute.TryGetValue(route.Id, out var weightsForRoute))
                                 {
-                                    var extraByRule = ComputeWeightExtras(weightsForRoute, weightRules);
+                                    // Prioridad: ZoneWeightRule de la zona > PayrollWeightRule del warehouse
+                                    var routeZoneWeightRules = route.ZoneId.HasValue
+                                        ? zoneWeightRules.Where(r => r.ZoneId == route.ZoneId.Value).ToList()
+                                        : new List<ZoneWeightRule>();
 
-                                    foreach (var item in extraByRule)
+                                    if (routeZoneWeightRules.Count > 0)
                                     {
-                                        // item: (rule, count, amountTotal)
-                                        var rule = item.Rule;
-                                        var qty = item.Count;
-                                        var rateExtra = Math.Max((rule.ExtraAmount + (driverRate?.ExtraAmount ?? 0m)) + driverPerStop, zonePerStop);
-                                        qtyExtraWeigth += qty;
-
-                                        // Línea por regla (agregado) => qty * rateExtra = total
-                                        routeSubtotal += AddLine(
-                                            payRun,
-                                            "Earning",
-                                            route.Id.ToString(),
-                                            $"{route.Date:MMM dd, yyyy} - More than 1lb",
-                                            qty,
-                                            rateExtra ,
-                                            "WEIGHT_EXTRA",
-                                            route.Date,
-                                            route.Zone?.Id, route.Zone?.Area
-                                        );
+                                        var extraByZoneRule = ComputeWeightExtras(weightsForRoute, routeZoneWeightRules);
+                                        foreach (var item in extraByZoneRule)
+                                        {
+                                            var qty = item.Count;
+                                            var rateExtra = Math.Max((item.Rule.ExtraAmount + (driverRate?.ExtraAmount ?? 0m)) + driverPerStop, zonePerStop);
+                                            qtyExtraWeigth += qty;
+                                            routeSubtotal += AddLine(
+                                                payRun, "Earning", route.Id.ToString(),
+                                                $"{route.Date:MMM dd, yyyy} - More than 1lb",
+                                                qty, rateExtra, $"WEIGHT_EXTRA:ZONE_RULE:{item.Rule.Id}",
+                                                route.Date, route.Zone?.Id, route.Zone?.Area);
+                                        }
+                                    }
+                                    else if (weightRules.Count > 0)
+                                    {
+                                        var extraByRule = ComputeWeightExtras(weightsForRoute, weightRules);
+                                        foreach (var item in extraByRule)
+                                        {
+                                            var qty = item.Count;
+                                            var rateExtra = Math.Max((item.Rule.ExtraAmount + (driverRate?.ExtraAmount ?? 0m)) + driverPerStop, zonePerStop);
+                                            qtyExtraWeigth += qty;
+                                            routeSubtotal += AddLine(
+                                                payRun, "Earning", route.Id.ToString(),
+                                                $"{route.Date:MMM dd, yyyy} - More than 1lb",
+                                                qty, rateExtra, "WEIGHT_EXTRA",
+                                                route.Date, route.Zone?.Id, route.Zone?.Area);
+                                        }
                                     }
                                 }
 
@@ -449,7 +477,7 @@ namespace TToApp.Services.Payroll
                                 payRun,
                                 "Earning",
                                 route.Id.ToString(), 
-                                $"{route.Date:MMM dd, yyyy}  {(route.Zone != null ? $"Zone {route.Zone.ZoneCode} " : "")} - Less than 1lb",
+                                $"{route.Date:MMM dd, yyyy}  {(route.Zone != null ? $"Zone {route.Zone.ZoneCode} " : "")}- PerStop",
                                 (delivered - qtyExtraWeigth) > 0 ? (delivered - qtyExtraWeigth) : 0m,
                                 effectivePerStop,
                                 stopTag,
@@ -706,12 +734,25 @@ namespace TToApp.Services.Payroll
             if (warnings.Count > 0)
                 AddLine(payRun, "Info", null, $"Warnings: {warnings.Count}", 0m, 0m, "WARN_SUMMARY");
 
+            // Bonos aprobados → se suman a gross y se registran como PayRunLine
+            foreach (var (routeId, bonuses) in approvedBonusesByRoute)
+            {
+                var route = routes.FirstOrDefault(r => r.Id == routeId);
+                foreach (var bonus in bonuses)
+                {
+                    gross += AddLine(payRun, "Bonus", routeId.ToString(),
+                        $"Route bonus: {bonus.Type}",
+                        1m, bonus.Amount, $"ROUTE_BONUS:{bonus.Id}:{bonus.Type}",
+                        route?.Date, route?.Zone?.Id, route?.Zone?.Area);
+                }
+            }
+
             payRun.GrossAmount = gross;
 
             await ApplyLoanDeductionsAsync(payRun, userId);
             await _db.SaveChangesAsync();
 
-        //2) recalcula Adjustments total (incluye loan deductions)
+        //2) recalcula Adjustments total (incluye loan deductions y bonos)
             payRun.Adjustments = await _db.PayrollAdjustments
                 .Where(a => a.PayRunId == payRun.Id)
                 .SumAsync(a => (decimal?)a.Amount) ?? 0m;
@@ -842,7 +883,6 @@ namespace TToApp.Services.Payroll
 
         private static PayrollWeightRule? FindRuleForWeight(decimal weight, List<PayrollWeightRule> rules)
         {
-            // rules ya vienen ordenadas por Priority desc, MinWeight desc
             foreach (var r in rules)
             {
                 if (weight < r.MinWeight) continue;
@@ -850,6 +890,33 @@ namespace TToApp.Services.Payroll
                 return r;
             }
             return null;
+        }
+
+        private static List<(ZoneWeightRule Rule, decimal Count)> ComputeWeightExtras(
+            List<decimal> weights,
+            List<ZoneWeightRule> rules)
+        {
+            var counts = new Dictionary<int, (ZoneWeightRule Rule, decimal Count)>();
+
+            foreach (var w in weights)
+            {
+                var rule = rules.FirstOrDefault(r =>
+                    w >= r.MinWeight &&
+                    (!r.MaxWeight.HasValue || w <= r.MaxWeight.Value));
+
+                if (rule == null) continue;
+
+                if (!counts.TryGetValue(rule.Id, out var entry))
+                    counts[rule.Id] = (rule, 1m);
+                else
+                    counts[rule.Id] = (entry.Rule, entry.Count + 1m);
+            }
+
+            return counts.Values
+                .OrderByDescending(x => x.Rule.Priority)
+                .ThenByDescending(x => x.Rule.MinWeight)
+                .Select(x => (x.Rule, x.Count))
+                .ToList();
         }
 
         private decimal AddLine(

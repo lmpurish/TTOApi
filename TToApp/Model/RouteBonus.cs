@@ -25,8 +25,21 @@ namespace TToApp.Model
         public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
 
         public bool IsActive { get; set; } = true;
+
+        public RouteBonusStatus Status { get; set; } = RouteBonusStatus.Pending;
+
+        public int? ApprovedByUserId { get; set; }
+        public DateTime? ApprovedAt { get; set; }
     }
 }
+
+public enum RouteBonusStatus
+{
+    Pending  = 0,
+    Approved = 1,
+    Rejected = 2
+}
+
 public enum RouteBonusType
 {
     Unknown = 0,

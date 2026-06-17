@@ -1,4 +1,5 @@
 ﻿using ClosedXML.Excel;
+using TToApp.Services.CommunicationRecipient;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -38,12 +39,15 @@ namespace TToApp.Controllers
         private readonly EmailService _emailService;
         private readonly INotificationService _notificationService;
         private readonly AuditService _auditService;
-        public RoutesController(ApplicationDbContext context, EmailService emailService, INotificationService notificationService, AuditService auditService)
+        private readonly ICommunicationRecipientService _communicationRecipients;
+
+        public RoutesController(ApplicationDbContext context, EmailService emailService, INotificationService notificationService, AuditService auditService, ICommunicationRecipientService communicationRecipients)
         {
             _context = context;
             _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
             _notificationService = notificationService;
             _auditService = auditService;
+            _communicationRecipients = communicationRecipients;
         }
 
         // GET: api/Routes
@@ -2338,6 +2342,123 @@ namespace TToApp.Controllers
             _context.RouteBonuses.Add(bonus);
             await _context.SaveChangesAsync();
 
+            try
+            {
+                var warehouseData = route.WarehouseId.HasValue
+                    ? await _context.Warehouses
+                        .Where(w => w.Id == route.WarehouseId.Value)
+                        .Select(w => new { w.Name, w.CompanyId })
+                        .FirstOrDefaultAsync()
+                    : null;
+
+                var companyId = warehouseData?.CompanyId ?? 0;
+                var warehouseIds = route.WarehouseId.HasValue ? new[] { route.WarehouseId.Value } : null;
+
+                if (companyId > 0)
+                {
+                    var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
+                        companyId: companyId,
+                        warehouseIds: warehouseIds,
+                        eventType: CommunicationEventTypes.RouteBonusPending,
+                        channel: CommunicationChannels.Email);
+
+                    var driver = route.UserId.HasValue
+                        ? await _context.Users
+                            .Where(u => u.Id == route.UserId.Value)
+                            .Select(u => new { u.Name, u.LastName })
+                            .FirstOrDefaultAsync()
+                        : null;
+
+                    var assignedByUser = await _context.Users
+                        .Where(u => u.Id == userId)
+                        .Select(u => new { u.Name, u.LastName })
+                        .FirstOrDefaultAsync();
+
+                    var placeholders = new Dictionary<string, string>
+                    {
+                        { "RouteCode",     route.RouteCode ?? route.Id.ToString() },
+                        { "Date",          DateTime.UtcNow.ToString("MMMM dd, yyyy", new System.Globalization.CultureInfo("en-US")) },
+                        { "BonusType",     bonus.Type.ToString() },
+                        { "Amount",        bonus.Amount.ToString("C") },
+                        { "Note",          bonus.Note ?? "" },
+                        { "AssignedBy",    assignedByUser != null ? $"{assignedByUser.Name} {assignedByUser.LastName}".Trim() : userId.ToString() },
+                        { "DriverName",    driver != null ? $"{driver.Name} {driver.LastName}".Trim() : "N/A" },
+                        { "WarehouseName", warehouseData?.Name ?? "" }
+                    };
+
+                    foreach (var email in recipients
+                        .Select(r => r.Email)
+                        .Where(e => !string.IsNullOrWhiteSpace(e))
+                        .Select(e => e!)
+                        .Distinct())
+                    {
+                        await _emailService.SendEmailAsync(
+                            toEmail: email,
+                            subject: $"Route Bonus Pending Approval - Route {route.Id}",
+                            "RouteBonusNotification.cshtml",
+                            placeholders: placeholders,
+                            copy: false);
+                    }
+                }
+            }
+            catch { /* no bloquear la respuesta si falla el email */ }
+
+            return Ok(bonus);
+        }
+
+        [Authorize]
+        [HttpPut("routes/bonus/{bonusId}/approve")]
+        public async Task<IActionResult> ApproveRouteBonus(int bonusId)
+        {
+            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+            var userRole    = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
+
+            if (!int.TryParse(userIdClaim, out int userId))
+                return Unauthorized();
+
+            if (userRole != "Admin" && userRole != "Manager")
+                return Forbid();
+
+            var bonus = await _context.RouteBonuses.FindAsync(bonusId);
+            if (bonus == null)
+                return NotFound(new { Message = "Bonus not found." });
+
+            if (bonus.Status != RouteBonusStatus.Pending)
+                return BadRequest(new { Message = $"Bonus is already {bonus.Status}." });
+
+            bonus.Status            = RouteBonusStatus.Approved;
+            bonus.ApprovedByUserId  = userId;
+            bonus.ApprovedAt        = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+            return Ok(bonus);
+        }
+
+        [Authorize]
+        [HttpPut("routes/bonus/{bonusId}/reject")]
+        public async Task<IActionResult> RejectRouteBonus(int bonusId)
+        {
+            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+            var userRole    = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role)?.Value;
+
+            if (!int.TryParse(userIdClaim, out int userId))
+                return Unauthorized();
+
+            if (userRole != "Admin" && userRole != "Manager")
+                return Forbid();
+
+            var bonus = await _context.RouteBonuses.FindAsync(bonusId);
+            if (bonus == null)
+                return NotFound(new { Message = "Bonus not found." });
+
+            if (bonus.Status != RouteBonusStatus.Pending)
+                return BadRequest(new { Message = $"Bonus is already {bonus.Status}." });
+
+            bonus.Status            = RouteBonusStatus.Rejected;
+            bonus.ApprovedByUserId  = userId;
+            bonus.ApprovedAt        = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
             return Ok(bonus);
         }
 

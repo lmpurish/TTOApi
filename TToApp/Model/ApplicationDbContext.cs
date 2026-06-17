@@ -50,6 +50,7 @@ namespace TToApp.Model
         public DbSet<CommunicationRecipientRule> CommunicationRecipientRules { get; set; }
         public DbSet<Incidence> Incidences { get; set; }
         public DbSet<ZonePayRule> ZonePayRules { get; set; } = null!;
+        public DbSet<ZoneWeightRule> ZoneWeightRules { get; set; } = null!;
         public DbSet<AuditLogs> AuditLogs { get; set; }
         public DbSet<PackageReturnEvidence> PackageReturnEvidences { get; set; }
 
@@ -409,6 +410,15 @@ namespace TToApp.Model
 
             modelBuilder.Entity<ZonePayRule>()
                 .HasIndex(z => new { z.ZoneId, z.PaymentType, z.IsActive, z.EffectiveFrom });
+
+            modelBuilder.Entity<ZoneWeightRule>()
+                .HasOne(r => r.Zone)
+                .WithMany()
+                .HasForeignKey(r => r.ZoneId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<ZoneWeightRule>()
+                .HasIndex(r => new { r.ZoneId, r.IsActive, r.Priority });
 
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

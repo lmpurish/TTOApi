@@ -26,13 +26,14 @@ namespace TToApp.Controllers
         }
 
         // GET: api/Zones
+        [Authorize]
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Zone>>> GetZones()
         {
             return await _context.Zones.ToListAsync();
         }
 
-
+        [Authorize]
         [HttpGet("GetZonesByManager")]
         public async Task<ActionResult<IEnumerable<Zone>>> GetZonesByManager([FromQuery] int? warehouseId)
         {
@@ -68,10 +69,39 @@ namespace TToApp.Controllers
 
         
         [HttpGet("GetZonesWarehouse/{warehouseId}")]
-        public async Task<ActionResult<IEnumerable<Zone>>> GetZonesWarehouse(int warehouseId)
+        public async Task<IActionResult> GetZonesWarehouse(int warehouseId)
         {
             var zones = await _context.Zones
-                .Where(w => w.IdWarehouse == warehouseId)
+                .Where(z => z.IdWarehouse == warehouseId)
+                .Select(z => new
+                {
+                    z.Id,
+                    z.ZoneCode,
+                    z.PriceStop,
+                    z.IdWarehouse,
+                    z.Area,
+                    z.ZipCodesSerialized,
+
+                    PayRule = _context.ZonePayRules
+                        .Where(r => r.ZoneId == z.Id && r.IsActive)
+                        .OrderByDescending(r => r.Version)
+                        .Select(r => new
+                        {
+                            r.Id,
+                            r.ZoneId,
+                            r.PaymentType,
+                            r.BaseAmount,
+                            r.ExtraAmount,
+                            r.MinPackages,
+                            r.MaxPackages,
+                            r.UseDriverRateForExtra,
+                            r.Version,
+                            r.IsActive,
+                            r.EffectiveFrom,
+                            r.EffectiveTo
+                        })
+                        .FirstOrDefault()
+                })
                 .ToListAsync();
 
             return Ok(zones);
@@ -81,6 +111,7 @@ namespace TToApp.Controllers
 
 
         // GET: api/Zones/5
+        [Authorize]
         [HttpGet("{id}")]
         public async Task<ActionResult<Zone>> GetZone(int id)
         {
@@ -96,6 +127,7 @@ namespace TToApp.Controllers
 
         // PUT: api/Zones/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
+        [Authorize]
         [HttpPut("{id}")]
         public async Task<IActionResult> PutZone(int id, [FromBody] Zone incoming)
         {
@@ -119,6 +151,7 @@ namespace TToApp.Controllers
 
         // POST: api/Zones
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
+        [Authorize]
         [HttpPost]
         public async Task<ActionResult<Zone>> PostZone(Zone zone)
         {
@@ -147,6 +180,7 @@ namespace TToApp.Controllers
 
 
         // DELETE: api/Zones/5
+        [Authorize]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteZone(int id)
         {

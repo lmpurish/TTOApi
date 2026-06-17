@@ -3459,6 +3459,55 @@ namespace TToApp.Controllers
                 ZipCode = match.Groups["zip"].Value.Trim()
             };
         }
+        [Authorize]
+        [HttpGet("user/{userId:int}")]
+        public async Task<IActionResult> GetRoutesByUser(
+    int userId,
+    [FromQuery] DateTime? startDate = null,
+    [FromQuery] DateTime? endDate = null)
+        {
+            var query = _context.Routes
+                .AsNoTracking()
+                .Include(r => r.Zone)
+                .Include(r => r.User)
+                .Where(r => r.UserId == userId);
+
+            if (startDate.HasValue)
+                query = query.Where(r => r.Date >= startDate.Value.Date);
+
+            if (endDate.HasValue)
+                query = query.Where(r => r.Date <= endDate.Value.Date);
+
+            var routes = await query
+                .OrderByDescending(r => r.Date)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.Date,
+                    r.RouteCode,
+                    r.DeliveryStops,
+                    r.Volumen,
+                    r.Attempts,
+                    r.CNL,
+                    r.Los,
+                    r.CustomerOnTime,
+                    r.BranchOnTime,
+                    r.PriceRoute,
+                    r.PaymentType,
+                    RouteStatus = r.routeStatus.ToString(),
+
+                    Zone = r.Zone == null
+                        ? null
+                        : new
+                        {
+                            r.Zone.Id,
+                            r.Zone.ZoneCode
+                        }
+                })
+                .ToListAsync();
+
+            return Ok(routes);
+        }
 
 
     } 

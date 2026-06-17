@@ -2158,8 +2158,204 @@ namespace TToApp.Controllers
             return driverIdsWithoutRate;
         }
 
+        private long GetUserId()
+        {
+            var id = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            return long.Parse(id!);
+        }
+
+        [HttpGet("my-paid-summary")]
+        public async Task<IActionResult> GetMyPaidSummary()
+        {
+            var driverId = GetUserId();
+
+            var paidRuns = await _db.PayRuns
+                .Include(x => x.PayPeriod)
+                .Where(x =>
+                    x.DriverId == driverId &&
+                    x.Status == "Approved" &&
+                    x.ApprovedAt != null)
+                .OrderByDescending(x => x.ApprovedAt)
+                .ToListAsync();
+
+            var lastPayment = paidRuns.FirstOrDefault();
+
+            var response = new
+            {
+                totalCollected = paidRuns.Sum(x => x.NetAmount),
+                totalGross = paidRuns.Sum(x => x.GrossAmount),
+                totalDeductions = paidRuns.Sum(x => x.Adjustments),
+                paidPeriods = paidRuns.Count,
+
+                lastPayment = lastPayment == null ? null : new
+                {
+                    payRunId = lastPayment.Id,
+                    period = $"{lastPayment.PayPeriod.StartDate:MMM dd} - {lastPayment.PayPeriod.EndDate:MMM dd}",
+                    startDate = lastPayment.PayPeriod.StartDate,
+                    endDate = lastPayment.PayPeriod.EndDate,
+                    grossAmount = lastPayment.GrossAmount,
+                    adjustments = lastPayment.Adjustments,
+                    netAmount = lastPayment.NetAmount,
+                    paidDate = lastPayment.ApprovedAt,
+                    status = lastPayment.Status
+                }
+            };
+
+            return Ok(response);
+        }
+
+        // GET: api/DriverPayroll/my-paid-history
+        [Authorize]
+        [HttpGet("my-paid-history")]
+        public async Task<IActionResult> GetMyPaidHistory()
+        {
+            var driverId = GetUserId();
+
+            var history = await _db.PayRuns
+                .Include(x => x.PayPeriod)
+                .Include(x => x.Lines)
+                .Where(x =>
+                    x.DriverId == driverId &&
+                    x.Status == "Approved" &&
+                    x.ApprovedAt != null)
+                .OrderByDescending(x => x.PayPeriod.StartDate)
+                .Select(x => new
+                {
+                    payRunId = x.Id,
+                    payPeriodId = x.PayPeriodId,
+                    startDate = x.PayPeriod.StartDate,
+                    endDate = x.PayPeriod.EndDate,
+                    paidDate = x.ApprovedAt,
+                    grossAmount = x.GrossAmount,
+                    adjustments = x.Adjustments,
+                    netAmount = x.NetAmount,
+                    status = x.Status,
+
+                    routes = x.Lines
+                        .Where(l => l.SourceType == "Route")
+                        .Select(l => l.SourceId)
+                        .Distinct()
+                        .Count(),
+
+                    stops = x.Lines
+                        .Where(l => l.SourceType == "Stop" || l.SourceType == "Route")
+                        .Sum(l => l.Qty)
+                })
+                .ToListAsync();
+
+            return Ok(history);
+        }
+
+        // GET: api/DriverPayroll/my-paid-detail/5
+        [Authorize]
+        [HttpGet("my-paid-detail/{payRunId:long}")]
+        public async Task<IActionResult> GetMyPaidDetail(long payRunId)
+        {
+            var driverId = GetUserId();
+
+            var payRun = await _db.PayRuns
+                .Include(x => x.PayPeriod)
+                .Include(x => x.Lines)
+                .Include(x => x.AdjustmentsList)
+                .FirstOrDefaultAsync(x =>
+                    x.Id == payRunId &&
+                    x.DriverId == driverId &&
+                    x.Status == "Approved" &&
+                    x.ApprovedAt != null);
+
+            if (payRun == null)
+                return NotFound(new { message = "Paid payroll not found." });
+
+            var response = new
+            {
+                payRunId = payRun.Id,
+                payPeriodId = payRun.PayPeriodId,
+                startDate = payRun.PayPeriod.StartDate,
+                endDate = payRun.PayPeriod.EndDate,
+                paidDate = payRun.ApprovedAt,
+                grossAmount = payRun.GrossAmount,
+                adjustments = payRun.Adjustments,
+                netAmount = payRun.NetAmount,
+                status = payRun.Status,
+
+                lines = payRun.Lines
+                    .OrderBy(x => x.RouteDate)
+                    .Select(x => new
+                    {
+                        x.Id,
+                        x.SourceType,
+                        x.SourceId,
+                        x.Description,
+                        x.Qty,
+                        x.Rate,
+                        x.Amount,
+                        x.RouteDate,
+                        x.ZoneId,
+                        x.ZoneArea,
+                        x.Tags
+                    }),
+
+                adjustmentsList = payRun.AdjustmentsList.Select(a => new
+                {
+                    a.Id,
+                    a.Amount,
+                    a.Type,
+                    a.CreatedAt
+                })
+            };
+
+            return Ok(response);
+        }
+
+        // GET: api/DriverPayroll/my-paid-monthly?year=2026&month=6
+        [Authorize(Roles = "Driver")]
+        [HttpGet("my-paid-monthly")]
+        public async Task<IActionResult> GetMyPaidMonthly([FromQuery] int year, [FromQuery] int month)
+        {
+            var driverId = GetUserId();
+
+            var start = new DateTime(year, month, 1);
+            var end = start.AddMonths(1);
+
+            var payrolls = await _db.PayRuns
+                .Include(x => x.PayPeriod)
+                .Where(x =>
+                    x.DriverId == driverId &&
+                    x.Status == "Approved" &&
+                    x.ApprovedAt != null &&
+                    x.ApprovedAt >= start &&
+                    x.ApprovedAt < end)
+                .OrderBy(x => x.ApprovedAt)
+                .Select(x => new
+                {
+                    x.Id,
+                    x.GrossAmount,
+                    x.Adjustments,
+                    x.NetAmount,
+                    x.ApprovedAt,
+                    x.PayPeriod.StartDate,
+                    x.PayPeriod.EndDate
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                year,
+                month,
+                totalCollected = payrolls.Sum(x => x.NetAmount),
+                totalGross = payrolls.Sum(x => x.GrossAmount),
+                totalDeductions = payrolls.Sum(x => x.Adjustments),
+                payments = payrolls
+            });
+        }
+
 
     }
+
+
+
+
+
 
     public sealed class CreateAdjustmentRequest
     {

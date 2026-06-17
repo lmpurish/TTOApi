@@ -2676,6 +2676,7 @@ namespace TToApp.Controllers
                             message = "Invalid date.",
                             value = dateText
                         });
+
                         continue;
                     }
 
@@ -2710,7 +2711,8 @@ namespace TToApp.Controllers
                         .FirstOrDefaultAsync(r =>
                             r.Date.Date == deliveryDate.Date &&
                             r.WarehouseId == warehouseId &&
-                            r.RouteCode == routeCode);
+                            r.RouteCode == routeCode &&
+                            r.UserId == userId);
 
                     if (existingRoute != null)
                     {
@@ -2724,7 +2726,10 @@ namespace TToApp.Controllers
                         existingRoute.BranchOnTime = 100;
                         existingRoute.CNL = 0;
 
-                        existingRoute.routeStatus = RouteStatus.Completed;
+                        existingRoute.routeStatus = userId.HasValue
+                            ? RouteStatus.Completed
+                            : RouteStatus.PendingCompletion;
+
                         existingRoute.PaymentType = PaymentType.PerStop;
                         existingRoute.WarehouseId = warehouseId;
 
@@ -2751,6 +2756,7 @@ namespace TToApp.Controllers
                             routeStatus = userId.HasValue
                                 ? RouteStatus.Completed
                                 : RouteStatus.PendingCompletion,
+
                             PaymentType = PaymentType.PerStop
                         });
 
@@ -2815,9 +2821,9 @@ namespace TToApp.Controllers
                 errors
             });
         }
-    
 
-    [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]
+
+        [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]
         [HttpPost("upload-route-manifest-pdf/{warehouseId:int}")]
         [Consumes("multipart/form-data")]
         public async Task<IActionResult> UploadRouteManifestPdf(

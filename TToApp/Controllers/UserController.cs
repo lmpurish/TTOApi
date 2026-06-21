@@ -1078,6 +1078,7 @@ public class UserController : ControllerBase
         return Forbid();
     }
 
+    [Authorize]
     [HttpGet("getManager/{userId}")]
     public async Task<ActionResult<int?>> GetManager(int userId)
     {
@@ -1109,16 +1110,19 @@ public class UserController : ControllerBase
 
 
 
-
+    [Authorize]
     [HttpPost("complete-profile")]
     [RequestSizeLimit(20_000_000)]
-    public async Task<IActionResult> CompleteProfile([FromForm] UserProfileRequest request)
+    public async Task<IActionResult> CompleteProfile(
+    [FromForm] UserProfileRequest request,
+    [FromQuery] string? section = null)
     {
-        if (request == null) return BadRequest(new { Message = "Invalid profile data." });
+        if (request == null)
+            return BadRequest(new { Message = "Invalid profile data." });
 
-        // ✅ Usa el usuario del token (quita el hardcode 593)
         var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(userIdClaim, out var userId)) return Unauthorized();
+        if (!int.TryParse(userIdClaim, out var userId))
+            return Unauthorized();
 
         await using var tx = await _authContext.Database.BeginTransactionAsync();
 
@@ -1127,154 +1131,368 @@ public class UserController : ControllerBase
             .Include(u => u.Warehouse)
             .FirstOrDefaultAsync(u => u.Id == userId);
 
-        if (user == null) return NotFound(new { Message = "User not found." });
+        if (user == null)
+            return NotFound(new { Message = "User not found." });
 
-        // ✅ Asegura el profile SIN guardar aún
         if (user.Profile == null)
         {
             user.Profile = new UserProfile { Id = user.Id };
             _authContext.UserProfiles.Add(user.Profile);
         }
 
+        var isSectionUpdate = !string.IsNullOrWhiteSpace(section);
+        section = section?.Trim().ToLowerInvariant();
+
         try
         {
-            if (request.Address != null)
+            if (isSectionUpdate)
             {
-                user.Profile.Address = request.Address;
-            }
-            if (request.City != null)
-            {
-                user.Profile.City = request.City;
-            }
-            if (request.State != null)
-            {
-                user.Profile.State = request.State;
-            }
-            if (request.ZipCode != null)
-            {
-                user.Profile.ZipCode = request.ZipCode;
+                switch (section)
+                {
+                    case "address":
+                        if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
+                            user.Profile.PhoneNumber = request.PhoneNumber;
+
+                        if (request.Address != null)
+                            user.Profile.Address = request.Address;
+
+                        if (request.City != null)
+                            user.Profile.City = request.City;
+
+                        if (request.State != null)
+                            user.Profile.State = request.State;
+
+                        if (request.ZipCode != null)
+                            user.Profile.ZipCode = request.ZipCode;
+                        if (request.DateOfBirth.HasValue)
+                        {
+                            var dob = request.DateOfBirth.Value.Date;
+
+                            if (dob > DateTime.UtcNow.Date.AddYears(-18))
+                                return BadRequest(new { Message = "Driver must be at least 18 years old." });
+
+                            user.Profile.DateOfBirth = DateOnly.FromDateTime(request.DateOfBirth.Value);
+                        }
+                        if (!string.IsNullOrWhiteSpace(request.SocialSecurityNumber))
+                        {
+                            var ssn = request.SocialSecurityNumber.Replace("-", "").Trim();
+
+                            if (ssn.Length != 9)
+                                return BadRequest(new { Message = "Invalid SSN." });
+
+                            if (_protector == null)
+                                return StatusCode(500, new { Message = "Encryption service not available." });
+
+                            var encrypted = _protector.Protect(ssn);
+
+                            if (string.IsNullOrWhiteSpace(encrypted))
+                                return StatusCode(500, new { Message = "Encryption failed." });
+
+                            user.Profile.SsnEncrypted = encrypted;
+                            user.Profile.SsnLast4 = ssn[^4..];
+                            user.Profile.SsnUpdatedAt = DateTime.UtcNow;
+                        }
+                        break;
+
+                    case "bank":
+                        if (string.IsNullOrWhiteSpace(request.AccountNumber) ||
+                            string.IsNullOrWhiteSpace(request.RoutingNumber))
+                        {
+                            return BadRequest(new { Message = "Account number and routing number are required." });
+                        }
+
+                        var account = await _authContext.Accounts
+                            .FirstOrDefaultAsync(a => a.UserId == user.Id && a.IsDefault);
+
+                        if (account == null)
+                        {
+                            account = new Accounts
+                            {
+                                UserId = user.Id,
+                                IsDefault = true
+                            };
+
+                            _authContext.Accounts.Add(account);
+                        }
+
+                        account.AccountNumber = request.AccountNumber;
+                        account.RoutingNumber = request.RoutingNumber;
+                        account.FullName = !string.IsNullOrWhiteSpace(request.AccountHolderName)
+                            ? request.AccountHolderName
+                            : $"{user.Name} {user.LastName}".Trim();
+
+                        break;
+
+                    case "driver-license":
+                        if (!string.IsNullOrWhiteSpace(request.DriverLicenseNumber))
+                            user.Profile.DriverLicenseNumber = request.DriverLicenseNumber;
+
+                        if (request.ExpDriverLicense.HasValue)
+                        {
+                            var exp = request.ExpDriverLicense.Value.Date;
+
+                            if (exp < DateTime.UtcNow.Date)
+                                return BadRequest(new { Message = "Driver license is expired." });
+
+                            user.Profile.ExpDriverLicense = DateOnly.FromDateTime(request.ExpDriverLicense.Value);
+                        }
+
+                        if (request.DriverLicense != null)
+                        {
+                            if (!IsAllowed(request.DriverLicense, allowPdf: true))
+                                return BadRequest(new { Message = "Invalid license file." });
+
+                            user.Profile.DrivingLicenseUrl = await SavePrivateAsync(request.DriverLicense, "licenses");
+                        }
+
+                        break;
+
+                    case "insurance":
+                        if (request.ExpInsurance.HasValue)
+                        {
+                            var expInsurance = request.ExpInsurance.Value.Date;
+
+                            if (expInsurance < DateTime.UtcNow.Date)
+                                return BadRequest(new { Message = "Insurance is expired." });
+
+                            user.Profile.ExpInsurance = DateOnly.FromDateTime(request.ExpInsurance.Value);
+                        }
+
+                        if (request.InsuranceUrl != null)
+                        {
+                            if (!IsAllowed(request.InsuranceUrl, allowPdf: true))
+                                return BadRequest(new { Message = "Invalid Insurance Card file." });
+
+                            user.Profile.InsuranceUrl = await SavePrivateAsync(request.InsuranceUrl, "insurance");
+                        }
+
+                        break;
+
+                    case "ssn":
+                        if (!string.IsNullOrWhiteSpace(request.SocialSecurityNumber))
+                        {
+                            var ssn = request.SocialSecurityNumber.Replace("-", "").Trim();
+
+                            if (ssn.Length != 9)
+                                return BadRequest(new { Message = "Invalid SSN." });
+
+                            if (_protector == null)
+                                return StatusCode(500, new { Message = "Encryption service not available." });
+
+                            var encrypted = _protector.Protect(ssn);
+
+                            if (string.IsNullOrWhiteSpace(encrypted))
+                                return StatusCode(500, new { Message = "Encryption failed." });
+
+                            user.Profile.SsnEncrypted = encrypted;
+                            user.Profile.SsnLast4 = ssn[^4..];
+                            user.Profile.SsnUpdatedAt = DateTime.UtcNow;
+                        }
+
+                        if (request.SocialSecurityUrl != null)
+                        {
+                            if (!IsAllowed(request.SocialSecurityUrl, allowPdf: true))
+                                return BadRequest(new { Message = "Invalid SSN file." });
+
+                            user.Profile.SocialSecurityUrl = await SavePrivateAsync(request.SocialSecurityUrl, "socialSecurities");
+                        }
+
+                        break;
+
+                    case "avatar":
+                        if (request.AvatarUrl == null)
+                            return BadRequest(new { Message = "Avatar file is required." });
+
+                        if (!IsAllowed(request.AvatarUrl, allowPdf: false))
+                            return BadRequest(new { Message = "Invalid avatar file." });
+
+                        user.AvatarUrl = await SavePrivateAsync(request.AvatarUrl, "avatars");
+                        break;
+                    case "documents":
+                        if (!string.IsNullOrWhiteSpace(request.DriverLicenseNumber))
+                            user.Profile.DriverLicenseNumber = request.DriverLicenseNumber;
+
+                        if (request.ExpDriverLicense.HasValue)
+                        {
+                            var exp = request.ExpDriverLicense.Value.Date;
+                            if (exp < DateTime.UtcNow.Date)
+                                return BadRequest(new { Message = "Driver license is expired." });
+
+                            user.Profile.ExpDriverLicense = DateOnly.FromDateTime(request.ExpDriverLicense.Value);
+                        }
+
+                        if (request.ExpInsurance.HasValue)
+                        {
+                            var expInsurance = request.ExpInsurance.Value.Date;
+                            if (expInsurance < DateTime.UtcNow.Date)
+                                return BadRequest(new { Message = "Insurance is expired." });
+
+                            user.Profile.ExpInsurance = DateOnly.FromDateTime(request.ExpInsurance.Value);
+                        }
+
+                        if (request.DriverLicense != null)
+                        {
+                            if (!IsAllowed(request.DriverLicense, allowPdf: true))
+                                return BadRequest(new { Message = "Invalid license file." });
+
+                            user.Profile.DrivingLicenseUrl = await SavePrivateAsync(request.DriverLicense, "licenses");
+                        }
+
+                        if (request.InsuranceUrl != null)
+                        {
+                            if (!IsAllowed(request.InsuranceUrl, allowPdf: true))
+                                return BadRequest(new { Message = "Invalid Insurance Card file." });
+
+                            user.Profile.InsuranceUrl = await SavePrivateAsync(request.InsuranceUrl, "insurance");
+                        }
+
+                        if (request.AvatarUrl != null)
+                        {
+                            if (!IsAllowed(request.AvatarUrl, allowPdf: false))
+                                return BadRequest(new { Message = "Invalid avatar file." });
+
+                            user.AvatarUrl = await SavePrivateAsync(request.AvatarUrl, "avatars");
+                        }
+
+                        break;
+                    case "finish":
+                        user.IsFirstLogin = false;
+                        user.UpdatedAt = DateTime.UtcNow;
+                        break;
+
+
+                    default:
+                        return BadRequest(new
+                        {
+                            Message = "Invalid section.",
+                            AllowedSections = new[]
+                            {
+                            "address",
+                            "bank",
+                            "driver-license",
+                            "insurance",
+                            "ssn",
+                            "avatar",
+                            "documents",
+                            "finish"
+                        }
+                        });
+
+                }
+
+               
+                await _authContext.SaveChangesAsync();
+                await tx.CommitAsync();
+                
+                return Ok(new
+                {
+                    Message = "Profile section updated successfully.",
+                    Section = section,
+                    
+                });
             }
 
-            // ---------- Validaciones de negocio ----------
+            if (request.Address != null)
+                user.Profile.Address = request.Address;
+
+            if (request.City != null)
+                user.Profile.City = request.City;
+
+            if (request.State != null)
+                user.Profile.State = request.State;
+
+            if (request.ZipCode != null)
+                user.Profile.ZipCode = request.ZipCode;
+
             if (request.DateOfBirth.HasValue)
             {
                 var dob = request.DateOfBirth.Value.Date;
+
                 if (dob > DateTime.UtcNow.Date.AddYears(-18))
                     return BadRequest(new { Message = "Driver must be at least 18 years old." });
+
+                user.Profile.DateOfBirth = DateOnly.FromDateTime(request.DateOfBirth.Value);
+            }
+            else
+            {
+                user.Profile.DateOfBirth = null;
             }
 
             if (request.ExpDriverLicense.HasValue)
             {
                 var exp = request.ExpDriverLicense.Value.Date;
+
                 if (exp < DateTime.UtcNow.Date)
                     return BadRequest(new { Message = "Driver license is expired." });
+
+                user.Profile.ExpDriverLicense = DateOnly.FromDateTime(request.ExpDriverLicense.Value);
+            }
+            else
+            {
+                user.Profile.ExpDriverLicense = null;
             }
 
             if (request.ExpInsurance.HasValue)
             {
                 var expInsurance = request.ExpInsurance.Value.Date;
+
                 if (expInsurance < DateTime.UtcNow.Date)
-                    return BadRequest(new { Message = "Insurance is expired" });
+                    return BadRequest(new { Message = "Insurance is expired." });
+
+                user.Profile.ExpInsurance = DateOnly.FromDateTime(request.ExpInsurance.Value);
             }
 
-            // ---------- Asignaciones seguras ----------
             user.Profile.PhoneNumber = request.PhoneNumber;
             user.Profile.DriverLicenseNumber = request.DriverLicenseNumber;
-            if (request.ExpInsurance.HasValue)
-                user.Profile.ExpInsurance = DateOnly.FromDateTime(request.ExpInsurance.Value);
-            // ⚠️ Mantén coherencia de tipos con tu modelo:
-            // Si DateOfBirth en tu modelo es DateTime?:
-            if (request.DateOfBirth.HasValue)
-                user.Profile.DateOfBirth = DateOnly.FromDateTime(request.DateOfBirth.Value);
-            else
-                user.Profile.DateOfBirth = null;
 
-            // Si ExpDriverLicense en tu modelo es DateOnly?:
-            if (request.ExpDriverLicense.HasValue)
-                user.Profile.ExpDriverLicense = DateOnly.FromDateTime(request.ExpDriverLicense.Value);
-            else
-                user.Profile.ExpDriverLicense = null;
-
-
-
-            // SSN seguro
             if (!string.IsNullOrWhiteSpace(request.SocialSecurityNumber))
             {
-                var ssnRaw = request.SocialSecurityNumber ?? string.Empty;
-                var ssn = ssnRaw.Replace("-", "").Trim();
+                var ssn = request.SocialSecurityNumber.Replace("-", "").Trim();
 
                 if (ssn.Length != 9)
-                {
                     return BadRequest(new { Message = "Invalid SSN." });
-                }
 
-                if (_protector == null) return StatusCode(500, new { Message = "Encryption service not available." });
+                if (_protector == null)
+                    return StatusCode(500, new { Message = "Encryption service not available." });
 
-                // Proteger y validar que Protect no devuelva vacío
                 var encrypted = _protector.Protect(ssn);
 
                 if (string.IsNullOrWhiteSpace(encrypted))
-                {
-                    _logger.LogError("Protect returned empty while saving SSN for user {UserId}. ssnRawPreview={Preview}", userId, ssnRaw.Length <= 8 ? ssnRaw : ssnRaw.Substring(ssnRaw.Length - 4));
                     return StatusCode(500, new { Message = "Encryption failed." });
-                }
-
-#if DEBUG
-                // Optional: roundtrip sanity check en debug/dev solamente
-                try
-                {
-                    var roundtrip = _protector.Unprotect(encrypted) ?? string.Empty;
-                    if (roundtrip != ssn)
-                    {
-                        _logger.LogError("Protect/Unprotect roundtrip mismatch for user {UserId}", userId);
-                        return StatusCode(500, new { Message = "Encryption roundtrip mismatch." });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Roundtrip Unprotect failed for user {UserId}", userId);
-                    return StatusCode(500, new { Message = "Encryption roundtrip failed." });
-                }
-#endif
-
-                // Guard: solo sobreescribe SsnEncrypted si resultó un ciphertext válido.
-                // Guardamos preview del ciphertext (solo inicio/fin + longitud) para auditoría
-                var preview = encrypted.Length <= 16 ? encrypted : $"{encrypted.Substring(0, 8)}...{encrypted.Substring(encrypted.Length - 8)}";
-                _logger.LogInformation("SSN Protected for user {UserId} — encryptedLen={Len}, preview={Preview}", userId, encrypted.Length, preview);
 
                 user.Profile.SsnEncrypted = encrypted;
                 user.Profile.SsnLast4 = ssn[^4..];
                 user.Profile.SsnUpdatedAt = DateTime.UtcNow;
             }
 
-            if (!string.IsNullOrWhiteSpace(request?.AccountNumber) && !string.IsNullOrWhiteSpace(request.AccountHolderName) &&
-                 !string.IsNullOrWhiteSpace(request.RoutingNumber))
+            if (!string.IsNullOrWhiteSpace(request.AccountNumber) &&
+                !string.IsNullOrWhiteSpace(request.AccountHolderName) &&
+                !string.IsNullOrWhiteSpace(request.RoutingNumber))
             {
-                var existingAccounts = _authContext.Accounts
-                    .Where(a => a.UserId == user.Id && a.IsDefault);
+                var account = await _authContext.Accounts
+                    .FirstOrDefaultAsync(a => a.UserId == user.Id && a.IsDefault);
 
-                foreach (var acc in existingAccounts)
-                    acc.IsDefault = false;
-
-                var Account = new Accounts
+                if (account == null)
                 {
-                    AccountNumber = request.AccountNumber,
-                    RoutingNumber = request.RoutingNumber,
-                    FullName = request.AccountHolderName,
-                    UserId = user.Id,
-                    IsDefault = true,
-                };
+                    account = new Accounts
+                    {
+                        UserId = user.Id,
+                        IsDefault = true
+                    };
 
-                _authContext.Accounts.Add(Account);
+                    _authContext.Accounts.Add(account);
+                }
 
+                account.AccountNumber = request.AccountNumber;
+                account.RoutingNumber = request.RoutingNumber;
+                account.FullName = request.AccountHolderName;
             }
 
-
-            // ---------- Archivos privados ----------
             if (request.DriverLicense != null)
             {
                 if (!IsAllowed(request.DriverLicense, allowPdf: true))
                     return BadRequest(new { Message = "Invalid license file." });
+
                 user.Profile.DrivingLicenseUrl = await SavePrivateAsync(request.DriverLicense, "licenses");
             }
 
@@ -1282,6 +1500,7 @@ public class UserController : ControllerBase
             {
                 if (!IsAllowed(request.SocialSecurityUrl, allowPdf: true))
                     return BadRequest(new { Message = "Invalid SSN file." });
+
                 user.Profile.SocialSecurityUrl = await SavePrivateAsync(request.SocialSecurityUrl, "socialSecurities");
             }
 
@@ -1289,43 +1508,44 @@ public class UserController : ControllerBase
             {
                 if (!IsAllowed(request.AvatarUrl, allowPdf: false))
                     return BadRequest(new { Message = "Invalid avatar file." });
+
                 user.AvatarUrl = await SavePrivateAsync(request.AvatarUrl, "avatars");
             }
+
             if (request.InsuranceUrl != null)
             {
                 if (!IsAllowed(request.InsuranceUrl, allowPdf: true))
                     return BadRequest(new { Message = "Invalid Insurance Card file." });
+
                 user.Profile.InsuranceUrl = await SavePrivateAsync(request.InsuranceUrl, "insurance");
             }
 
             user.IsFirstLogin = false;
             user.UpdatedAt = DateTime.UtcNow;
 
-            // ✅ Guarda TODO una vez y confirma transacción
             await _authContext.SaveChangesAsync();
             await tx.CommitAsync();
-
-            // ---------- Notificaciones ----------
 
             _ = Task.Run(async () =>
             {
                 try
                 {
                     var adminEmails = await _authContext.Users
-                .Where(u => u.CompanyId == user.CompanyId
-                         && u.UserRole == global::User.Role.Admin
-                         && u.Email != null)
-                .Select(u => u.Email!)
-                .ToListAsync();
+                        .Where(u =>
+                            u.CompanyId == user.CompanyId &&
+                            u.UserRole == global::User.Role.Admin &&
+                            u.Email != null)
+                        .Select(u => u.Email!)
+                        .ToListAsync();
 
                     var placeholders = new Dictionary<string, string>
-        {
-            { "Name", user.Name ?? "" },
-            { "LastName", user.LastName ?? "" },
-            { "Email", user.Email ?? "" },
-            { "PhoneNumber", user.Profile.PhoneNumber ?? "" },
-            { "Locality", GetWarehouseCity1(user) ?? "" }
-        };
+                {
+                    { "Name", user.Name ?? "" },
+                    { "LastName", user.LastName ?? "" },
+                    { "Email", user.Email ?? "" },
+                    { "PhoneNumber", user.Profile.PhoneNumber ?? "" },
+                    { "Locality", GetWarehouseCity1(user) ?? "" }
+                };
 
                     foreach (var email in adminEmails)
                     {
@@ -1343,21 +1563,37 @@ public class UserController : ControllerBase
                         await _emailService.SendEmailAsync(
                             toEmail: user.Email,
                             subject: "Thank you",
-                             "ApplicationConfirmation.cshtml",
+                            "ApplicationConfirmation.cshtml",
                             placeholders: placeholders,
                             copy: false
                         );
                     }
                 }
-                catch (Exception ex) { _logger.LogError(ex, "Email notification failed (ignored)."); }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Email notification failed (ignored).");
+                }
             });
+
             _logger.LogInformation("CP finished OK for {UserId}", userId);
-            return Ok(new { Message = "Profile updated successfully!" });
+
+            return Ok(new
+            {
+                Message = "Profile updated successfully!",
+                IsFirstLogin = user.IsFirstLogin
+            });
         }
         catch (Exception ex)
         {
+            await tx.RollbackAsync();
+
             _logger.LogError(ex, "CompleteProfile failed for {UserId}", userId);
-            return StatusCode(500, new { Message = "Error updating profile", Error = ex.Message });
+
+            return StatusCode(500, new
+            {
+                Message = "Error updating profile",
+                Error = ex.Message
+            });
         }
     }
 
@@ -1513,6 +1749,7 @@ public class UserController : ControllerBase
 
         return Ok(new { Message = "User updated successfully!" });
     }
+
     [Authorize]
     [HttpPost("resend-password-setup/{id:int}")]
     public async Task<IActionResult> ResendPasswordSetup([FromRoute] int id)
@@ -1530,6 +1767,8 @@ public class UserController : ControllerBase
 
         return Ok(new { Message = "Password setup email resent successfully" });
     }
+
+
     [AllowAnonymous]
     [HttpPost("forgot-password")]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto)
@@ -1552,6 +1791,7 @@ public class UserController : ControllerBase
 
         return Ok(new { Message = "Password reset email sent successfully" });
     }
+
     private async Task<bool> SendPasswordSetupEmail(User user, string subject)
     {
         user.PasswordResetToken = Guid.NewGuid().ToString("N");
@@ -1562,6 +1802,7 @@ public class UserController : ControllerBase
 
         return await SendAccountActivatedEmail(user, subject);
     }
+
     [AllowAnonymous]
     [HttpPost("set-password")]
     public async Task<IActionResult> SetPassword([FromBody] SetPasswordDto dto)
@@ -1591,7 +1832,7 @@ public class UserController : ControllerBase
         return Ok(new { Message = "Password created successfully." });
     }
 
-
+    [Authorize]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteUser(int id)
     {
@@ -1618,6 +1859,7 @@ public class UserController : ControllerBase
 
         return user?.Email?.Trim(); // Si no hay manager, devuelve null
     }
+
     private string GetWarehouseCity(User userObj)
     {
         var warehouseId = userObj.WarehouseId;
@@ -1758,30 +2000,41 @@ public class UserController : ControllerBase
     [HttpGet("me")]
     public async Task<IActionResult> GetProfile([FromQuery] int? userId, CancellationToken ct = default)
     {
-        // ── Auth y rol
+        // Usuario autenticado
         var idClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
         if (string.IsNullOrWhiteSpace(idClaim) || !int.TryParse(idClaim, out var currentUserId))
             return Unauthorized();
 
-        var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? string.Empty;
+        // Obtener rol REAL desde BD
+        var currentUser = await _authContext.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == currentUserId, ct);
+
+        if (currentUser == null)
+            return Unauthorized();
+
+        var role = currentUser.UserRole.ToString();
 
         var targetId = userId ?? currentUserId;
         var isSelf = targetId == currentUserId;
 
         bool isAdminOrAssistant =
             role.Equals("Admin", StringComparison.OrdinalIgnoreCase) ||
+            role.Equals("CompanyOwner", StringComparison.OrdinalIgnoreCase) ||
             role.Equals("Assistant", StringComparison.OrdinalIgnoreCase) ||
-            role.Equals("Assistans", StringComparison.OrdinalIgnoreCase); // si así está guardado
+            role.Equals("Assistans", StringComparison.OrdinalIgnoreCase);
 
-        bool isManager = role.Equals("Manager", StringComparison.OrdinalIgnoreCase);
+        bool isManager =
+            role.Equals("Manager", StringComparison.OrdinalIgnoreCase);
 
-        // ── Manager consultando a OTRO usuario → básico
+        // Manager viendo otro usuario -> vista limitada
         if (!isSelf && isManager)
         {
             var basic = await _authContext.Users
                 .AsNoTracking()
                 .Include(u => u.Profile)
-                .Include(u => u.Warehouse) // sin ThenInclude para evitar el error previo
+                .Include(u => u.Warehouse)
                 .Where(u => u.Id == targetId)
                 .Select(u => new
                 {
@@ -1797,59 +2050,48 @@ public class UserController : ControllerBase
                         company = u.Warehouse.Company
                     },
                     phone = u.Profile != null ? u.Profile.PhoneNumber : null
-                    // Sin datos sensibles
                 })
                 .FirstOrDefaultAsync(ct);
 
             return basic is null ? NotFound() : Ok(basic);
         }
 
-        // ── Cualquier OTRO rol consultando a OTRO usuario → 403
+        // Solo Admin/CompanyOwner/Assistant pueden consultar otros perfiles completos
         if (!isSelf && !isAdminOrAssistant)
             return Forbid();
 
-        // ── Admin/Assistant consultando a otro → usamos ese Id; si es self o sin userId, queda igual
         if (!isSelf && isAdminOrAssistant)
             currentUserId = targetId;
 
-        // ── Tu consulta original (sin ThenInclude problemático)
         var user = await _authContext.Users
             .Include(u => u.Profile)
-            .Include(u => u.Warehouse) // si necesitas más, lo agregas, pero no tocamos el return
+            .Include(u => u.Warehouse)
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Id == currentUserId, ct);
 
-        if (user is null) return NotFound();
+        if (user is null)
+            return NotFound();
 
-        // Vehículo (orden seguro por Id)
         var vehicle = await _authContext.Vehicles
             .AsNoTracking()
             .Where(v => v.UserId == user.Id)
             .OrderByDescending(v => v.Id)
             .FirstOrDefaultAsync(ct);
 
-        // Cuenta bancaria activa (orden seguro por Id)
-        var ActiveAccounts = await _authContext.Accounts
+        var activeAccount = await _authContext.Accounts
             .AsNoTracking()
             .Where(a => a.UserId == user.Id)
             .OrderByDescending(a => a.Id)
             .FirstOrDefaultAsync(ct);
 
-        // Última firma (siempre ok)
         var lastSignature = await _authContext.UserDocumentSignatures
             .AsNoTracking()
             .Where(d => d.UserId == user.Id)
             .OrderByDescending(d => d.SignedAtUtc)
             .FirstOrDefaultAsync(ct);
 
-        // Tiene compañía
-        var hasCompany = await _authContext.Users
-            .AsNoTracking()
-            .Where(u => u.Id == user.Id)
-            .Select(u => u.CompanyId != null)
-            .FirstOrDefaultAsync(ct);
+        var hasCompany = user.CompanyId != null;
 
-        // ── TU RETURN EXACTO ─────────────────────────────────────────
         return Ok(new
         {
             id = user.Id,
@@ -1858,32 +2100,45 @@ public class UserController : ControllerBase
             email = user.Email,
             role = user.UserRole.ToString(),
             avatar = user.AvatarUrl,
+
             warehouse = user.Warehouse == null ? null : new
             {
                 city = user.Warehouse.City,
                 company = user.Warehouse.Company
             },
-            phone = user?.Profile?.PhoneNumber,
-            driverUrl = user?.Profile?.DrivingLicenseUrl,
-            ssnn = user?.Profile?.SsnLast4,
-            ssnUpdatedAt = user?.Profile?.SsnUpdatedAt,
-            ssnUrl = user?.Profile?.SocialSecurityUrl,
-            expDriverLicense = user?.Profile?.ExpDriverLicense,
-            driverLicenseNumber = user?.Profile?.DriverLicenseNumber,
+
+            phone = user.Profile?.PhoneNumber,
+            driverUrl = user.Profile?.DrivingLicenseUrl,
+            ssnn = user.Profile?.SsnLast4,
+            ssnUpdatedAt = user.Profile?.SsnUpdatedAt,
+            ssnUrl = user.Profile?.SocialSecurityUrl,
+            expDriverLicense = user.Profile?.ExpDriverLicense,
+            driverLicenseNumber = user.Profile?.DriverLicenseNumber,
+
             vehicle = vehicle?.Make,
             vehicleModel = vehicle?.Model,
-            AccountNumber = ActiveAccounts?.AccountNumber,
-            RoutingNumber = ActiveAccounts?.RoutingNumber,
-            ExpInsurance = user?.Profile?.ExpInsurance,
-            InsuranceUrl = user?.Profile?.InsuranceUrl,
-            accountId = ActiveAccounts?.Id,
+
+            AccountNumber = activeAccount?.AccountNumber,
+            RoutingNumber = activeAccount?.RoutingNumber,
+
+            ExpInsurance = user.Profile?.ExpInsurance,
+            InsuranceUrl = user.Profile?.InsuranceUrl,
+
+            accountId = activeAccount?.Id,
             contractSigned = lastSignature?.SignedPdfUrl,
 
             hasCompany,
 
-            isFirstLogin = user?.IsFirstLogin
+            isFirstLogin = user.IsFirstLogin,
+
+            address = user.Profile?.Address,
+            city = user.Profile?.City,
+            state = user.Profile?.State,
+            zipCode = user.Profile?.ZipCode,
+            dateOfBirth = user.Profile?.DateOfBirth
         });
     }
+
     [HttpGet("{id}/ssn")]
     public async Task<IActionResult> GetSsn(int id)
     {
@@ -1905,7 +2160,9 @@ public class UserController : ControllerBase
         bool isAdmin = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.Admin;
         bool isCompanyOwner = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.CompanyOwner;
 
-        if (!isAdmin && !isCompanyOwner)
+        bool isSelf = requester.Id == id;
+
+        if (!isSelf && !isAdmin && !isCompanyOwner)
             return Forbid();
 
         // 3) obtener datos del usuario objetivo (solo los campos necesarios)

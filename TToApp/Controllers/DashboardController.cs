@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using TToApp.Model;
 
 namespace TToApp.Controllers
@@ -17,22 +18,50 @@ namespace TToApp.Controllers
             _db = db;
         }
 
+        [HttpGet("driver/me/last-route")]
+        public async Task<IActionResult> GetMyLastRoute(CancellationToken ct)
+        {
+            var idClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (string.IsNullOrWhiteSpace(idClaim) || !int.TryParse(idClaim, out var driverId))
+                return Unauthorized(new { message = "Invalid token. DriverId not found." });
+
+            return await GetDriverLastRouteInternal(driverId, ct);
+        }
+
         [HttpGet("driver/{driverId:int}/last-route")]
         public async Task<IActionResult> GetDriverLastRoute(int driverId, CancellationToken ct)
         {
-            // Última ruta completada del driver
+            return await GetDriverLastRouteInternal(driverId, ct);
+        }
+
+        private async Task<IActionResult> GetDriverLastRouteInternal(int driverId, CancellationToken ct)
+        {
             var route = await _db.Routes
                 .AsNoTracking()
-                .Where(r => r.UserId == driverId && r.routeStatus == RouteStatus.Completed)
+                .Where(r => r.UserId == driverId)
                 .Include(r => r.Zone)
                 .Include(r => r.Warehouse)
-                .OrderByDescending(r => r.Date)
+                .OrderByDescending(r => r.routeStatus == RouteStatus.Completed)
+                .ThenByDescending(r => r.Date)
+                .ThenByDescending(r => r.Id)
                 .FirstOrDefaultAsync(ct);
 
-            if (route is null)
-                return NotFound(new { message = $"No completed routes found for driver {driverId}." });
+            if (route == null)
+            {
+                return Ok(new
+                {
+                    message = $"No routes found for driver {driverId}.",
+                    route = (object?)null,
+                    packages = Array.Empty<object>(),
+                    punch = new
+                    {
+                        arrival = (DateTime?)null,
+                        departure = (DateTime?)null
+                    }
+                });
+            }
 
-            // Paquetes de esa ruta
             var packages = await _db.Packages
                 .AsNoTracking()
                 .Where(p => p.RoutesId == route.Id)
@@ -50,18 +79,18 @@ namespace TToApp.Controllers
                     p.AddrLat,
                     p.AddrLon,
                     p.IncidentDate,
-                    Status       = p.Status.ToString(),
+                    status = p.Status.ToString(),
                     p.DaysElapsed,
                     p.Notified,
                     p.RSP,
                     p.Brand,
-                    ReviewStatus = p.ReviewStatus.ToString(),
+                    reviewStatus = p.ReviewStatus.ToString(),
                     p.Weight
                 })
                 .ToListAsync(ct);
 
-            // Punch del mismo día que la ruta
             var routeDate = route.Date.Date;
+
             var punches = await _db.DriverPunches
                 .AsNoTracking()
                 .Where(p =>
@@ -70,39 +99,65 @@ namespace TToApp.Controllers
                 .OrderBy(p => p.OccurredAtUtc)
                 .ToListAsync(ct);
 
-            var arrival   = punches.FirstOrDefault(p => p.PunchType == PunchType.Arrival);
+            var arrival = punches.FirstOrDefault(p => p.PunchType == PunchType.Arrival);
             var departure = punches.LastOrDefault(p => p.PunchType == PunchType.Departure);
+
+            var volumen = route.Volumen;
+            var attempts = route.Attempts;
+            var cnl = route.CNL;
+
+            var los = volumen > 0
+                ? Math.Round(((decimal)(volumen - (attempts + cnl)) / volumen) * 100, 2)
+                : 0;
 
             return Ok(new
             {
-                Route = new
+                route = new
                 {
                     route.Id,
                     route.RouteCode,
-                    Date           = route.Date.ToString("yyyy-MM-dd"),
+                    date = route.Date.ToString("yyyy-MM-dd"),
                     route.DeliveryStops,
-                    Delivered = Math.Max(0, route.Volumen - route.Attempts), // Asumiendo que cada intento fallido reduce el volumen entregado
                     route.Volumen,
+                    delivered = Math.Max(0, route.Volumen - route.Attempts),
                     route.Attempts,
                     route.CNL,
-                    Zone = route.Zone == null ? null : new
+                    los,
+                    status = route.routeStatus.ToString(),
+                    zone = route.Zone == null ? null : new
                     {
                         route.Zone.Id,
                         route.Zone.ZoneCode
                     },
-                    Warehouse = route.Warehouse == null ? null : new
+                    warehouse = route.Warehouse == null ? null : new
                     {
                         route.Warehouse.Id,
-                        route.Warehouse.Name
+                        route.Warehouse.Name,
+                        route.Warehouse.City,
+                        route.Warehouse.State
                     }
                 },
-                Packages = packages,
-                Punch = new
+                packages,
+                punch = new
                 {
-                    Arrival   = arrival?.OccurredAtUtc,
-                    Departure = departure?.OccurredAtUtc
+                    arrival = arrival?.OccurredAtUtc,
+                    departure = departure?.OccurredAtUtc
                 }
             });
+        }
+
+        [HttpGet("driver/me/routes")]
+        public async Task<IActionResult> GetMyRoutes(
+            [FromQuery] DateTime? from,
+            [FromQuery] DateTime? to,
+            CancellationToken ct)
+        {
+            var idClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (string.IsNullOrWhiteSpace(idClaim) || !int.TryParse(idClaim, out var driverId))
+                return Unauthorized(new { message = "Invalid token. DriverId not found." });
+
+            return await GetDriverRoutesInternal(driverId, from, to, ct);
         }
 
         [HttpGet("driver/{driverId:int}/routes")]
@@ -112,19 +167,29 @@ namespace TToApp.Controllers
             [FromQuery] DateTime? to,
             CancellationToken ct)
         {
-            // 1) Rutas del driver — filtro por rango si se provee, sino últimas 10
+            return await GetDriverRoutesInternal(driverId, from, to, ct);
+        }
+
+        private async Task<IActionResult> GetDriverRoutesInternal(
+            int driverId,
+            DateTime? from,
+            DateTime? to,
+            CancellationToken ct)
+        {
             var query = _db.Routes
                 .AsNoTracking()
                 .Where(r => r.UserId == driverId)
                 .Include(r => r.Zone)
                 .Include(r => r.Warehouse)
                 .OrderByDescending(r => r.Date)
+                .ThenByDescending(r => r.Id)
                 .AsQueryable();
 
             if (from.HasValue || to.HasValue)
             {
                 var fromDt = from?.Date ?? DateTime.MinValue;
-                var toDt   = (to?.Date ?? DateTime.UtcNow.Date).AddDays(1);
+                var toDt = (to?.Date ?? DateTime.UtcNow.Date).AddDays(1);
+
                 query = query.Where(r => r.Date >= fromDt && r.Date < toDt);
             }
             else
@@ -135,23 +200,37 @@ namespace TToApp.Controllers
             var routes = await query.ToListAsync(ct);
 
             if (routes.Count == 0)
-                return Ok(new { Routes = Array.Empty<object>(), TotalCharged = 0m });
+            {
+                return Ok(new
+                {
+                    routes = Array.Empty<object>(),
+                    totals = new
+                    {
+                        routeCount = 0,
+                        deliveryStops = 0,
+                        volumen = 0,
+                        delivered = 0,
+                        cnl = 0,
+                        attempts = 0,
+                        totalEarned = 0m,
+                        totalAdjustments = 0m,
+                        totalCharged = 0m
+                    }
+                });
+            }
 
-            // 2) PayRunLines relacionadas a esas rutas (SourceId = routeId)
             var routeIdStrings = routes.Select(r => r.Id.ToString()).ToHashSet();
 
             var lines = await _db.PayRunLines
                 .AsNoTracking()
                 .Where(l => l.SourceId != null && routeIdStrings.Contains(l.SourceId))
-                .Select(l => new { l.SourceId, l.Amount, l.Tags })
+                .Select(l => new { l.SourceId, l.Amount })
                 .ToListAsync(ct);
 
-            // Agrupar montos de PayRunLines por routeId
             var amountByRoute = lines
                 .GroupBy(l => l.SourceId!)
                 .ToDictionary(g => g.Key, g => g.Sum(l => l.Amount));
 
-            // 2b) PayrollAdjustments del driver en el período cubierto por las rutas
             var minDate = DateOnly.FromDateTime(routes.Min(r => r.Date));
             var maxDate = DateOnly.FromDateTime(routes.Max(r => r.Date));
 
@@ -162,43 +241,54 @@ namespace TToApp.Controllers
                     pr.PayPeriod != null &&
                     pr.PayPeriod.StartDate <= maxDate &&
                     pr.PayPeriod.EndDate >= minDate)
-                .SumAsync(pr => (decimal?)pr.Adjustments) ?? 0m;
+                .SumAsync(pr => (decimal?)pr.Adjustments, ct) ?? 0m;
 
-            // 3) Construir respuesta
             var result = routes.Select(r =>
             {
-                var charged = amountByRoute.TryGetValue(r.Id.ToString(), out var amt) ? amt : (decimal?)null;
+                var charged = amountByRoute.TryGetValue(r.Id.ToString(), out var amt) ? amt : 0m;
+
+                var los = r.Volumen > 0
+                    ? Math.Round(((decimal)(r.Volumen - (r.Attempts + r.CNL)) / r.Volumen) * 100, 2)
+                    : 0;
+
                 return new
                 {
                     r.Id,
                     r.RouteCode,
-                    Date          = r.Date.ToString("yyyy-MM-dd"),
+                    date = r.Date.ToString("yyyy-MM-dd"),
                     r.DeliveryStops,
                     r.Volumen,
-                    Delivered     = Math.Max(0, r.Volumen - r.Attempts),
+                    delivered = Math.Max(0, r.Volumen - r.Attempts),
                     r.CNL,
                     r.Attempts,
-                    Status        = r.routeStatus.ToString(),
-                    Zone          = r.Zone == null ? null : new { r.Zone.Id, r.Zone.ZoneCode },
-                    Warehouse     = r.Warehouse == null ? null : new { r.Warehouse.Id, r.Warehouse.Name },
-                    ChargedAmount = charged
+                    los,
+                    status = r.routeStatus.ToString(),
+                    zone = r.Zone == null ? null : new { r.Zone.Id, r.Zone.ZoneCode },
+                    warehouse = r.Warehouse == null ? null : new
+                    {
+                        r.Warehouse.Id,
+                        r.Warehouse.Name,
+                        r.Warehouse.City,
+                        r.Warehouse.State
+                    },
+                    chargedAmount = charged
                 };
             }).ToList();
 
             return Ok(new
             {
-                Routes = result,
-                Totals = new
+                routes = result,
+                totals = new
                 {
-                    RouteCount    = result.Count,
-                    DeliveryStops = routes.Sum(r => r.DeliveryStops),
-                    Volumen       = routes.Sum(r => r.Volumen),
-                    Delivered     = routes.Sum(r => Math.Max(0, r.Volumen - r.Attempts)),
-                    CNL           = routes.Sum(r => r.CNL),
-                    Attempts      = routes.Sum(r => r.Attempts),
-                    TotalEarned       = amountByRoute.Values.Sum(),
-                    TotalAdjustments  = totalAdjustments,
-                    TotalCharged      = amountByRoute.Values.Sum() + totalAdjustments
+                    routeCount = result.Count,
+                    deliveryStops = routes.Sum(r => r.DeliveryStops),
+                    volumen = routes.Sum(r => r.Volumen),
+                    delivered = routes.Sum(r => Math.Max(0, r.Volumen - r.Attempts)),
+                    cnl = routes.Sum(r => r.CNL),
+                    attempts = routes.Sum(r => r.Attempts),
+                    totalEarned = amountByRoute.Values.Sum(),
+                    totalAdjustments,
+                    totalCharged = amountByRoute.Values.Sum() + totalAdjustments
                 }
             });
         }

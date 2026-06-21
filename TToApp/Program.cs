@@ -20,7 +20,7 @@ using TToApp.Services.Payroll;
 using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
 using TToApp.Services.Vehicle;
-
+using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -113,7 +113,15 @@ builder.Services.AddScoped<IApplicantContactService, ApplicantContactService>();
 builder.Services.AddHostedService<RDMonitorService>();
 builder.Services.AddScoped<WhatsAppService>();
 builder.Services.AddScoped<IJwtService, JwtService>();
-builder.Services.AddDataProtection();
+var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"]
+    ?? "/var/ttoapp/keys";
+
+Directory.CreateDirectory(dataProtectionKeysPath);
+
+builder.Services
+    .AddDataProtection()
+    .SetApplicationName("TToApp")
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
 builder.Services.AddSingleton<ISensitiveDataProtector, SensitiveDataProtector>();
 builder.Services.AddScoped<IUserUiSettingsService, UserUiSettingsService>();
 builder.Services.AddScoped<PayrollService>();
@@ -124,6 +132,7 @@ builder.Services.AddScoped<IEarlyWarningNotificationService, EarlyWarningNotific
 builder.Services.AddScoped<ICommunicationRecipientService, CommunicationRecipientService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditService>();
+
 
 // Auth / JWT
 var key = Encoding.ASCII.GetBytes(builder.Configuration["JwtSettings:Secret"]);

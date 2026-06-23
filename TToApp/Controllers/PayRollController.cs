@@ -21,6 +21,7 @@ using iText.IO.Image;
 using iText.Kernel.Colors;
 using PdfColor = iText.Kernel.Colors.Color;
 using iText.Layout.Borders;
+using TToApp.DTOs;
 
 namespace TToApp.Controllers
 {
@@ -40,7 +41,6 @@ namespace TToApp.Controllers
             _service = service;
             _logger = logger;
             _payRunApprovedSender = sender;
-
         }
 
         // -------------------------
@@ -113,7 +113,8 @@ namespace TToApp.Controllers
             public List<PeriodSummaryRow> Drivers { get; set; } = new();
             public List<WarehouseNullZoneSummaryDto> OnTracNullZoneRoutes { get; set; } = new();
             public List<RoleExceptionSummaryDto> RoleExceptionByWarehouse { get; set; } = new();
-            public List<UserMissingRateDto> UsersWithOutRate{ get; set; } = new();
+            public List<UserMissingRateDto> UsersWithOutRate { get; set; } = new();
+            public List<DriverStoppedWorkingDto> DriversWhoStoppedWorking { get; set; } = new();
             public decimal TotalNet => Drivers.Sum(d => d.Net);
         }
 
@@ -447,7 +448,75 @@ namespace TToApp.Controllers
                 }
             }
 
-            // 5) Summary
+            var driversWhoStopped = new List<DriverStoppedWorkingDto>();
+            try
+            {
+                var periodStart = start.ToDateTime(TimeOnly.MinValue);
+                var periodEnd   = end.AddDays(1).ToDateTime(TimeOnly.MinValue);
+
+                // Última ruta del warehouse (cualquier driver, cualquier fecha)
+                var warehouseLastRouteDate = await _db.Routes
+                    .AsNoTracking()
+                    .Where(r => r.WarehouseId.HasValue && warehouseIdsFiltered.Contains(r.WarehouseId.Value))
+                    .MaxAsync(r => (DateTime?)r.Date);
+
+                if (warehouseLastRouteDate.HasValue)
+                {
+                    // Drivers con rutas en el período
+                    var driverIdsInPeriod = await _db.Routes
+                        .AsNoTracking()
+                        .Where(r =>
+                            r.UserId != null &&
+                            r.Date >= periodStart && r.Date < periodEnd &&
+                            r.WarehouseId.HasValue &&
+                            warehouseIdsFiltered.Contains(r.WarehouseId.Value))
+                        .Select(r => r.UserId!.Value)
+                        .Distinct()
+                        .ToListAsync();
+
+                    var driversInPeriod = await _db.Users
+                        .AsNoTracking()
+                        .Where(u => u.IsActive && u.UserRole == global::User.Role.Driver && driverIdsInPeriod.Contains(u.Id))
+                        .Select(u => new { u.Id, u.Name, u.LastName })
+                        .ToListAsync();
+
+                    // Última ruta de cada driver (en cualquier fecha)
+                    var driverIntIds = driversInPeriod.Select(d => d.Id).ToList();
+                    var lastRouteMap = (await _db.Routes
+                        .AsNoTracking()
+                        .Where(r => r.UserId != null && driverIntIds.Contains(r.UserId.Value))
+                        .GroupBy(r => r.UserId!.Value)
+                        .Select(g => new { DriverId = g.Key, LastDate = g.Max(r => r.Date) })
+                        .ToListAsync())
+                        .ToDictionary(x => x.DriverId, x => x.LastDate);
+
+                    var today = DateTime.UtcNow.Date;
+                    var warehouseMax = warehouseLastRouteDate.Value.Date;
+
+                    driversWhoStopped = driversInPeriod
+                        .Where(d =>
+                            lastRouteMap.TryGetValue(d.Id, out var last) &&
+                            last.Date < warehouseMax)
+                        .Select(d =>
+                        {
+                            var last = lastRouteMap[d.Id];
+                            return new DriverStoppedWorkingDto
+                            {
+                                DriverId           = d.Id,
+                                DriverName         = $"{d.Name} {d.LastName}".Trim(),
+                                LastRouteDate      = last.ToString("yyyy-MM-dd"),
+                                DaysSinceLastRoute = (warehouseMax - last.Date).Days
+                            };
+                        })
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error computing DriversWhoStopped");
+            }
+
+            // 6) Summary
             var runs = await (
                 from r in _db.PayRuns.AsNoTracking()
                 join u in _db.Set<User>().AsNoTracking()
@@ -474,8 +543,8 @@ namespace TToApp.Controllers
                 Drivers = runs,
                 OnTracNullZoneRoutes = onTracNullZoneByWarehouse,
                 RoleExceptionByWarehouse = roleExceptionByWarehouse,
-                UsersWithOutRate = usersWithoutRates
-
+                UsersWithOutRate = usersWithoutRates,
+                DriversWhoStoppedWorking = driversWhoStopped
             };
 
             return Ok(dto);

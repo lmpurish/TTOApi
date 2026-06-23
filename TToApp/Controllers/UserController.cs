@@ -2139,93 +2139,89 @@ public class UserController : ControllerBase
         });
     }
 
-    [HttpGet("{id}/ssn")]
-    public async Task<IActionResult> GetSsn(int id)
-    {
-        // 1) obtener requester desde claims
-        var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        if (userIdClaim == null) return Unauthorized();
-        int requesterId = int.Parse(userIdClaim);
+    [Authorize]
+[HttpGet("{id}/ssn")]
+public async Task<IActionResult> GetSsn(int id)
+{
+    var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
-        // 2) obtener rol y companyId del requester (para validar CompanyOwner)
-        var requester = await _authContext.Users
-            .AsNoTracking()
-            .Where(u => u.Id == requesterId)
-            .Select(u => new { u.Id, u.UserRole, u.CompanyId })
-            .FirstOrDefaultAsync();
+    if (string.IsNullOrWhiteSpace(userIdClaim) || !int.TryParse(userIdClaim, out int requesterId))
+        return Unauthorized();
 
-        if (requester == null) return Unauthorized();
+    var requester = await _authContext.Users
+        .AsNoTracking()
+        .Where(u => u.Id == requesterId)
+        .Select(u => new { u.Id, u.UserRole, u.CompanyId })
+        .FirstOrDefaultAsync();
 
-        // ajustar los nombres de enum/roles a tu proyecto (esto usa el enum global::User.Role como ejemplo)
-        bool isAdmin = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.Admin;
-        bool isCompanyOwner = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.CompanyOwner;
+    if (requester == null)
+        return Unauthorized();
 
-        bool isSelf = requester.Id == id;
+    bool isAdmin = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.Admin;
+    bool isCompanyOwner = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.CompanyOwner;
+    bool isSelf = requesterId == id;
 
-        if (!isSelf && !isAdmin && !isCompanyOwner)
-            return Forbid();
+    if (!isAdmin && !isCompanyOwner && !isSelf)
+        return Forbid();
 
-        // 3) obtener datos del usuario objetivo (solo los campos necesarios)
-        var target = await _authContext.Users
-            .AsNoTracking()
-            .Where(u => u.Id == id)
-            .Select(u => new
+    var target = await _authContext.Users
+        .AsNoTracking()
+        .Where(u => u.Id == id)
+        .Select(u => new
+        {
+            u.Id,
+            u.CompanyId,
+            Profile = u.Profile == null ? null : new
             {
-                u.Id,
-                u.CompanyId,
-                Profile = u.Profile == null ? null : new
-                {
-                    u.Profile.SsnLast4,
-                    // traemos el campo cifrado tal cual (string). Si en tu model es byte[] ajusta abajo.
-                    u.Profile.SsnEncrypted
-                }
-            })
-            .FirstOrDefaultAsync();
+                u.Profile.SsnLast4,
+                u.Profile.SsnEncrypted
+            }
+        })
+        .FirstOrDefaultAsync();
 
-        if (target == null) return NotFound();
+    if (target == null)
+        return NotFound();
 
-        // 4) si requester es CompanyOwner, asegurarse que pertenezcan a la misma company
-        if (isCompanyOwner && target.CompanyId != requester.CompanyId)
-            return Forbid();
+    if (isCompanyOwner && !isSelf && target.CompanyId != requester.CompanyId)
+        return Forbid();
 
-        // 5) auditar el acceso (quién, a quién, ip, motivo)
-        try
-        {
-            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+    var last4 = target.Profile?.SsnLast4;
+    var masked = !string.IsNullOrWhiteSpace(last4)
+        ? $"***-**-{last4}"
+        : "***-**-----";
 
-        }
-        catch (Exception ex)
-        {
-            // audit failure should not block the main flow, pero logueamos
-            _logger.LogWarning(ex, "Audit log failed while accessing SSN");
-        }
-
-        // 6) si no hay ssn cifrado, devolvemos la máscara (si existe last4)
-        var last4 = target.Profile?.SsnLast4;
-        var masked = !string.IsNullOrEmpty(last4) ? $"***-**-{last4}" : "***-**-----";
-
-        if (string.IsNullOrEmpty(target.Profile?.SsnEncrypted))
-            return Ok(new { masked });
-
-        // 7) desencriptar con ISensitiveDataProtector (lo hacemos aquí, en el controller)
-        string decrypted;
-        try
-        {
-            decrypted = _protector.Unprotect(target.Profile.SsnEncrypted);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error desencriptando SsnEncrypted para user {UserId}", id);
-            return StatusCode(500, "Error al desencriptar el SSN");
-        }
-
-        // 8) formatear y devolver solo la máscara + ssn formateado
+    if (string.IsNullOrWhiteSpace(target.Profile?.SsnEncrypted))
+    {
         return Ok(new
         {
             masked,
-            ssn = FormatSsn(decrypted) // ejemplo: 123-45-6789
+            ssn = ""
         });
     }
+
+    string decrypted;
+
+    try
+    {
+        decrypted = _protector.Unprotect(target.Profile.SsnEncrypted);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error desencriptando SsnEncrypted para user {UserId}", id);
+
+        return Ok(new
+        {
+            masked,
+            ssn = ""
+        });
+    }
+
+    return Ok(new
+    {
+        masked,
+        ssn = FormatSsn(decrypted)
+    });
+}
 
     // Helper: extraer el user id del claim (ajusta si tu claim usa otro tipo)
     private Guid? GetUserIdFromClaims()

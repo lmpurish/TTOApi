@@ -2719,270 +2719,336 @@ namespace TToApp.Controllers
         }
 
         [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]
-        [HttpPost("upload-swiftx-dsp-summary/{warehouseId:int}")]
-        public async Task<IActionResult> UploadSwiftXDspSummary(
+[HttpPost("upload-swiftx-dsp-summary/{warehouseId:int}")]
+public async Task<IActionResult> UploadSwiftXDspSummary(
     [FromRoute] int warehouseId,
     IFormFile file)
+{
+    if (file == null || file.Length == 0)
+        return BadRequest(new { message = "No file uploaded." });
+
+    var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+    int.TryParse(userIdStr, out var currentUserId);
+
+    var warehouse = await _context.Warehouses
+        .FirstOrDefaultAsync(w => w.Id == warehouseId);
+
+    if (warehouse == null)
+        return NotFound(new { message = "Warehouse not found." });
+
+    using var stream = new MemoryStream();
+    await file.CopyToAsync(stream);
+    stream.Position = 0;
+
+    using var workbook = new XLWorkbook(stream);
+    var worksheet = workbook.Worksheets.First();
+    var headerRow = worksheet.Row(1);
+
+    string NormalizeHeader(string text)
+    {
+        return (text ?? "")
+            .Trim()
+            .ToLowerInvariant()
+            .Replace(" ", "")
+            .Replace("-", "")
+            .Replace("_", "")
+            .Replace("(", "")
+            .Replace(")", "")
+            .Replace(".", "")
+            .Replace(":", "")
+            .Replace("á", "a")
+            .Replace("é", "e")
+            .Replace("í", "i")
+            .Replace("ó", "o")
+            .Replace("ú", "u");
+    }
+
+    int GetColumnIndex(params string[] possibleNames)
+    {
+        foreach (var cell in headerRow.CellsUsed())
         {
-            if (file == null || file.Length == 0)
-                return BadRequest(new { message = "No file uploaded." });
+            var header = NormalizeHeader(cell.GetString());
 
-            var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            int.TryParse(userIdStr, out var currentUserId);
-
-            var warehouse = await _context.Warehouses
-                .FirstOrDefaultAsync(w => w.Id == warehouseId);
-
-            if (warehouse == null)
-                return NotFound(new { message = "Warehouse not found." });
-
-            using var stream = new MemoryStream();
-            await file.CopyToAsync(stream);
-            stream.Position = 0;
-
-            using var workbook = new XLWorkbook(stream);
-            var worksheet = workbook.Worksheets.First();
-            var headerRow = worksheet.Row(1);
-
-            int GetColumnIndex(params string[] possibleNames)
+            foreach (var name in possibleNames)
             {
-                foreach (var cell in headerRow.CellsUsed())
+                if (header == NormalizeHeader(name))
+                    return cell.Address.ColumnNumber;
+            }
+        }
+
+        return -1;
+    }
+
+    int GetIntCellValue(IXLCell cell)
+    {
+        if (cell.DataType == XLDataType.Number)
+            return Convert.ToInt32(cell.GetDouble());
+
+        var text = cell.GetString()
+            .Trim()
+            .Replace(",", "")
+            .Replace(" ", "");
+
+        if (int.TryParse(text, out var value))
+            return value;
+
+        return 0;
+    }
+
+    var dateCol = GetColumnIndex(
+        "Delivery Date",
+        "Fecha de entrega",
+        "Date",
+        "Fecha"
+    );
+
+    var driverIdCol = GetColumnIndex(
+        "Driver ID",
+        "Driver Id",
+        "DriverID",
+        "ID del conductor",
+        "Id del conductor"
+    );
+
+    var driverNameCol = GetColumnIndex(
+        "Driver Name",
+        "Nombre del conductor",
+        "Conductor"
+    );
+
+    var routeCodeCol = GetColumnIndex(
+        "Route",
+        "Route Name",
+        "Route Code",
+        "Nombre de la ruta",
+        "Ruta"
+    );
+
+    var volumeCol = GetColumnIndex(
+        "Delivered Quantity",
+        "Cantidad de paquetes entregados",
+        "Package Quantity",
+        "Paquetes entregados"
+    );
+
+    var deliveryStopsCol = GetColumnIndex(
+        "Standard-price Delivered Quantity",
+        "Standard Price Delivered Quantity",
+        "Standard Delivered Quantity",
+        "Paquetes entregados precio estándar",
+        "Paquetes entregados (precio estándar)",
+        "Cantidad entregada precio estándar"
+    );
+
+    if (dateCol == -1 ||
+        driverIdCol == -1 ||
+        routeCodeCol == -1 ||
+        volumeCol == -1 ||
+        deliveryStopsCol == -1)
+    {
+        var foundHeaders = headerRow.CellsUsed()
+            .Select(c => c.GetString())
+            .ToList();
+
+        return BadRequest(new
+        {
+            message = "Invalid SwiftX Excel format.",
+            foundHeaders,
+            missing = new
+            {
+                dateCol,
+                driverIdCol,
+                routeCodeCol,
+                volumeCol,
+                deliveryStopsCol
+            }
+        });
+    }
+
+    var routesCreated = 0;
+    var routesUpdated = 0;
+    var rowsRead = 0;
+
+    var driverNotFound = new List<object>();
+    var errors = new List<object>();
+
+    var lastRow = worksheet.LastRowUsed()?.RowNumber() ?? 1;
+
+    for (int rowNumber = 2; rowNumber <= lastRow; rowNumber++)
+    {
+        var row = worksheet.Row(rowNumber);
+
+        try
+        {
+            var dateText = row.Cell(dateCol).GetString().Trim();
+            var driverCode = row.Cell(driverIdCol).GetString().Trim();
+            var routeCode = row.Cell(routeCodeCol).GetString().Trim();
+
+            var driverName = driverNameCol != -1
+                ? row.Cell(driverNameCol).GetString().Trim()
+                : "";
+
+            if (string.IsNullOrWhiteSpace(dateText) ||
+                string.IsNullOrWhiteSpace(driverCode) ||
+                string.IsNullOrWhiteSpace(routeCode))
+            {
+                continue;
+            }
+
+            if (!DateTime.TryParse(dateText, out var deliveryDate))
+            {
+                errors.Add(new
                 {
-                    var value = cell.GetString().Trim();
+                    row = rowNumber,
+                    message = "Invalid date.",
+                    value = dateText
+                });
 
-                    foreach (var name in possibleNames)
-                    {
-                        if (value.Equals(name, StringComparison.OrdinalIgnoreCase))
-                            return cell.Address.ColumnNumber;
-                    }
-                }
-
-                return -1;
+                continue;
             }
 
-            int GetIntCellValue(IXLCell cell)
+            var volumenPackages = GetIntCellValue(row.Cell(volumeCol));
+            var deliveryStops = GetIntCellValue(row.Cell(deliveryStopsCol));
+
+            if (volumenPackages <= 0 && deliveryStops <= 0)
+                continue;
+
+            rowsRead++;
+
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u =>
+                    u.IdentificationNumber == driverCode &&
+                    u.WarehouseId == warehouseId);
+
+            if (user == null)
             {
-                if (cell.DataType == XLDataType.Number)
-                    return Convert.ToInt32(cell.GetDouble());
-
-                var text = cell.GetString().Trim().Replace(",", "");
-
-                if (int.TryParse(text, out var value))
-                    return value;
-
-                return 0;
-            }
-
-            var dateCol = GetColumnIndex("Fecha de entrega", "Delivery Date");
-            var driverIdCol = GetColumnIndex("ID del conductor", "Driver ID");
-            var driverNameCol = GetColumnIndex("Nombre del conductor", "Driver Name");
-            var routeCodeCol = GetColumnIndex("Nombre de la ruta", "Route Name");
-            var volumeCol = GetColumnIndex("Cantidad de paquetes entregados");
-            var deliveryStopsCol = GetColumnIndex("Paquetes entregados (precio estándar)");
-
-            if (dateCol == -1 ||
-                driverIdCol == -1 ||
-                routeCodeCol == -1 ||
-                volumeCol == -1 ||
-                deliveryStopsCol == -1)
-            {
-                return BadRequest(new
+                driverNotFound.Add(new
                 {
-                    message = "Invalid SwiftX Excel format.",
-                    requiredColumns = new[]
-                    {
-                "Fecha de entrega",
-                "ID del conductor",
-                "Nombre de la ruta",
-                "Cantidad de paquetes entregados",
-                "Paquetes entregados (precio estándar)"
-            }
+                    row = rowNumber,
+                    driverId = driverCode,
+                    driverName,
+                    routeCode,
+                    date = deliveryDate.ToString("yyyy-MM-dd")
                 });
             }
 
-            var routesCreated = 0;
-            var routesUpdated = 0;
-            var rowsRead = 0;
+            var userId = user?.Id;
 
-            var driverNotFound = new List<object>();
-            var errors = new List<object>();
+            var existingRoute = await _context.Routes
+                .FirstOrDefaultAsync(r =>
+                    r.Date.Date == deliveryDate.Date &&
+                    r.WarehouseId == warehouseId &&
+                    r.RouteCode == routeCode);
 
-            var lastRow = worksheet.LastRowUsed()?.RowNumber() ?? 1;
-
-            for (int rowNumber = 2; rowNumber <= lastRow; rowNumber++)
+            if (existingRoute != null)
             {
-                var row = worksheet.Row(rowNumber);
+                if (!existingRoute.UserId.HasValue && userId.HasValue)
+                    existingRoute.UserId = userId;
 
-                try
-                {
-                    var dateText = row.Cell(dateCol).GetString().Trim();
-                    var driverCode = row.Cell(driverIdCol).GetString().Trim();
-                    var routeCode = row.Cell(routeCodeCol).GetString().Trim();
+                existingRoute.Volumen = volumenPackages;
+                existingRoute.DeliveryStops = deliveryStops;
+                existingRoute.Attempts = 0;
 
-                    var driverName = driverNameCol != -1
-                        ? row.Cell(driverNameCol).GetString().Trim()
-                        : "";
+                existingRoute.Los = 100;
+                existingRoute.CustomerOnTime = 100;
+                existingRoute.BranchOnTime = 100;
+                existingRoute.CNL = 0;
 
-                    if (string.IsNullOrWhiteSpace(dateText) ||
-                        string.IsNullOrWhiteSpace(driverCode) ||
-                        string.IsNullOrWhiteSpace(routeCode))
-                    {
-                        continue;
-                    }
+                existingRoute.routeStatus = existingRoute.UserId.HasValue
+                    ? RouteStatus.Completed
+                    : RouteStatus.PendingCompletion;
 
-                    if (!DateTime.TryParse(dateText, out var deliveryDate))
-                    {
-                        errors.Add(new
-                        {
-                            row = rowNumber,
-                            message = "Invalid date.",
-                            value = dateText
-                        });
+                existingRoute.PaymentType = PaymentType.PerStop;
+                existingRoute.WarehouseId = warehouseId;
 
-                        continue;
-                    }
-
-                    var volumenPackages = GetIntCellValue(row.Cell(volumeCol));
-                    var deliveryStops = GetIntCellValue(row.Cell(deliveryStopsCol));
-
-                    if (volumenPackages <= 0 && deliveryStops <= 0)
-                        continue;
-
-                    rowsRead++;
-
-                    var user = await _context.Users
-                        .FirstOrDefaultAsync(u =>
-                            u.IdentificationNumber == driverCode &&
-                            u.WarehouseId == warehouseId);
-
-                    if (user == null)
-                    {
-                        driverNotFound.Add(new
-                        {
-                            row = rowNumber,
-                            driverId = driverCode,
-                            driverName,
-                            routeCode,
-                            date = deliveryDate.ToString("yyyy-MM-dd")
-                        });
-                    }
-
-                    var userId = user?.Id;
-
-                    var existingRoute = await _context.Routes
-                        .FirstOrDefaultAsync(r =>
-                            r.Date.Date == deliveryDate.Date &&
-                            r.WarehouseId == warehouseId &&
-                            r.RouteCode == routeCode &&
-                            r.UserId == userId);
-
-                    if (existingRoute != null)
-                    {
-                        existingRoute.UserId = userId ?? existingRoute.UserId;
-                        existingRoute.Volumen = volumenPackages;
-                        existingRoute.DeliveryStops = deliveryStops;
-                        existingRoute.Attempts = 0;
-
-                        existingRoute.Los = 100;
-                        existingRoute.CustomerOnTime = 100;
-                        existingRoute.BranchOnTime = 100;
-                        existingRoute.CNL = 0;
-
-                        existingRoute.routeStatus = userId.HasValue
-                            ? RouteStatus.Completed
-                            : RouteStatus.PendingCompletion;
-
-                        existingRoute.PaymentType = PaymentType.PerStop;
-                        existingRoute.WarehouseId = warehouseId;
-
-                        routesUpdated++;
-                    }
-                    else
-                    {
-                        _context.Routes.Add(new Routes
-                        {
-                            Date = deliveryDate.Date,
-                            UserId = userId,
-                            WarehouseId = warehouseId,
-                            RouteCode = routeCode,
-
-                            Volumen = volumenPackages,
-                            DeliveryStops = deliveryStops,
-                            Attempts = 0,
-
-                            Los = 100,
-                            CustomerOnTime = 100,
-                            BranchOnTime = 100,
-                            CNL = 0,
-
-                            routeStatus = userId.HasValue
-                                ? RouteStatus.Completed
-                                : RouteStatus.PendingCompletion,
-
-                            PaymentType = PaymentType.PerStop
-                        });
-
-                        routesCreated++;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(new
-                    {
-                        row = rowNumber,
-                        message = ex.Message
-                    });
-                }
+                routesUpdated++;
             }
-
-            await _context.SaveChangesAsync();
-
-            await _auditService.LogAsync(new AuditLogDto
+            else
             {
-                UserId = currentUserId,
-                Action = AuditLogAction.SwiftXDspSummaryImport,
-                Entity = "Routes",
-                WarehouseId = warehouseId,
-                WarehouseName = $"{warehouse.Company} - {warehouse.City}",
-
-                Description =
-                    $"SwiftX DSP summary imported. Warehouse={warehouseId}, " +
-                    $"RowsRead={rowsRead}, RoutesCreated={routesCreated}, " +
-                    $"RoutesUpdated={routesUpdated}, DriversNotFound={driverNotFound.Count}, " +
-                    $"Errors={errors.Count}",
-
-                NewValue = System.Text.Json.JsonSerializer.Serialize(new
+                _context.Routes.Add(new Routes
                 {
-                    FileName = file.FileName,
+                    Date = deliveryDate.Date,
+                    UserId = userId,
                     WarehouseId = warehouseId,
-                    Warehouse = new
-                    {
-                        warehouse.Id,
-                        warehouse.Company,
-                        warehouse.City
-                    },
-                    RowsRead = rowsRead,
-                    RoutesCreated = routesCreated,
-                    RoutesUpdated = routesUpdated,
-                    DriversNotFoundCount = driverNotFound.Count,
-                    DriverNotFound = driverNotFound.Take(100).ToList(),
-                    ErrorsCount = errors.Count,
-                    Errors = errors.Take(100).ToList()
-                })
-            });
+                    RouteCode = routeCode,
 
-            return Ok(new
+                    Volumen = volumenPackages,
+                    DeliveryStops = deliveryStops,
+                    Attempts = 0,
+
+                    Los = 100,
+                    CustomerOnTime = 100,
+                    BranchOnTime = 100,
+                    CNL = 0,
+
+                    routeStatus = userId.HasValue
+                        ? RouteStatus.Completed
+                        : RouteStatus.PendingCompletion,
+
+                    PaymentType = PaymentType.PerStop
+                });
+
+                routesCreated++;
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add(new
             {
-                message = "SwiftX DSP summary imported successfully.",
-                warehouseId,
-                rowsRead,
-                routesCreated,
-                routesUpdated,
-                driversNotFoundCount = driverNotFound.Count,
-                driverNotFound,
-                errors
+                row = rowNumber,
+                message = ex.Message
             });
         }
+    }
+
+    await _context.SaveChangesAsync();
+
+    await _auditService.LogAsync(new AuditLogDto
+    {
+        UserId = currentUserId,
+        Action = AuditLogAction.SwiftXDspSummaryImport,
+        Entity = "Routes",
+        WarehouseId = warehouseId,
+        WarehouseName = $"{warehouse.Company} - {warehouse.City}",
+
+        Description =
+            $"SwiftX DSP summary imported. Warehouse={warehouseId}, " +
+            $"RowsRead={rowsRead}, RoutesCreated={routesCreated}, " +
+            $"RoutesUpdated={routesUpdated}, DriversNotFound={driverNotFound.Count}, " +
+            $"Errors={errors.Count}",
+
+        NewValue = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            FileName = file.FileName,
+            WarehouseId = warehouseId,
+            Warehouse = new
+            {
+                warehouse.Id,
+                warehouse.Company,
+                warehouse.City
+            },
+            RowsRead = rowsRead,
+            RoutesCreated = routesCreated,
+            RoutesUpdated = routesUpdated,
+            DriversNotFoundCount = driverNotFound.Count,
+            DriverNotFound = driverNotFound.Take(100).ToList(),
+            ErrorsCount = errors.Count,
+            Errors = errors.Take(100).ToList()
+        })
+    });
+
+    return Ok(new
+    {
+        message = "SwiftX DSP summary imported successfully.",
+        warehouseId,
+        rowsRead,
+        routesCreated,
+        routesUpdated,
+        driversNotFoundCount = driverNotFound.Count,
+        driverNotFound,
+        errors
+    });
+}
 
 
         [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]

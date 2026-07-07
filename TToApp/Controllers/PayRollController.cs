@@ -1998,53 +1998,240 @@ namespace TToApp.Controllers
         }
 
         [HttpGet("periods/by-range")]
-        public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
-        [FromQuery] long companyId,
-        [FromQuery] long? warehouseId,
-        [FromQuery] string startDate,
-        [FromQuery] string endDate)
+public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
+    [FromQuery] long companyId,
+    [FromQuery] long? warehouseId,
+    [FromQuery] string startDate,
+    [FromQuery] string endDate)
+{
+    var start = ParseDateOnly(startDate);
+    var end = ParseDateOnly(endDate);
+    var endExclusive = end.AddDays(1);
+
+    var period = await _db.PayPeriods
+        .AsNoTracking()
+        .FirstOrDefaultAsync(p =>
+            p.CompanyId == companyId &&
+            p.WarehouseId == warehouseId &&
+            p.StartDate == start &&
+            p.EndDate == end);
+
+    if (period is null)
+        return NotFound("No existing PayPeriod found for that date range.");
+
+    var runs = await (
+        from r in _db.PayRuns.AsNoTracking()
+        join u in _db.Users.AsNoTracking()
+            on r.DriverId equals u.Id into gj
+        from u in gj.DefaultIfEmpty()
+        where r.PayPeriodId == period.Id
+        select new PeriodSummaryRow
         {
-            var start = ParseDateOnly(startDate);
-            var end = ParseDateOnly(endDate);
-
-            var period = await _db.PayPeriods
-                .AsNoTracking()
-                .FirstOrDefaultAsync(p =>
-                    p.CompanyId == companyId &&
-                    p.WarehouseId == warehouseId &&
-                    p.StartDate == start &&
-                    p.EndDate == end);
-
-            if (period is null)
-                return NotFound("No existing PayPeriod found for that date range.");
-
-            var runs = await (
-                from r in _db.PayRuns.AsNoTracking()
-                join u in _db.Users.AsNoTracking()
-                    on r.DriverId equals u.Id into gj
-                from u in gj.DefaultIfEmpty()
-                where r.PayPeriodId == period.Id
-                select new PeriodSummaryRow
-                {
-                    DriverId = r.DriverId,
-                    DriverName = u != null ? (u.Name + " " + u.LastName).Trim() : "Unknown",
-                    Gross = r.GrossAmount,
-                    Adjustments = r.Adjustments,
-                    Net = r.NetAmount,
-                    Run = r.Id
-                }
-            ).ToListAsync();
-
-            var dto = new PeriodSummaryDto
-            {
-                PayPeriodId = period.Id,
-                StartDate = period.StartDate.ToString("yyyy-MM-dd"),
-                EndDate = period.EndDate.ToString("yyyy-MM-dd"),
-                Drivers = runs
-            };
-
-            return Ok(dto);
+            DriverId = r.DriverId,
+            DriverName = u != null ? (u.Name + " " + u.LastName).Trim() : "Unknown",
+            Gross = r.GrossAmount,
+            Adjustments = r.Adjustments,
+            Net = r.NetAmount,
+            Run = r.Id,
+            Status = r.Status
         }
+    ).ToListAsync();
+
+    var periodStart = start.ToDateTime(TimeOnly.MinValue);
+    var periodEnd = endExclusive.ToDateTime(TimeOnly.MinValue);
+
+    var routesQ =
+        from r in _db.Set<Routes>().IgnoreQueryFilters().AsNoTracking()
+        join z in _db.Set<Zone>().IgnoreQueryFilters().AsNoTracking()
+            on r.ZoneId equals z.Id into zj
+        from z in zj.DefaultIfEmpty()
+        where r.UserId != null
+              && r.routeStatus == RouteStatus.Completed
+              && r.DeliveryStops > 0
+              && r.Date >= periodStart
+              && r.Date < periodEnd
+              && (!warehouseId.HasValue || warehouseId.Value == 0 || r.WarehouseId == (int)warehouseId.Value)
+        select new { r, z };
+
+    var warehouseIdsFiltered = await routesQ
+        .Select(x => x.r.WarehouseId)
+        .Where(id => id.HasValue)
+        .Select(id => id!.Value)
+        .Distinct()
+        .ToListAsync();
+
+    var routeUserIdsQ = routesQ
+        .Select(x => x.r.UserId)
+        .Where(id => id.HasValue)
+        .Select(id => id!.Value)
+        .Distinct();
+
+    var driverIds = await (
+        from uid in routeUserIdsQ
+        join u in _db.Users.AsNoTracking()
+            on uid equals u.Id
+        where u.UserRole.HasValue
+              && u.UserRole.Value != global::User.Role.Applicant
+              && u.UserRole.Value != global::User.Role.Rsp
+        select (long)u.Id
+    )
+    .Distinct()
+    .ToListAsync();
+
+    var specialUserIds = await _db.Users
+        .AsNoTracking()
+        .Where(u =>
+            u.IsActive &&
+            u.UserRole.HasValue &&
+            u.UserRole.Value != global::User.Role.Applicant &&
+            u.UserRole.Value != global::User.Role.Driver &&
+            u.UserRole.Value != global::User.Role.Rsp &&
+            u.WarehouseId.HasValue &&
+            warehouseIdsFiltered.Contains(u.WarehouseId.Value))
+        .Select(u => (long)u.Id)
+        .ToListAsync();
+
+    var candidateIds = driverIds
+        .Union(specialUserIds)
+        .Distinct()
+        .ToList();
+
+    var usersWithoutRates = await (
+        from u in _db.Users.AsNoTracking()
+        where candidateIds.Contains((long)u.Id)
+        join r in _db.DriverRates.AsNoTracking()
+            on (long)u.Id equals r.DriverId into rr
+        where !rr.Any()
+        select new UserMissingRateDto
+        {
+            UserId = (long)u.Id,
+            Name = u.Name,
+            LastName = u.LastName
+        }
+    ).ToListAsync();
+
+    var roleFlat = await (
+        from rq in routesQ
+        join u in _db.Users.AsNoTracking()
+            on rq.r.UserId equals u.Id
+        where u.UserRole.HasValue
+              && u.UserRole.Value == global::User.Role.Applicant
+              && rq.r.WarehouseId.HasValue
+        select new
+        {
+            WarehouseId = rq.r.WarehouseId.Value,
+            FullName = ((u.Name ?? "") + " " + (u.LastName ?? "")).Trim()
+        }
+    )
+    .Distinct()
+    .ToListAsync();
+
+    var roleExceptionByWarehouse = roleFlat
+        .GroupBy(x => x.WarehouseId)
+        .Select(g => new RoleExceptionSummaryDto
+        {
+            WarehouseId = g.Key,
+            UserNames = g
+                .Select(x => x.FullName)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n)
+                .ToList()
+        })
+        .ToList();
+
+    var driversWhoStopped = new List<DriverStoppedWorkingDto>();
+
+    try
+    {
+        if (warehouseIdsFiltered.Any())
+        {
+            var warehouseLastRouteDate = await _db.Routes
+                .AsNoTracking()
+                .Where(r =>
+                    r.WarehouseId.HasValue &&
+                    warehouseIdsFiltered.Contains(r.WarehouseId.Value))
+                .MaxAsync(r => (DateTime?)r.Date);
+
+            if (warehouseLastRouteDate.HasValue)
+            {
+                var driverIdsInPeriod = await _db.Routes
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.UserId != null &&
+                        r.Date >= periodStart &&
+                        r.Date < periodEnd &&
+                        r.WarehouseId.HasValue &&
+                        warehouseIdsFiltered.Contains(r.WarehouseId.Value))
+                    .Select(r => r.UserId!.Value)
+                    .Distinct()
+                    .ToListAsync();
+
+                var driversInPeriod = await _db.Users
+                    .AsNoTracking()
+                    .Where(u =>
+                        u.IsActive &&
+                        u.UserRole == global::User.Role.Driver &&
+                        driverIdsInPeriod.Contains(u.Id))
+                    .Select(u => new { u.Id, u.Name, u.LastName })
+                    .ToListAsync();
+
+                var driverIntIds = driversInPeriod.Select(d => d.Id).ToList();
+
+                var lastRouteMap = (await _db.Routes
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.UserId != null &&
+                        driverIntIds.Contains(r.UserId.Value))
+                    .GroupBy(r => r.UserId!.Value)
+                    .Select(g => new
+                    {
+                        DriverId = g.Key,
+                        LastDate = g.Max(r => r.Date)
+                    })
+                    .ToListAsync())
+                    .ToDictionary(x => x.DriverId, x => x.LastDate);
+
+                var warehouseMax = warehouseLastRouteDate.Value.Date;
+
+                driversWhoStopped = driversInPeriod
+                    .Where(d =>
+                        lastRouteMap.TryGetValue(d.Id, out var last) &&
+                        last.Date < warehouseMax)
+                    .Select(d =>
+                    {
+                        var last = lastRouteMap[d.Id];
+
+                        return new DriverStoppedWorkingDto
+                        {
+                            DriverId = d.Id,
+                            DriverName = $"{d.Name} {d.LastName}".Trim(),
+                            LastRouteDate = last.ToString("yyyy-MM-dd"),
+                            DaysSinceLastRoute = (warehouseMax - last.Date).Days
+                        };
+                    })
+                    .ToList();
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error computing DriversWhoStopped in GetPeriodSummaryByRange");
+    }
+
+    var dto = new PeriodSummaryDto
+    {
+        PayPeriodId = period.Id,
+        StartDate = period.StartDate.ToString("yyyy-MM-dd"),
+        EndDate = period.EndDate.ToString("yyyy-MM-dd"),
+        Drivers = runs,
+        UsersWithOutRate = usersWithoutRates,
+        DriversWhoStoppedWorking = driversWhoStopped,
+        RoleExceptionByWarehouse = roleExceptionByWarehouse
+    };
+
+    return Ok(dto);
+}
         [HttpPost("runs/{id:long}/adjustments")]
         public async Task<ActionResult> AddAdjustment(long id, [FromBody] CreateAdjustmentRequest req)
         {
@@ -2418,8 +2605,261 @@ namespace TToApp.Controllers
             });
         }
 
+        [HttpGet("periods/{id:long}/insights")]
+public async Task<ActionResult<PayrollInsightsDto>> GetPayrollInsights(long id)
+{
+    var period = await _db.PayPeriods
+        .AsNoTracking()
+        .FirstOrDefaultAsync(p => p.Id == id);
 
+    if (period is null)
+        return NotFound("PayPeriod does not exist.");
+
+    var start = period.StartDate;
+    var end = period.EndDate;
+    var endExclusive = end.AddDays(1);
+
+    var currentStartDt = start.ToDateTime(TimeOnly.MinValue);
+    var currentEndDt = endExclusive.ToDateTime(TimeOnly.MinValue);
+
+    var days = end.DayNumber - start.DayNumber + 1;
+
+    var prevStart = start.AddDays(-days);
+    var prevEnd = start.AddDays(-1);
+    var prevEndExclusive = prevEnd.AddDays(1);
+
+    var prevStartDt = prevStart.ToDateTime(TimeOnly.MinValue);
+    var prevEndDt = prevEndExclusive.ToDateTime(TimeOnly.MinValue);
+
+    var warehouseId = period.WarehouseId;
+
+    var currentDrivers = await _db.Routes
+        .AsNoTracking()
+        .Where(r =>
+            r.UserId != null &&
+            r.routeStatus == RouteStatus.Completed &&
+            r.DeliveryStops > 0 &&
+            r.Date >= currentStartDt &&
+            r.Date < currentEndDt &&
+            (!warehouseId.HasValue || r.WarehouseId == warehouseId.Value))
+        .Select(r => r.UserId!.Value)
+        .Distinct()
+        .ToListAsync();
+
+    var previousDrivers = await _db.Routes
+        .AsNoTracking()
+        .Where(r =>
+            r.UserId != null &&
+            r.routeStatus == RouteStatus.Completed &&
+            r.DeliveryStops > 0 &&
+            r.Date >= prevStartDt &&
+            r.Date < prevEndDt &&
+            (!warehouseId.HasValue || r.WarehouseId == warehouseId.Value))
+        .Select(r => r.UserId!.Value)
+        .Distinct()
+        .ToListAsync();
+
+    var currentSet = currentDrivers.ToHashSet();
+    var previousSet = previousDrivers.ToHashSet();
+
+    var retainedDrivers = previousSet.Intersect(currentSet).Count();
+    var newDrivers = currentSet.Except(previousSet).Count();
+    var lostDrivers = previousSet.Except(currentSet).Count();
+
+    var retentionRate = previousSet.Count > 0
+        ? Math.Round((decimal)retainedDrivers * 100m / previousSet.Count, 2)
+        : 0m;
+
+    var churnRate = previousSet.Count > 0
+        ? Math.Round((decimal)lostDrivers * 100m / previousSet.Count, 2)
+        : 0m;
+
+    var runs = await _db.PayRuns
+        .AsNoTracking()
+        .Where(r => r.PayPeriodId == period.Id)
+        .Select(r => new
+        {
+            r.DriverId,
+            r.NetAmount
+        })
+        .ToListAsync();
+
+    var totalNet = runs.Sum(r => r.NetAmount);
+
+    var averagePay = runs.Count > 0
+        ? Math.Round(totalNet / runs.Count, 2)
+        : 0m;
+
+    var riskDrivers = new List<DriverStoppedWorkingDto>();
+
+    try
+    {
+        var warehouseIds = await _db.Routes
+            .AsNoTracking()
+            .Where(r =>
+                r.WarehouseId.HasValue &&
+                r.UserId != null &&
+                r.Date >= currentStartDt &&
+                r.Date < currentEndDt &&
+                (!warehouseId.HasValue || r.WarehouseId == warehouseId.Value))
+            .Select(r => r.WarehouseId!.Value)
+            .Distinct()
+            .ToListAsync();
+
+        if (warehouseIds.Any())
+        {
+            var warehouseLastRouteDate = await _db.Routes
+                .AsNoTracking()
+                .Where(r =>
+                    r.WarehouseId.HasValue &&
+                    warehouseIds.Contains(r.WarehouseId.Value))
+                .MaxAsync(r => (DateTime?)r.Date);
+
+            if (warehouseLastRouteDate.HasValue)
+            {
+                var driversInPeriod = await _db.Users
+                    .AsNoTracking()
+                    .Where(u =>
+                        u.IsActive &&
+                        u.UserRole == global::User.Role.Driver &&
+                        currentDrivers.Contains(u.Id))
+                    .Select(u => new
+                    {
+                        u.Id,
+                        u.Name,
+                        u.LastName
+                    })
+                    .ToListAsync();
+
+                var driverIds = driversInPeriod
+                    .Select(d => d.Id)
+                    .ToList();
+
+                var lastRouteMap = (await _db.Routes
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.UserId != null &&
+                        driverIds.Contains(r.UserId.Value))
+                    .GroupBy(r => r.UserId!.Value)
+                    .Select(g => new
+                    {
+                        DriverId = g.Key,
+                        LastDate = g.Max(r => r.Date)
+                    })
+                    .ToListAsync())
+                    .ToDictionary(x => x.DriverId, x => x.LastDate);
+
+                var warehouseMax = warehouseLastRouteDate.Value.Date;
+
+                riskDrivers = driversInPeriod
+                    .Where(d =>
+                        lastRouteMap.TryGetValue(d.Id, out var last) &&
+                        last.Date < warehouseMax)
+                    .Select(d =>
+                    {
+                        var last = lastRouteMap[d.Id];
+
+                        return new DriverStoppedWorkingDto
+                        {
+                            DriverId = d.Id,
+                            DriverName = $"{d.Name} {d.LastName}".Trim(),
+                            LastRouteDate = last.ToString("yyyy-MM-dd"),
+                            DaysSinceLastRoute = (warehouseMax - last.Date).Days
+                        };
+                    })
+                    .OrderByDescending(x => x.DaysSinceLastRoute)
+                    .ToList();
+            }
+        }
     }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error computing payroll insights risk drivers.");
+    }
+
+    decimal averageDriverLifetimeWeeks = 0m;
+    var seniority = new DriverSeniorityDto();
+
+    try
+    {
+        var warehouseLastRouteDate = await _db.Routes
+            .AsNoTracking()
+            .Where(r =>
+                r.WarehouseId.HasValue &&
+                (!warehouseId.HasValue || r.WarehouseId == warehouseId.Value))
+            .MaxAsync(r => (DateTime?)r.Date);
+
+        if (warehouseLastRouteDate.HasValue && currentDrivers.Any())
+        {
+            var lifetimes = await _db.Routes
+                .AsNoTracking()
+                .Where(r =>
+                    r.UserId != null &&
+                    currentDrivers.Contains(r.UserId.Value) &&
+                    r.routeStatus == RouteStatus.Completed &&
+                    r.DeliveryStops > 0 &&
+                    (!warehouseId.HasValue || r.WarehouseId == warehouseId.Value))
+                .GroupBy(r => r.UserId!.Value)
+                .Select(g => new
+                {
+                    DriverId = g.Key,
+                    FirstRoute = g.Min(x => x.Date),
+                    LastRoute = g.Max(x => x.Date)
+                })
+                .ToListAsync();
+
+            var weeks = lifetimes
+                .Select(x =>
+                    (warehouseLastRouteDate.Value.Date - x.FirstRoute.Date).TotalDays / 7.0)
+                .Where(x => x >= 0)
+                .ToList();
+
+            if (weeks.Any())
+            {
+                averageDriverLifetimeWeeks = Math.Round((decimal)weeks.Average(), 2);
+
+                seniority = new DriverSeniorityDto
+                {
+                    Weeks0To2 = weeks.Count(x => x < 2),
+                    Weeks3To8 = weeks.Count(x => x >= 2 && x < 8),
+                    Months2To6 = weeks.Count(x => x >= 8 && x < 24),
+                    Months6Plus = weeks.Count(x => x >= 24)
+                };
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error computing driver lifetime insights.");
+    }
+
+    var dto = new PayrollInsightsDto
+    {
+        PayPeriodId = period.Id,
+        StartDate = start.ToString("yyyy-MM-dd"),
+        EndDate = end.ToString("yyyy-MM-dd"),
+
+        ActiveDrivers = currentSet.Count,
+        PreviousActiveDrivers = previousSet.Count,
+        NewDrivers = newDrivers,
+        LostDrivers = lostDrivers,
+        RetainedDrivers = retainedDrivers,
+
+        RetentionRate = retentionRate,
+        ChurnRate = churnRate,
+
+        TotalNet = totalNet,
+        AveragePay = averagePay,
+
+        DriversAtRisk = riskDrivers.Count,
+        RiskDrivers = riskDrivers,
+
+        AverageDriverLifetimeWeeks = averageDriverLifetimeWeeks,
+        Seniority = seniority
+    };
+
+    return Ok(dto);
+}
 
 
 
@@ -2477,5 +2917,35 @@ namespace TToApp.Controllers
             public decimal? DailyAmount { get; set; }
             public decimal? ExtraAmount { get; set; }
         }
-    }
+        public sealed class PayrollInsightsDto
+{
+    public long PayPeriodId { get; set; }
+    public string StartDate { get; set; } = null!;
+    public string EndDate { get; set; } = null!;
 
+    public int ActiveDrivers { get; set; }
+    public int PreviousActiveDrivers { get; set; }
+    public int NewDrivers { get; set; }
+    public int LostDrivers { get; set; }
+    public int RetainedDrivers { get; set; }
+
+    public decimal RetentionRate { get; set; }
+    public decimal ChurnRate { get; set; }
+
+    public decimal TotalNet { get; set; }
+    public decimal AveragePay { get; set; }
+
+    public int DriversAtRisk { get; set; }
+    public List<DriverStoppedWorkingDto> RiskDrivers { get; set; } = new();
+    public decimal AverageDriverLifetimeWeeks { get; set; }
+    public DriverSeniorityDto Seniority { get; set; } = new();
+}
+public sealed class DriverSeniorityDto
+{
+    public int Weeks0To2 { get; set; }
+    public int Weeks3To8 { get; set; }
+    public int Months2To6 { get; set; }
+    public int Months6Plus { get; set; }
+}
+    }
+}

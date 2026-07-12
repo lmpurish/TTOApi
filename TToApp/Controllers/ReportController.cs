@@ -958,7 +958,7 @@ namespace TToApp.Controllers
                 .AsNoTracking()
                 .Where(pr => pr.DriverId == id
                             //&& pr.WarehouseId == user.WarehouseId
-                            && periodIds.Contains(pr.PayPeriodId))
+                            && periodIds.Contains((int)pr.PayPeriodId))
                 .Select(pr => new { pr.PayPeriodId, pr.GrossAmount, pr.NetAmount })
                 .ToListAsync();
 

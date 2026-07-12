@@ -5,18 +5,19 @@
 
         public long Id { get; set; }
         public long PayPeriodId { get; set; }
-        public long DriverId { get; set; }
+        public int DriverId { get; set; }
+        public User? Driver {  get; set; }
         public decimal GrossAmount { get; set; }
         public decimal Adjustments { get; set; }
         public decimal NetAmount { get;  set; } // Computada
         public string Status { get; set; } = "Draft";   // Draft|Approved (sugerido)
         public DateTime? CalculatedAt { get; set; }
         public long? CalculatedBy { get; set; }
-
         public PayPeriod PayPeriod { get; set; } = null!;
         public ICollection<PayRunLine> Lines { get; set; } = new List<PayRunLine>();
         public ICollection<PayrollAdjustment> AdjustmentsList { get; set; } = new List<PayrollAdjustment>();
         public int? ApprovedByUserId { get; set; }
         public DateTime? ApprovedAt { get; set; }
+
     }
 }

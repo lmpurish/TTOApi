@@ -21,6 +21,7 @@ using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
 using TToApp.Services.Vehicle;
 using Microsoft.AspNetCore.DataProtection;
+using TToApp.Controllers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -132,7 +133,13 @@ builder.Services.AddScoped<IEarlyWarningNotificationService, EarlyWarningNotific
 builder.Services.AddScoped<ICommunicationRecipientService, CommunicationRecipientService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditService>();
+builder.Services.AddHttpClient<IRecruitAgentService, RecruitAgentService>((sp, client) =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
 
+    client.BaseAddress = new Uri(config["RecruitAgent:BaseUrl"]!);
+    client.DefaultRequestHeaders.Add("X-Agent-Key", config["RecruitAgent:AgentKey"]);
+});
 
 // Auth / JWT
 var key = Encoding.ASCII.GetBytes(builder.Configuration["JwtSettings:Secret"]);
@@ -169,6 +176,12 @@ app.UseSwaggerUI(c =>
     c.SwaggerEndpoint("/swagger/company-docs-v1/swagger.json", "Company Docs v1");
 });
 
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+};
+
 // Redirección HTTPS SOLO fuera de Development (evita romper CORS en local)
 if (!app.Environment.IsDevelopment())
 {
@@ -200,5 +213,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+app.MapCompanyRevenueEndpoints();
 
 app.Run();

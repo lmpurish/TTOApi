@@ -34,9 +34,10 @@ public class UserController : ControllerBase
     private readonly ICommunicationRecipientService _communicationRecipients;
     private readonly INotificationService _notificationService;
     private readonly AuditService _auditService;
+    private readonly IRecruitAgentService _recruitAgentService;
     public UserController(ApplicationDbContext authContext, EmailService emailService, IConfiguration config, WhatsAppService whatsAppService,
         IApplicantContactService applicantContactService, IJwtService jwtService, ISensitiveDataProtector protector, ICommunicationRecipientService communicationRecipients,
-        ILogger<UserController> logger, INotificationService notificationService, AuditService auditService)
+        ILogger<UserController> logger, INotificationService notificationService, AuditService auditService, IRecruitAgentService recruitAgentService)
     {
         _authContext = authContext ?? throw new ArgumentNullException(nameof(authContext));
         _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
@@ -49,6 +50,7 @@ public class UserController : ControllerBase
         _notificationService = notificationService;
         _logger = logger;
         _auditService = auditService;
+        _recruitAgentService = recruitAgentService;
     }
 
     [HttpPost("authenticate")]
@@ -404,7 +406,12 @@ public class UserController : ControllerBase
             await _authContext.SaveChangesAsync(ct);
 
             await tx.CommitAsync(ct);
-
+            await _recruitAgentService.SendApplicantSmsAsync(
+                    user,
+                    profile,
+                    whInfo.City ?? "",
+                    ct
+                );
             // Emails / notificaciones
             var placeholders = new Dictionary<string, string>
             {
@@ -417,22 +424,7 @@ public class UserController : ControllerBase
                 { "Locality", whInfo.City ?? "" }
             };
 
-            //      var managerEmail = GetEmailManager(user);
-            //    if (!string.IsNullOrWhiteSpace(managerEmail))
-            //      {
-            //         await _emailService.SendEmailAsync(
-            //            toEmail: managerEmail,
-            //              subject: "New driver on the way!",
-            //             "ApplicationTemplate.cshtml",
-            //            placeholders: placeholders,
-            //            copy: false
-            //         );
-            //      }
-
-            //  var adminEmails = await _authContext.Users.AsNoTracking()
-            //         .Where(u2 => u2.UserRole == global::User.Role.Admin && !string.IsNullOrEmpty(u2.Email))
-            //        .Select(u2 => u2.Email!)
-            //         .ToListAsync(ct);
+         
 
             var warehouseIds = await _authContext.Warehouses
                     .AsNoTracking()
@@ -440,21 +432,6 @@ public class UserController : ControllerBase
                     .Select(w => w.Id)
                     .ToListAsync(ct);
 
-
-            /*      var authorizedEmployeeEmails = await _authContext.Permits
-             .AsNoTracking()
-             .Where(p => p.WarehouseId == user.WarehouseId
-                    && p.UserPermit == Permit.Notification) // ó p.UserPermit == 0 si lo manejas como int
-             .Select(p => p.User!.Email)
-             .Where(email => !string.IsNullOrEmpty(email))
-             .Distinct()
-             .ToListAsync(ct);
-               var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
-                 companyId: whInfo.CompanyId,
-                 warehouseId: user.WarehouseId,
-                 eventType: CommunicationEventTypes.NewDriverApplication,
-                 channel: CommunicationChannels.Email
-             );*/
 
             var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
                 companyId: whInfo.CompanyId,
@@ -474,16 +451,7 @@ public class UserController : ControllerBase
                     copy: false
                 );
             }
-            //  foreach (var email in adminEmails)
-            // {
-            //     await _emailService.SendEmailAsync(
-            //         toEmail: email,
-            //          subject: "New driver on the way!",
-            //        "ApplicationTemplate.cshtml",
-            //         placeholders: placeholders,
-            //          copy: false
-            //      );
-            //  }
+         
 
             var okUserMail = await _emailService.SendEmailAsync(
                 toEmail: user.Email!,
@@ -497,9 +465,8 @@ public class UserController : ControllerBase
 
             // Contacto si el warehouse contrata
             var whIsHiring = await _authContext.Warehouses.AsNoTracking()
-                .Where(w => w.Id == user.WarehouseId)
-                .Select(w => w.IsHiring)
-                .FirstOrDefaultAsync(ct);
+                .Where(w => w.MetroId == user.MetroId)
+                .AnyAsync(w => w.IsHiring, ct);
 
             if (whIsHiring)
                 await _applicantContactService.ContactApplicantAsync(user.Id);
@@ -3395,6 +3362,15 @@ public sealed class RecoverByPhoneDto
 {
     public string PhoneNumber { get; set; } = null!;
     public string Password { get; set; } = null!;
+}
+
+public class RecruitSendRequest
+{
+    public string Kind { get; set; } = "onboarding_step";
+    public string To { get; set; } = "";
+    public string Lang { get; set; } = "en";
+    public string ExternalId { get; set; } = "";
+    public Dictionary<string, string> Vars { get; set; } = new();
 }
 
 

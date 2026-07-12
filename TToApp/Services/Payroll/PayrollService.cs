@@ -249,7 +249,7 @@ namespace TToApp.Services.Payroll
                 payRun = new PayRun
                 {
                     PayPeriodId = period.Id,
-                    DriverId = driverId,
+                    DriverId = (int)driverId,
                     Status = "Draft",
                     GrossAmount = 0m,
                     Adjustments = 0m

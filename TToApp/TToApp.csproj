@@ -18,7 +18,7 @@
 		<PackageReference Include="itext7.bouncy-castle-adapter" Version="9.2.0" />
 		<PackageReference Include="MailKit" Version="4.10.0" />
 		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.12" />
-		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.11" />
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.23" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.1" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.1">
 			<PrivateAssets>all</PrivateAssets>
@@ -26,10 +26,10 @@
 		</PackageReference>
 		<PackageReference Include="Microsoft.Playwright" Version="1.60.0" />
 		<PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.21.0" />
-		<PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="8.0.7" />
+		<PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="8.0.23" />
 		<PackageReference Include="PdfPig" Version="0.1.14" />
 		<PackageReference Include="Stripe.net" Version="48.3.0" />
-		<PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
+		<PackageReference Include="Swashbuckle.AspNetCore" Version="8.1.4" />
 		<PackageReference Include="Microsoft.Data.SqlClient" Version="5.1.6" />
 		<PackageReference Include="Twilio" Version="7.11.1" />
 	</ItemGroup>

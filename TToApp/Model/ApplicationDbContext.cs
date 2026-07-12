@@ -53,6 +53,7 @@ namespace TToApp.Model
         public DbSet<ZoneWeightRule> ZoneWeightRules { get; set; } = null!;
         public DbSet<AuditLogs> AuditLogs { get; set; }
         public DbSet<PackageReturnEvidence> PackageReturnEvidences { get; set; }
+        public DbSet<CompanyRevenue> CompanyRevenues { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -419,6 +420,33 @@ namespace TToApp.Model
 
             modelBuilder.Entity<ZoneWeightRule>()
                 .HasIndex(r => new { r.ZoneId, r.IsActive, r.Priority });
+
+            modelBuilder.Entity<CompanyRevenue>(e =>
+            {
+                e.HasKey(x => x.Id);
+
+                e.Property(x => x.Revenue).HasColumnType("decimal(18,2)");
+                e.Property(x => x.Expenses).HasColumnType("decimal(18,2)");
+                e.Property(x => x.Adjustments).HasColumnType("decimal(18,2)");
+
+                e.Property(x => x.RevenueType)
+                    .HasMaxLength(50);
+
+                e.HasOne(x => x.PayPeriod)
+                    .WithMany(x => x.CompanyRevenues)
+                    .HasForeignKey(x => x.PayPeriodId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                e.HasOne(x => x.Company)
+                    .WithMany()
+                    .HasForeignKey(x => x.CompanyId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                e.HasOne(x => x.Warehouse)
+                    .WithMany()
+                    .HasForeignKey(x => x.WarehouseId)
+                    .OnDelete(DeleteBehavior.Restrict);
+            });
 
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

@@ -17,5 +17,7 @@ namespace TToApp.Model
         public DateTime CreatedAt { get; set; }
 
         public ICollection<PayRun> PayRuns { get; set; } = new List<PayRun>();
+        public ICollection<CompanyRevenue> CompanyRevenues { get; set; }
+        = new List<CompanyRevenue>();
     }
 }

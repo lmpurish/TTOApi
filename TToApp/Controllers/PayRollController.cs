@@ -22,6 +22,7 @@ using iText.Kernel.Colors;
 using PdfColor = iText.Kernel.Colors.Color;
 using iText.Layout.Borders;
 using TToApp.DTOs;
+using System.Linq;
 
 namespace TToApp.Controllers
 {
@@ -411,18 +412,17 @@ namespace TToApp.Controllers
             ).ToListAsync();
 
             // 3) Evitar recalcular si ya existe (a menos que se pida)
-            HashSet<long> already = new();
+            HashSet<int> already = new();
             if (!req.RecalculateAll)
             {
-                already = (await _db.PayRuns
-                    .Where(x => x.PayPeriodId == period.Id)
+                already = (await _db.PayRuns.Where(x => x.PayPeriodId == period.Id)
                     .Select(x => x.DriverId)
                     .ToListAsync()).ToHashSet();
             }
             // 4) Calcular por driver
             foreach (var driverId in allUserIdsWithRates)
             {
-                if (!req.RecalculateAll && already.Contains(driverId)) continue;
+                if (!req.RecalculateAll && already.Contains((int)driverId)) continue;
 
                 try
                 {

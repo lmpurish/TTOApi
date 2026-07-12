@@ -51,6 +51,7 @@ namespace TToApp.Model
         public DbSet<Incidence> Incidences { get; set; }
         public DbSet<ZonePayRule> ZonePayRules { get; set; } = null!;
         public DbSet<ZoneWeightRule> ZoneWeightRules { get; set; } = null!;
+        public DbSet<UserWarehouse> UserWarehouses { get; set; } = null!;
         public DbSet<AuditLogs> AuditLogs { get; set; }
         public DbSet<PackageReturnEvidence> PackageReturnEvidences { get; set; }
         public DbSet<CompanyRevenue> CompanyRevenues { get; set; }
@@ -447,6 +448,25 @@ namespace TToApp.Model
                     .HasForeignKey(x => x.WarehouseId)
                     .OnDelete(DeleteBehavior.Restrict);
             });
+
+            modelBuilder.Entity<UserWarehouse>()
+                .HasOne(uw => uw.User)
+                .WithMany(u => u.UserWarehouses)
+                .HasForeignKey(uw => uw.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<UserWarehouse>()
+                .HasOne(uw => uw.Warehouse)
+                .WithMany(w => w.UserWarehouses)
+                .HasForeignKey(uw => uw.WarehouseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<UserWarehouse>()
+                .HasIndex(uw => new { uw.UserId, uw.WarehouseId })
+                .IsUnique();
+
+            modelBuilder.Entity<UserWarehouse>()
+                .HasIndex(uw => new { uw.UserId, uw.IsActive });
 
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

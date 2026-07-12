@@ -69,6 +69,9 @@ namespace TToApp.Model
         public ICollection<EarlyWarning> EarlyWarnings { get; set; } = new List<EarlyWarning>();
         public bool? IsActive { get; set; } = true;
 
+        [JsonIgnore]
+        public ICollection<UserWarehouse> UserWarehouses { get; set; } = new List<UserWarehouse>();
+
 
     }
 

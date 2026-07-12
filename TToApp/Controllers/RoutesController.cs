@@ -674,7 +674,8 @@ namespace TToApp.Controllers
                     return BadRequest(new { message = "No se encontraron IdentificationNumber en el XML." });
 
                 var users = await _context.Users
-                    .Where(u => spValues.Contains(u.IdentificationNumber) && u.WarehouseId == warehouseId)
+                    .Where(u => spValues.Contains(u.IdentificationNumber) &&
+                                u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive))
                     .ToListAsync();
 
                 var notFoundInUsers = spValues
@@ -1814,8 +1815,9 @@ namespace TToApp.Controllers
             var minDate = rawRows.Min(x => x.Date);
             var maxDate = rawRows.Max(x => x.Date);
 
-            var users = await _context.Users
+            var filteredUsers = await _context.Users
                 .AsNoTracking()
+                .Where(u => u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive))
                 .Select(u => new
                 {
                     u.Id,
@@ -1824,10 +1826,6 @@ namespace TToApp.Controllers
                     u.WarehouseId
                 })
                 .ToListAsync(ct);
-
-            var filteredUsers = users
-                .Where(u => u.WarehouseId == warehouseId)
-                .ToList();
 
             var userMap = filteredUsers
                 .GroupBy(u => NormalizeDriverFullName($"{u.Name} {u.LastName}"))
@@ -2915,10 +2913,10 @@ public async Task<IActionResult> UploadSwiftXDspSummary(
 
             rowsRead++;
 
-            var user = await _context.Users
-                .FirstOrDefaultAsync(u =>
-                    u.IdentificationNumber == driverCode &&
-                    u.WarehouseId == warehouseId);
+                    var user = await _context.Users
+                        .FirstOrDefaultAsync(u =>
+                            u.IdentificationNumber == driverCode &&
+                            u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive));
 
             if (user == null)
             {
@@ -3133,7 +3131,7 @@ public async Task<IActionResult> UploadSwiftXDspSummary(
                     var user = await _context.Users
                         .FirstOrDefaultAsync(u =>
                             u.IdentificationNumber == driverCode &&
-                            u.WarehouseId == warehouseId,
+                            u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive),
                             ct);
 
                     if (user == null)

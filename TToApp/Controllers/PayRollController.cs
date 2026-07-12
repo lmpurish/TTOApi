@@ -1629,7 +1629,7 @@ namespace TToApp.Controllers
                       && (u.UserRole == global::User.Role.Driver || u.UserRole == global::User.Role.Manager)
                       && r.EffectiveFrom <= today
                       && (r.EffectiveTo == null || r.EffectiveTo >= today)
-                      && (!warehouseId.HasValue || warehouseId == 0 || u.WarehouseId == warehouseId)
+                      && (!warehouseId.HasValue || warehouseId == 0 || u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive))
                 select new DriverRateDto
                 {
                     Id = r.Id,
@@ -2371,7 +2371,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
             }
             else
             {
-                driversQuery = driversQuery.Where(u => u.WarehouseId == warehouseId);
+                driversQuery = driversQuery.Where(u => u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive));
             }
 
             var driverIdsWithoutRate = await driversQuery

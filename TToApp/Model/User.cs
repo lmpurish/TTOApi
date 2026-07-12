@@ -103,4 +103,7 @@ public class User
     public string? PasswordResetToken { get; set; }
     public DateTime? PasswordResetTokenExpiresAt { get; set; }
 
+    [JsonIgnore]
+    public ICollection<TToApp.Model.UserWarehouse> UserWarehouses { get; set; } = new List<TToApp.Model.UserWarehouse>();
+
 }

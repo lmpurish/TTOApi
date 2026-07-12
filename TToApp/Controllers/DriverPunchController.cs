@@ -247,8 +247,8 @@ namespace TToApp.Controllers
             if (!isAdmin && warehouseFilter.HasValue && warehouseFilter.Value > 0)
             {
                 usersQ = usersQ.Where(u =>
-                    u.UserRole == global::User.Role.Admin // opcional: si NO quieres que manager vea admins, quita esto
-                    || u.WarehouseId == warehouseFilter.Value
+                    u.UserRole == global::User.Role.Admin
+                    || u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseFilter.Value && uw.IsActive)
                 );
             }
 

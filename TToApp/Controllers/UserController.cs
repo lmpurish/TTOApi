@@ -677,7 +677,7 @@ public class UserController : ControllerBase
                 return BadRequest(new { message = "Manager does not have an assigned warehouse." });
 
             query = query.Where(u =>
-                u.WarehouseId == user.WarehouseId &&
+                u.UserWarehouses.Any(uw => uw.WarehouseId == user.WarehouseId && uw.IsActive) &&
                 u.UserRole == global::User.Role.Driver);
         }
         else
@@ -777,7 +777,7 @@ public class UserController : ControllerBase
         var users = await _authContext.Users
             .AsNoTracking()
             .Where(u =>
-                u.WarehouseId == targetWarehouseId &&
+                u.UserWarehouses.Any(uw => uw.WarehouseId == targetWarehouseId && uw.IsActive) &&
                 u.IsActive &&
                 u.UserRole != global::User.Role.Applicant)
             .Select(u => new

@@ -49,7 +49,7 @@ namespace TToApp.Controllers
 
             // Contar empleados en el mismo WarehouseId (excluyendo Managers y Admins)
             var employeeCount = await _context.Users
-                .Where(u => u.WarehouseId == warehouseId
+                .Where(u => u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive)
                             && u.UserRole != global::User.Role.Manager
                             && u.UserRole != global::User.Role.Admin)
                 .CountAsync();
@@ -148,7 +148,8 @@ namespace TToApp.Controllers
 
                 // Obtener los conductores del almacén del manager
                 driverIds = await _context.Users
-                    .Where(u => u.WarehouseId == warehouseId && u.UserRole.HasValue && u.UserRole.Value == global::User.Role.Driver)
+                    .Where(u => u.UserWarehouses.Any(uw => uw.WarehouseId == warehouseId && uw.IsActive)
+                                && u.UserRole.HasValue && u.UserRole.Value == global::User.Role.Driver)
                     .Select(u => u.Id)
                     .ToListAsync();
             }

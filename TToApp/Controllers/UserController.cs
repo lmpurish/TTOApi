@@ -1621,7 +1621,11 @@ public class UserController : ControllerBase
         if (dto.IsActive.HasValue) user.IsActive = dto.IsActive.Value;
         if (dto.IsFirstLogin.HasValue) user.IsFirstLogin = dto.IsFirstLogin.Value;
         if (dto.WasContacted.HasValue) user.WasContacted = dto.WasContacted.Value;
-        if (dto.WarehouseId.HasValue) user.WarehouseId = dto.WarehouseId.Value;
+        if (dto.WarehouseId.HasValue)
+        {
+            user.WarehouseId = dto.WarehouseId.Value;
+            await SyncUserWarehouseAsync(user.Id, dto.WarehouseId.Value);
+        }
         if (dto.UserRole.HasValue) user.UserRole = dto.UserRole.Value;
         if (dto.IdentificationNumber != null) user.IdentificationNumber = dto.IdentificationNumber;
         if (dto.Stage.HasValue) user.Stage = dto.Stage.Value;
@@ -2295,6 +2299,8 @@ public async Task<IActionResult> GetSsn(int id)
             };
             await _authContext.Users.AddAsync(user, ct);
             await _authContext.SaveChangesAsync(ct);
+
+            await SyncUserWarehouseAsync(user.Id, whInfo.Id, ct);
 
             var profile = new UserProfile
             {
@@ -3085,6 +3091,7 @@ public async Task<IActionResult> GetSsn(int id)
         foreach (var applicant in applicants)
         {
             applicant.WarehouseId = dto.WarehouseId;
+            await SyncUserWarehouseAsync(applicant.Id, dto.WarehouseId);
         }
 
         await _authContext.SaveChangesAsync();
@@ -3094,6 +3101,38 @@ public async Task<IActionResult> GetSsn(int id)
             message = $"Warehouse updated for {applicants.Count} applicants.",
             updated = applicants.Count
         });
+    }
+
+    private async Task SyncUserWarehouseAsync(int userId, int warehouseId, CancellationToken ct = default)
+    {
+        // Clear IsPrimary on all other warehouses for this user
+        var others = await _authContext.UserWarehouses
+            .Where(uw => uw.UserId == userId && uw.WarehouseId != warehouseId && uw.IsPrimary)
+            .ToListAsync(ct);
+        foreach (var other in others)
+            other.IsPrimary = false;
+
+        var existing = await _authContext.UserWarehouses
+            .FirstOrDefaultAsync(uw => uw.UserId == userId && uw.WarehouseId == warehouseId, ct);
+
+        if (existing == null)
+        {
+            _authContext.UserWarehouses.Add(new TToApp.Model.UserWarehouse
+            {
+                UserId = userId,
+                WarehouseId = warehouseId,
+                IsPrimary = true,
+                IsActive = true,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+        else
+        {
+            existing.IsPrimary = true;
+            existing.IsActive = true;
+            existing.EndDate = null;
+        }
     }
 
     private async Task<bool> SendAccountActivatedEmail(User user, string subject)

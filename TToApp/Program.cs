@@ -22,6 +22,8 @@ using TToApp.Services.Settings;
 using TToApp.Services.Vehicle;
 using Microsoft.AspNetCore.DataProtection;
 using TToApp.Controllers;
+using System.Net.Http.Headers;
+using TToApp.Services.Sms;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -109,6 +111,42 @@ builder.Services.AddSingleton<IMapper>(sp =>
 
     return cfg.CreateMapper();
 });
+builder.Services.AddHttpClient<ITtoSmsService, TtoSmsService>(
+    (serviceProvider, client) =>
+    {
+        var configuration =
+            serviceProvider.GetRequiredService<IConfiguration>();
+
+        var baseUrl =
+            configuration["RecruitAgent:BaseUrl"];
+
+        var apiKey =
+            configuration["BotApiKey"];
+
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            throw new InvalidOperationException(
+                "RecruitAgent:BaseUrl is missing.");
+        }
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new InvalidOperationException(
+                "BotApiKey is missing.");
+        }
+
+        client.BaseAddress = new Uri(baseUrl);
+
+        client.Timeout = TimeSpan.FromSeconds(30);
+
+        client.DefaultRequestHeaders.Add(
+            "X-Agent-Key",
+            apiKey);
+
+        client.DefaultRequestHeaders.Accept.Add(
+            new MediaTypeWithQualityHeaderValue(
+                "application/json"));
+    });
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IApplicantContactService, ApplicantContactService>();
 builder.Services.AddHostedService<RDMonitorService>();

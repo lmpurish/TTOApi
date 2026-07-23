@@ -34,6 +34,7 @@ namespace TToApp.Controllers
 
         // PUT: api/Accounts/5
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
+        [Authorize]
         [HttpPut("{id:int}")]
         public async Task<IActionResult> PutAccounts(int id, [FromBody] AccountsUpdateDto dto)
         {
@@ -129,6 +130,7 @@ namespace TToApp.Controllers
 
         // POST: api/Accounts
         // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
+        [Authorize]
         [HttpPost]
         public async Task<ActionResult<object>> PostAccounts([FromBody] AccountsCreateDto dto)
         {
@@ -189,6 +191,7 @@ namespace TToApp.Controllers
         }
 
         // Ejemplo de GET por id (para CreatedAtAction)
+        [Authorize]
         [HttpGet("{id:int}")]
         public async Task<ActionResult<object>> GetAccounts(int id)
         {
@@ -210,6 +213,7 @@ namespace TToApp.Controllers
         }
 
         // DELETE: api/Accounts/5
+        [Authorize]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteAccounts(int id)
         {

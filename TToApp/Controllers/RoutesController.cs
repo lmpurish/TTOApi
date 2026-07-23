@@ -3735,8 +3735,67 @@ public async Task<IActionResult> UploadSwiftXDspSummary(
             return Ok(routes);
         }
 
+        [HttpGet("by-range")]
+public async Task<IActionResult> GetRoutesByRange(
+    [FromQuery] DateTime startDate,
+    [FromQuery] DateTime endDate,
+    [FromQuery] int? warehouseId = null)
+{
+    var query = _context.Routes
+        .Include(r => r.User)
+        .Include(r => r.Zone)
+        .AsQueryable();
 
+    query = query.Where(r =>
+        r.Date >= startDate.Date &&
+        r.Date < endDate.Date.AddDays(1));
+
+    if (warehouseId.HasValue)
+    {
+        query = query.Where(r => r.WarehouseId == warehouseId.Value);
+    }
+
+    var routes = await query
+    .OrderBy(r => r.Date)
+    .ThenBy(r => r.ZoneId)
+    .ThenBy(r => r.RouteCode)
+    .Select(r => new
+    {
+        r.Id,
+        r.Date,
+        r.RouteCode,
+        r.routeStatus,
+        r.UserId,
+        User = r.User == null ? null : new
+        {
+            r.User.Id,
+            r.User.Name,
+            r.User.LastName
+        },
+        r.ZoneId,
+        Zone = r.Zone == null ? null : new
+        {
+            r.Zone.Id,
+            r.Zone.Area
+        },
+        r.Volumen,
+        r.DeliveryStops,
+        r.Attempts,
+        r.CNL,
+        r.CustomerOnTime,
+        r.BranchOnTime,
+       
+        r.PaymentType,
+        r.PriceRoute
+    })
+    .ToListAsync();
+
+return Ok(routes);
+
+    return Ok(routes);
+}
     } 
+    
 }
 internal static class ClaimsExtensions
 {

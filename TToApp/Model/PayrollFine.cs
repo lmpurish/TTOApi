@@ -22,8 +22,7 @@ public class PayrollFine
     [Key]
     public int Id { get; set; }
 
-    [Required]
-    public int PackageId { get; set; }
+    public int? PackageId { get; set; }
 
     [Required]
     public int UserId { get; set; }          
@@ -42,9 +41,10 @@ public class PayrollFine
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     // public PayrollFineType Type { get; set; } = PayrollFineType.Other;
+    public bool IsActive { get; set; } = true;
     public DateTime? ChargedAt { get; set; }
-    public int? PayRunId { get; set; }
+    public long? PayRunId { get; set; }
     public PayRun? PayRun { get; set; }
     public User User { get; set; } = null!;
-    public Packages Package { get; set; } = null!;
+    public Packages? Package { get; set; }
 }

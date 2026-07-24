@@ -8,8 +8,8 @@ using Microsoft.AspNetCore.Mvc;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json;
 using TToApp.DTOs;
+using TToApp.Helpers;
 using TToApp.Model;
 
 namespace TToApp.Controllers;
@@ -59,10 +59,13 @@ public class PayrollFinesController : ControllerBase
                 Amount = x.Amount,
                 Type = x.Type,
                 Description = x.Description,
+                IsActive = x.IsActive,
                 CreatedAt = x.CreatedAt,
                 UpdatedAt = x.UpdatedAt,
-                UserName = include ? (x.User.Name ?? x.User.Email) : null, 
-                PackageCode = include ? x.Package.Tracking : null                  
+                ChargedAt = x.ChargedAt,
+                PayRunId = x.PayRunId,
+                UserName = include ? (x.User.Name ?? x.User.Email) : null,
+                PackageCode = include ? x.Package.Tracking : null
             })
             .ToListAsync();
 
@@ -88,10 +91,13 @@ public class PayrollFinesController : ControllerBase
                 Amount = x.Amount,
                 Type = x.Type,
                 Description = x.Description,
+                IsActive = x.IsActive,
                 CreatedAt = x.CreatedAt,
                 UpdatedAt = x.UpdatedAt,
-                UserName = include ? (x.User.Name ?? x.User.Email) : null, 
-                PackageCode = include ? x.Package.Tracking : null         
+                ChargedAt = x.ChargedAt,
+                PayRunId = x.PayRunId,
+                UserName = include ? (x.User.Name ?? x.User.Email) : null,
+                PackageCode = include ? x.Package.Tracking : null
             })
             .FirstOrDefaultAsync();
 
@@ -197,6 +203,37 @@ public class PayrollFinesController : ControllerBase
         };
 
         return Ok(result);
+    }
+
+    // PUT: api/PayrollFines/5/toggle-active
+    [HttpPut("{id:int}/toggle-active")]
+    public async Task<ActionResult<PayrollFineDto>> ToggleActive(int id)
+    {
+        var entity = await _context.PayrollFines.FirstOrDefaultAsync(x => x.Id == id);
+        if (entity is null) return NotFound($"PayrollFine {id} no existe.");
+
+        if (entity.ChargedAt != null)
+            return BadRequest("No se puede modificar una multa que ya fue aplicada a un payroll.");
+
+        entity.IsActive = !entity.IsActive;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        return Ok(new PayrollFineDto
+        {
+            Id = entity.Id,
+            PackageId = entity.PackageId,
+            UserId = entity.UserId,
+            Tracking = entity.Tracking,
+            Amount = entity.Amount,
+            Type = entity.Type,
+            Description = entity.Description,
+            IsActive = entity.IsActive,
+            CreatedAt = entity.CreatedAt,
+            UpdatedAt = entity.UpdatedAt,
+            ChargedAt = entity.ChargedAt,
+            PayRunId = entity.PayRunId
+        });
     }
 
     [HttpPost("import/details")]
@@ -312,6 +349,235 @@ public class PayrollFinesController : ControllerBase
             Created = created,
             Errors = errors.Count,
             ErrorRows = errors
+        });
+    }
+
+    // POST: api/PayrollFines/import/warehouse/{warehouseId}
+    // Warehouse.Company determina el formato y la estrategia de resolución de driver:
+    //   "SwiftX"  → sheet "Penalty Detail": A=Tracking, B=Type, C=Amount, D=DriverName → match Users.Name+LastName
+    //   "Uni Uni" → sheet "Penalty":        A=tno, B=driver_id, C=adj_amount(neg), E=type → match Users.IdentificationNumber
+    //   "Speedx"  → sheet "Claims":         A=Tracking, F=PackageValue, type="Claim" → Tracking→Package→Route→UserId
+    [HttpPost("import/warehouse/{warehouseId:int}")]
+    public async Task<ActionResult> ImportByWarehouseFormat(int warehouseId, [FromForm] PayrollFineImportRequest request)
+    {
+        if (request.File == null || request.File.Length == 0)
+            return BadRequest("Archivo no encontrado.");
+
+        var warehouse = await _context.Warehouses
+            .AsNoTracking()
+            .Select(w => new { w.Id, w.Company })
+            .FirstOrDefaultAsync(w => w.Id == warehouseId);
+
+        if (warehouse == null)
+            return NotFound($"Warehouse {warehouseId} no existe.");
+
+        var format = warehouse.Company?.Trim().ToLowerInvariant() switch
+        {
+            "swiftx"  => "swift",
+            "uni uni" => "uniuni",
+            "speedx"  => "speedx",
+            _         => null
+        };
+
+        if (format == null)
+            return BadRequest($"El warehouse tiene Company='{warehouse.Company}', sin formato configurado. Soportados: SwiftX, Uni Uni, Speedx.");
+
+        using var stream = new MemoryStream();
+        await request.File.CopyToAsync(stream);
+        stream.Position = 0;
+
+        using var workbook = new XLWorkbook(stream);
+
+        string sheetName = format switch
+        {
+            "swift"  => "Penalty Detail",
+            "uniuni" => "Penalty",
+            "speedx" => "Claims",
+            _        => ""
+        };
+
+        var ws = workbook.Worksheets.FirstOrDefault(w =>
+            string.Equals(w.Name, sheetName, StringComparison.OrdinalIgnoreCase));
+
+        if (ws == null)
+            return BadRequest($"Worksheet '{sheetName}' no existe en el archivo.");
+
+        var used = ws.RangeUsed();
+        if (used == null)
+            return BadRequest("La hoja está vacía.");
+
+        // --- parsear filas; driverKey = nombre (swift) | driver_id (uniuni) | null (speedx) ---
+        var rowData = new List<(string tracking, decimal amount, string type, string? driverKey)>();
+        foreach (var row in used.RowsUsed().Skip(1))
+        {
+            string tracking, type;
+            decimal amount;
+            string? driverKey = null;
+
+            if (format == "swift")
+            {
+                tracking  = row.Cell(1).GetString().Trim();
+                type      = row.Cell(2).GetString().Trim();
+                amount    = row.Cell(3).TryGetValue<decimal>(out var a) ? Math.Abs(a) : 0;
+                driverKey = row.Cell(4).GetString().Trim(); // Driver Name
+            }
+            else if (format == "uniuni")
+            {
+                tracking  = row.Cell(1).GetString().Trim();
+                driverKey = row.Cell(2).GetString().Trim(); // driver_id → IdentificationNumber
+                amount    = row.Cell(3).TryGetValue<decimal>(out var a) ? Math.Abs(a) : 0;
+                type      = row.Cell(5).GetString().Trim();
+            }
+            else // speedx
+            {
+                tracking = row.Cell(1).GetString().Trim();
+                amount   = row.Cell(6).TryGetValue<decimal>(out var a) ? Math.Abs(a) : 0;
+                type     = "Claim";
+            }
+
+            if (string.IsNullOrWhiteSpace(tracking) || amount <= 0) continue;
+            if (string.IsNullOrWhiteSpace(type)) type = "Other";
+
+            rowData.Add((tracking, amount, type, driverKey));
+        }
+
+        if (rowData.Count == 0)
+            return BadRequest("No se encontraron filas válidas en el archivo.");
+
+        var trackings = rowData.Select(r => r.tracking).Distinct().ToList();
+
+        // --- Speedx: necesita package para resolver UserId ---
+        var packageByTracking = new Dictionary<string, Packages>();
+        if (format == "speedx")
+        {
+            var packages = await _context.Packages
+                .AsNoTracking()
+                .Include(p => p.Routes)
+                .Where(p => p.Tracking != null && trackings.Contains(p.Tracking))
+                .ToListAsync();
+
+            packageByTracking = packages
+                .Where(p => p.Tracking != null)
+                .GroupBy(p => p.Tracking)
+                .ToDictionary(g => g.Key ?? "", g => g.First());
+        }
+
+        // --- Swift: driver por nombre; UniUni: driver por IdentificationNumber ---
+        var userByName           = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+        var userByIdentification = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        if (format is "swift" or "uniuni")
+        {
+            var warehouseUsers = await _context.UserWarehouses
+                .AsNoTracking()
+                .Where(uw => uw.WarehouseId == warehouseId && uw.IsActive)
+                .Select(uw => new
+                {
+                    uw.User.Id,
+                    uw.User.Name,
+                    uw.User.LastName,
+                    uw.User.IdentificationNumber
+                })
+                .ToListAsync();
+
+            if (format == "swift")
+            {
+                foreach (var u in warehouseUsers.Where(u => !string.IsNullOrWhiteSpace(u.Name)))
+                {
+                    var key = NameHelper.NormalizeDriverFullName($"{u.Name} {u.LastName}");
+                    if (!userByName.TryGetValue(key, out var list))
+                        userByName[key] = list = new List<int>();
+                    list.Add(u.Id);
+                }
+            }
+            else
+            {
+                foreach (var u in warehouseUsers.Where(u => !string.IsNullOrWhiteSpace(u.IdentificationNumber)))
+                    userByIdentification.TryAdd(u.IdentificationNumber!.Trim(), u.Id);
+            }
+        }
+
+        // --- deduplicación ---
+        var existingKeys = (await _context.PayrollFines
+            .AsNoTracking()
+            .Where(f => f.Tracking != null && trackings.Contains(f.Tracking))
+            .Select(f => new { f.Tracking, f.Type, f.UserId })
+            .ToListAsync())
+            .Select(f => $"{f.Tracking}|{f.Type}|{f.UserId}")
+            .ToHashSet();
+
+        // --- procesar filas ---
+        var created = 0;
+        var skipped = 0;
+        var errors  = new List<object>();
+
+        foreach (var (tracking, amount, type, driverKey) in rowData)
+        {
+            int? userId;
+            int? packageId = null;
+
+            if (format == "swift")
+            {
+                if (!NameHelper.TryFindByName(userByName, driverKey ?? "", out var uid))
+                {
+                    errors.Add(new { tracking, driverName = driverKey, reason = "Driver no encontrado en el warehouse por nombre." });
+                    continue;
+                }
+                userId = uid;
+            }
+            else if (format == "uniuni")
+            {
+                var idStr = (driverKey ?? "").Trim();
+                if (!userByIdentification.TryGetValue(idStr, out var uid))
+                {
+                    errors.Add(new { tracking, driverId = driverKey, reason = "Driver no encontrado en el warehouse por IdentificationNumber." });
+                    continue;
+                }
+                userId = uid;
+            }
+            else // speedx
+            {
+                if (!packageByTracking.TryGetValue(tracking, out var pkg))
+                {
+                    errors.Add(new { tracking, reason = "Package no encontrado en el sistema." });
+                    continue;
+                }
+                userId = pkg.Routes?.UserId;
+                if (userId == null)
+                {
+                    errors.Add(new { tracking, reason = "El package no tiene ruta/driver asignado." });
+                    continue;
+                }
+                packageId = pkg.Id;
+            }
+
+            var key = $"{tracking}|{type}|{userId}";
+            if (!existingKeys.Add(key))
+            {
+                skipped++;
+                continue;
+            }
+
+            _context.PayrollFines.Add(new PayrollFine
+            {
+                UserId    = userId.Value,
+                PackageId = packageId,
+                Tracking  = tracking,
+                Amount    = amount,
+                Type      = type,
+                CreatedAt = DateTime.UtcNow
+            });
+            created++;
+        }
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            Created      = created,
+            Skipped      = skipped,
+            Errors       = errors.Count,
+            ErrorDetails = errors
         });
     }
 }

@@ -145,6 +145,20 @@ namespace TToApp.Model
                 .OnDelete(DeleteBehavior.Restrict);
 
             modelBuilder.Entity<PayrollFine>()
+                .HasOne(f => f.Package)
+                .WithMany()
+                .HasForeignKey(f => f.PackageId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<PayrollFine>()
+                .HasOne(f => f.PayRun)
+                .WithMany()
+                .HasForeignKey(f => f.PayRunId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<PayrollFine>()
                 .HasIndex(f => new { f.UserId, f.PackageId });
 
             modelBuilder.Entity<PayrollFine>()

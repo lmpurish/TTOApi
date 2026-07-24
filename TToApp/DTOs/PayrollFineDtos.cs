@@ -49,14 +49,17 @@ public class PayrollFineUpdateDto
 public class PayrollFineDto
 {
     public int Id { get; set; }
-    public int PackageId { get; set; }
+    public int? PackageId { get; set; }
     public int UserId { get; set; }
     public string? Tracking { get; set; }
     public decimal Amount { get; set; }
     public string Type { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public bool IsActive { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
+    public DateTime? ChargedAt { get; set; }
+    public long? PayRunId { get; set; }
 
     // opcional: datos relacionados “light”
     public string? UserName { get; set; }

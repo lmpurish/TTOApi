@@ -295,6 +295,17 @@ namespace TToApp.Services.Payroll
 
                 _db.LoanRepayments.RemoveRange(oldRepayments);
 
+                // resetear multas cobradas en este payrun para que se recalculen
+                var chargedFines = await _db.PayrollFines
+                    .Where(f => f.PayRunId == payRun.Id)
+                    .ToListAsync();
+                foreach (var fine in chargedFines)
+                {
+                    fine.ChargedAt = null;
+                    fine.PayRunId = null;
+                    fine.UpdatedAt = DateTime.UtcNow;
+                }
+
                 await _db.SaveChangesAsync();
                 payRun.AdjustmentsList.Clear();
             }
@@ -307,6 +318,7 @@ namespace TToApp.Services.Payroll
                 var pendingFines = await _db.PayrollFines
                     .Where(f =>
                         f.UserId == driverId &&
+                        f.IsActive &&
                         f.Amount > 0 &&
                         f.ChargedAt == null &&
                         f.PayRunId == null)
@@ -335,7 +347,7 @@ namespace TToApp.Services.Payroll
                     foreach (var fine in pendingFines)
                     {
                         fine.ChargedAt = now;
-                        fine.PayRunId = (int)payRun.Id;
+                        fine.PayRunId = payRun.Id;
                         fine.UpdatedAt = now;
                     }
                 }

@@ -2302,6 +2302,116 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
             });
         }
 
+        [HttpGet("adjustments")]
+        public async Task<ActionResult> GetAdjustments(
+            [FromQuery] long? payRunId,
+            [FromQuery] long? driverId,
+            [FromQuery] long? payPeriodId,
+            [FromQuery] string? type,
+            [FromQuery] DateTime? dateFrom,
+            [FromQuery] DateTime? dateTo)
+        {
+            var q = _db.PayrollAdjustments
+                .AsNoTracking()
+                .Join(_db.PayRuns.AsNoTracking(),
+                    a => a.PayRunId,
+                    r => r.Id,
+                    (a, r) => new { a, r })
+                .AsQueryable();
+
+            if (payRunId.HasValue)
+                q = q.Where(x => x.a.PayRunId == payRunId.Value);
+            if (driverId.HasValue)
+                q = q.Where(x => x.r.DriverId == driverId.Value);
+            if (payPeriodId.HasValue)
+                q = q.Where(x => x.r.PayPeriodId == payPeriodId.Value);
+            if (!string.IsNullOrWhiteSpace(type))
+                q = q.Where(x => x.a.Type == type);
+            if (dateFrom.HasValue)
+                q = q.Where(x => x.a.CreatedAt >= dateFrom.Value);
+            if (dateTo.HasValue)
+                q = q.Where(x => x.a.CreatedAt <= dateTo.Value);
+
+            var data = await q
+                .OrderByDescending(x => x.a.CreatedAt)
+                .Select(x => new
+                {
+                    x.a.Id,
+                    x.a.PayRunId,
+                    x.a.Type,
+                    x.a.Reason,
+                    x.a.Amount,
+                    x.a.RefType,
+                    x.a.RefId,
+                    x.a.CreatedAt,
+                    x.a.CreatedBy,
+                    DriverId = x.r.DriverId,
+                    PayPeriodId = x.r.PayPeriodId
+                })
+                .ToListAsync();
+
+            return Ok(data);
+        }
+
+        [Authorize(Roles = "Admin,Manager")]
+        [HttpPut("adjustments/{adjustmentId:long}")]
+        public async Task<ActionResult> UpdateAdjustment(long adjustmentId, [FromBody] UpdateAdjustmentRequest req)
+        {
+            var adjustment = await _db.PayrollAdjustments
+                .FirstOrDefaultAsync(a => a.Id == adjustmentId);
+
+            if (adjustment is null)
+                return NotFound(new { message = "Adjustment not found." });
+
+            var run = await _db.PayRuns
+                .FirstOrDefaultAsync(x => x.Id == adjustment.PayRunId);
+
+            if (run is null)
+                return NotFound(new { message = "PayRun not found." });
+
+            if (string.Equals(run.Status, "Approved", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { message = "Approved PayRuns cannot be modified." });
+
+            var oldAmount = adjustment.Amount;
+
+            if (req.Type is not null)   adjustment.Type   = req.Type;
+            if (req.Reason is not null) adjustment.Reason = req.Reason;
+            if (req.Amount.HasValue)    adjustment.Amount = req.Amount.Value;
+
+            // Sync the PayRunLine that was created alongside this adjustment
+            var line = await _db.PayRunLines.FirstOrDefaultAsync(l =>
+                l.PayRunId == run.Id &&
+                l.SourceType == "Adjustment" &&
+                l.SourceId == adjustmentId.ToString());
+
+            if (line is not null)
+            {
+                if (req.Amount.HasValue) line.Rate = req.Amount.Value;
+                if (req.Type is not null || req.Reason is not null)
+                    line.Description = $"{adjustment.Type} - {adjustment.Reason}";
+            }
+
+            // Recalculate: sum from DB (still has old amount) minus old, plus new
+            var dbSum = await _db.PayrollAdjustments
+                .Where(a => a.PayRunId == run.Id)
+                .SumAsync(a => (decimal?)a.Amount) ?? 0m;
+
+            run.Adjustments = dbSum - oldAmount + adjustment.Amount;
+            run.NetAmount = run.GrossAmount + run.Adjustments;
+
+            await _db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Adjustment updated successfully.",
+                adjustmentId = adjustment.Id,
+                payRunId = run.Id,
+                grossAmount = run.GrossAmount,
+                adjustments = run.Adjustments,
+                netAmount = run.NetAmount
+            });
+        }
+
         [Authorize(Roles = "Admin,Manager")]
         [HttpDelete("adjustments/{adjustmentId:long}")]
         public async Task<ActionResult> DeleteAdjustment(long adjustmentId)
@@ -2880,6 +2990,13 @@ public async Task<ActionResult<PayrollInsightsDto>> GetPayrollInsights(long id)
         public string Type { get; set; } = "Manual";
         public string Reason { get; set; } = null!;
         public decimal Amount { get; set; }
+    }
+
+    public sealed class UpdateAdjustmentRequest
+    {
+        public string? Type { get; set; }
+        public string? Reason { get; set; }
+        public decimal? Amount { get; set; }
     }
 
     public class DriverRateDto

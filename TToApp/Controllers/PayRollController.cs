@@ -83,6 +83,7 @@ namespace TToApp.Controllers
             public decimal Gross { get; set; }
             public decimal Adjustments { get; set; }
             public decimal Net { get; set; }
+            public decimal Fine { get; set; }
             public long Run { get; set; }
             public string Status { get; set; }
         }
@@ -531,7 +532,11 @@ namespace TToApp.Controllers
                         : null,
                     Gross = r.GrossAmount,
                     Adjustments = r.Adjustments,
-                    Net = r.NetAmount
+                    Net = r.NetAmount,
+                    Run = r.Id,
+                    Fine = _db.PayrollFines
+                        .Where(f => f.PayRunId == r.Id)
+                        .Sum(f => (decimal?)f.Amount) ?? 0m
                 }
             ).ToListAsync();
 
@@ -791,7 +796,10 @@ namespace TToApp.Controllers
                      Adjustments = r.Adjustments,
                      Net = r.NetAmount,
                      Run = r.Id,
-                     Status = r.Status
+                     Status = r.Status,
+                     Fine = _db.PayrollFines
+                         .Where(f => f.PayRunId == r.Id)
+                         .Sum(f => (decimal?)f.Amount) ?? 0m
                  }
                     ).ToListAsync();
 

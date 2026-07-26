@@ -101,7 +101,7 @@ public class PayrollFinesController : ControllerBase
             })
             .FirstOrDefaultAsync();
 
-        if (item is null) return NotFound($"PayrollFine {id} no existe.");
+        if (item is null) return NotFound($"PayrollFine {id} not found.");
         return Ok(item);
     }
 
@@ -114,19 +114,19 @@ public class PayrollFinesController : ControllerBase
             .Include(p => p.Routes)
             .FirstOrDefaultAsync(p => p.Tracking ==dto.Tracking);
 
-        if (package is null) return BadRequest("Package no existe.");
+        if (package is null) return BadRequest("Package not found.");
         
         //var userId = package.Routes?.UserId;
         int? finalUserIdNullable = package.Routes?.UserId;
 
         if (!finalUserIdNullable.HasValue)
-            return BadRequest("No se pudo determinar el UserId.");
+            return BadRequest("Could not determine the UserId.");
 
         int userId = finalUserIdNullable.Value; // ✅ ya es int
 
         // Validaciones opcionales: existencia de FK
         var userExists = await _context.Users.AnyAsync(u => u.Id == userId);
-        if (!userExists) return BadRequest($"UserId {userId} no existe.");
+        if (!userExists) return BadRequest($"UserId {userId} not found.");
 
         var entity = new PayrollFine
         {
@@ -164,19 +164,19 @@ public class PayrollFinesController : ControllerBase
     public async Task<ActionResult<PayrollFineDto>> Update(int id, [FromBody] PayrollFineUpdateDto dto)
     {
         var entity = await _context.PayrollFines.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound($"PayrollFine {id} no existe.");
+        if (entity is null) return NotFound($"PayrollFine {id} not found.");
 
         if (dto.UserId.HasValue)
         {
             var userExists = await _context.Users.AnyAsync(u => u.Id == dto.UserId.Value);
-            if (!userExists) return BadRequest($"UserId {dto.UserId.Value} no existe.");
+            if (!userExists) return BadRequest($"UserId {dto.UserId.Value} not found.");
             entity.UserId = dto.UserId.Value;
         }
 
         if (dto.PackageId.HasValue)
         {
             var packageExists = await _context.Packages.AnyAsync(p => p.Id == dto.PackageId.Value);
-            if (!packageExists) return BadRequest($"PackageId {dto.PackageId.Value} no existe.");
+            if (!packageExists) return BadRequest($"PackageId {dto.PackageId.Value} not found.");
             entity.PackageId = dto.PackageId.Value;
         }
 
@@ -210,10 +210,10 @@ public class PayrollFinesController : ControllerBase
     public async Task<ActionResult<PayrollFineDto>> ToggleActive(int id)
     {
         var entity = await _context.PayrollFines.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound($"PayrollFine {id} no existe.");
+        if (entity is null) return NotFound($"PayrollFine {id} not found.");
 
         if (entity.ChargedAt != null)
-            return BadRequest("No se puede modificar una multa que ya fue aplicada a un payroll.");
+            return BadRequest("Cannot modify a fine that has already been applied to a payroll.");
 
         entity.IsActive = !entity.IsActive;
         entity.UpdatedAt = DateTime.UtcNow;
@@ -361,7 +361,7 @@ public class PayrollFinesController : ControllerBase
     public async Task<ActionResult> ImportByWarehouseFormat(int warehouseId, [FromForm] PayrollFineImportRequest request)
     {
         if (request.File == null || request.File.Length == 0)
-            return BadRequest("Archivo no encontrado.");
+            return BadRequest("File not found.");
 
         var warehouse = await _context.Warehouses
             .AsNoTracking()
@@ -369,7 +369,7 @@ public class PayrollFinesController : ControllerBase
             .FirstOrDefaultAsync(w => w.Id == warehouseId);
 
         if (warehouse == null)
-            return NotFound($"Warehouse {warehouseId} no existe.");
+            return NotFound($"Warehouse {warehouseId} not found.");
 
         var format = warehouse.Company?.Trim().ToLowerInvariant() switch
         {
@@ -380,7 +380,7 @@ public class PayrollFinesController : ControllerBase
         };
 
         if (format == null)
-            return BadRequest($"El warehouse tiene Company='{warehouse.Company}', sin formato configurado. Soportados: SwiftX, Uni Uni, Speedx.");
+            return BadRequest($"Warehouse has Company='{warehouse.Company}' with no import format configured. Supported: SwiftX, Uni Uni, Speedx.");
 
         using var stream = new MemoryStream();
         await request.File.CopyToAsync(stream);
@@ -400,11 +400,11 @@ public class PayrollFinesController : ControllerBase
             string.Equals(w.Name, sheetName, StringComparison.OrdinalIgnoreCase));
 
         if (ws == null)
-            return BadRequest($"Worksheet '{sheetName}' no existe en el archivo.");
+            return BadRequest($"Worksheet '{sheetName}' not found in the file.");
 
         var used = ws.RangeUsed();
         if (used == null)
-            return BadRequest("La hoja está vacía.");
+            return BadRequest("The worksheet is empty.");
 
         // --- parsear filas; driverKey = nombre (swift) | driver_id (uniuni) | null (speedx) ---
         var rowData = new List<(string tracking, decimal amount, string type, string? driverKey)>();
@@ -418,6 +418,7 @@ public class PayrollFinesController : ControllerBase
             {
                 tracking  = row.Cell(1).GetString().Trim();
                 type      = row.Cell(2).GetString().Trim();
+                
                 amount    = row.Cell(3).TryGetValue<decimal>(out var a) ? Math.Abs(a) : 0;
                 driverKey = row.Cell(4).GetString().Trim(); // Driver Name
             }
@@ -432,7 +433,7 @@ public class PayrollFinesController : ControllerBase
             {
                 tracking = row.Cell(1).GetString().Trim();
                 amount   = row.Cell(6).TryGetValue<decimal>(out var a) ? Math.Abs(a) : 0;
-                type     = "Claim";
+                type     = row.Cell(5).GetString().Trim();
             }
 
             if (string.IsNullOrWhiteSpace(tracking) || amount <= 0) continue;
@@ -442,7 +443,7 @@ public class PayrollFinesController : ControllerBase
         }
 
         if (rowData.Count == 0)
-            return BadRequest("No se encontraron filas válidas en el archivo.");
+            return BadRequest("No valid rows found in the file.");
 
         var trackings = rowData.Select(r => r.tracking).Distinct().ToList();
 
@@ -520,7 +521,7 @@ public class PayrollFinesController : ControllerBase
             {
                 if (!NameHelper.TryFindByName(userByName, driverKey ?? "", out var uid))
                 {
-                    errors.Add(new { tracking, driverName = driverKey, reason = "Driver no encontrado en el warehouse por nombre." });
+                    errors.Add(new { tracking, driverName = driverKey, reason = "Driver not found in the warehouse by name." });
                     continue;
                 }
                 userId = uid;
@@ -530,7 +531,7 @@ public class PayrollFinesController : ControllerBase
                 var idStr = (driverKey ?? "").Trim();
                 if (!userByIdentification.TryGetValue(idStr, out var uid))
                 {
-                    errors.Add(new { tracking, driverId = driverKey, reason = "Driver no encontrado en el warehouse por IdentificationNumber." });
+                    errors.Add(new { tracking, driverId = driverKey, reason = "Driver not found in the warehouse by identification number." });
                     continue;
                 }
                 userId = uid;
@@ -539,13 +540,13 @@ public class PayrollFinesController : ControllerBase
             {
                 if (!packageByTracking.TryGetValue(tracking, out var pkg))
                 {
-                    errors.Add(new { tracking, reason = "Package no encontrado en el sistema." });
+                    errors.Add(new { tracking, reason = "Package not found in the system." });
                     continue;
                 }
                 userId = pkg.Routes?.UserId;
                 if (userId == null)
                 {
-                    errors.Add(new { tracking, reason = "El package no tiene ruta/driver asignado." });
+                    errors.Add(new { tracking, reason = "Package has no route/driver assigned." });
                     continue;
                 }
                 packageId = pkg.Id;

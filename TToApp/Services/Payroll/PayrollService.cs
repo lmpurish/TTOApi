@@ -647,28 +647,69 @@ namespace TToApp.Services.Payroll
                     }
                 }*/
             }
-           var mixedRatesWithDaily = rates
-            .Where(r =>
-                r.RateType == "Mixed" &&
-                r.DailyAmount.GetValueOrDefault() > 0 &&
-                r.WarehouseId.HasValue)
-            .ToList();
+           // ============================================================
+            // DAILY AMOUNT DE MANAGER POR USERWAREHOUSE
+            //
+            // Reglas:
+            // 1. El usuario debe estar asignado al warehouse.
+            // 2. UserWarehouse debe estar activo.
+            // 3. PaysManagerDailySalary debe ser true.
+            // 4. ManagerDailyRate debe ser mayor que 0.
+            // 5. Debe existir al menos un punch en ese warehouse y día.
+            // 6. Si el payroll es de un warehouse específico,
+            //    solo se paga el salario de ese warehouse.
+            // ============================================================
 
-            if (mixedRatesWithDaily.Any())
+            var managerAssignmentsQuery = _db.UserWarehouses
+                .AsNoTracking()
+                .Where(uw =>
+                    uw.UserId == driverId &&
+                    uw.IsActive &&
+                    uw.PaysManagerDailySalary &&
+                    uw.ManagerDailyRate.HasValue &&
+                    uw.ManagerDailyRate.Value > 0);
+
+            // Si se está calculando un payroll por warehouse,
+            // impedir que se agreguen salarios de otros warehouses.
+            if (warehouseId.HasValue && warehouseId.Value > 0)
             {
-                var mixedWarehouseIds = mixedRatesWithDaily
-                    .Select(r => r.WarehouseId!.Value)
+                var currentWarehouseId = (int)warehouseId.Value;
+
+                managerAssignmentsQuery = managerAssignmentsQuery
+                    .Where(uw => uw.WarehouseId == currentWarehouseId);
+            }
+
+            var managerAssignments = await managerAssignmentsQuery
+                .Select(uw => new
+                {
+                    uw.WarehouseId,
+                    DailyRate = uw.ManagerDailyRate!.Value
+                })
+                .ToListAsync();
+
+            if (managerAssignments.Any())
+            {
+                var eligibleWarehouseIds = managerAssignments
+                    .Select(x => x.WarehouseId)
                     .Distinct()
                     .ToList();
 
-                var startUtc = weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-                var endExclusiveUtc = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                var startUtc = weekStart.ToDateTime(
+                    TimeOnly.MinValue,
+                    DateTimeKind.Utc);
+
+                var endExclusiveUtc = weekEnd
+                    .AddDays(1)
+                    .ToDateTime(
+                        TimeOnly.MinValue,
+                        DateTimeKind.Utc);
 
                 var punchDaysByWarehouse = await _db.DriverPunches
                     .AsNoTracking()
                     .Where(p =>
+                        p.CompanyId == companyId &&
                         p.DriverId == driverId &&
-                        mixedWarehouseIds.Contains(p.WarehouseId) &&
+                        eligibleWarehouseIds.Contains(p.WarehouseId) &&
                         p.OccurredAtUtc >= startUtc &&
                         p.OccurredAtUtc < endExclusiveUtc)
                     .Select(p => new
@@ -683,65 +724,30 @@ namespace TToApp.Services.Payroll
 
                 foreach (var punchDay in punchDaysByWarehouse)
                 {
-                    var dailyRateObj = mixedRatesWithDaily
-                        .Where(r =>
-                            r.WarehouseId == punchDay.WarehouseId &&
-                            r.EffectiveFrom <= punchDay.Day &&
-                            (r.EffectiveTo == null || r.EffectiveTo >= punchDay.Day))
-                        .OrderByDescending(r => r.EffectiveFrom)
-                        .FirstOrDefault();
+                    var assignment = managerAssignments
+                        .FirstOrDefault(x =>
+                            x.WarehouseId == punchDay.WarehouseId);
 
-                    if (dailyRateObj == null)
+                    if (assignment == null)
                         continue;
 
-                    var dailyRate = dailyRateObj.DailyAmount.GetValueOrDefault();
+                    var dailyRate = assignment.DailyRate;
 
-                    AddLine(
+                    var sourceId =
+                        $"MANAGER-DAILY-{driverId}-{punchDay.WarehouseId}-{punchDay.Day:yyyyMMdd}";
+
+                    gross += AddLine(
                         payRun,
                         "DailyAmount",
-                        driverId.ToString(),
-                        $"Daily Amount on: {punchDay.Day:MMM dd, yyyy} - WH {punchDay.WarehouseId}",
+                        sourceId,
+                        $"Manager daily salary - {punchDay.Day:MMM dd, yyyy} - WH {punchDay.WarehouseId}",
                         1m,
                         dailyRate,
-                        "DAILY_AMOUNT",
+                        $"MANAGER_DAILY:WAREHOUSE:{punchDay.WarehouseId}",
                         punchDay.Day.ToDateTime(TimeOnly.MinValue)
                     );
-
-                    gross += dailyRate;
                 }
             }
-           
-
-            // if (routeRate.RateType == "Mixed" && routeRate.DailyAmount > 0) {
- 
-            //     var startUtc = weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            //     var endExclusiveUtc = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-
-            //     var days = await _db.DriverPunches
-            //         .AsNoTracking()
-            //         .Where(p => p.DriverId == driverId)
-            //         .Where(p => p.OccurredAtUtc >= startUtc && p.OccurredAtUtc < endExclusiveUtc)
-            //         .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
-            //         .Distinct()
-            //         .OrderBy(d => d)
-            //         .ToListAsync();
-            //     var dailyRate = rate.DailyAmount.GetValueOrDefault();
-            //     foreach (var day in days)
-            //     {
-            //         AddLine(
-            //             payRun,
-            //             "DailyAmount",
-            //             driverId.ToString(),
-            //             $"Daily Amount on: {day:MMM dd, yyyy}" ,
-            //             1m,
-            //             dailyRate,
-            //             "DAILY_AMOUNT",
-            //             day.ToDateTime(TimeOnly.MinValue)
-                        
-            //         );
-            //     }
-            //     gross += days.Count * dailyRate;
-            // }
             
             if (warnings.Count > 0)
                 AddLine(payRun, "Info", null, $"Warnings: {warnings.Count}", 0m, 0m, "WARN_SUMMARY");

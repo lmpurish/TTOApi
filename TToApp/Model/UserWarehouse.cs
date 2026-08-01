@@ -26,6 +26,11 @@ namespace TToApp.Model
         public DateOnly? StartDate { get; set; }
 
         public DateOnly? EndDate { get; set; }
+            // Esta asignación paga salario diario de Manager
+        public bool PaysManagerDailySalary { get; set; } = false;
+
+        // Opcional: salario específico para este almacén
+        public decimal? ManagerDailyRate { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

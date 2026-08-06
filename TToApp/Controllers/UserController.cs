@@ -1624,7 +1624,10 @@ public class UserController : ControllerBase
         if (dto.WarehouseId.HasValue)
         {
             user.WarehouseId = dto.WarehouseId.Value;
-            await SyncUserWarehouseAsync(user.Id, dto.WarehouseId.Value);
+            await SyncUserWarehouseAsync(
+                user.Id,
+                dto.WarehouseId.Value,
+                identificationNumber: dto.IdentificationNumber);
         }
         if (dto.UserRole.HasValue) user.UserRole = dto.UserRole.Value;
         if (dto.IdentificationNumber != null) user.IdentificationNumber = dto.IdentificationNumber;
@@ -2300,7 +2303,7 @@ public async Task<IActionResult> GetSsn(int id)
             await _authContext.Users.AddAsync(user, ct);
             await _authContext.SaveChangesAsync(ct);
 
-            await SyncUserWarehouseAsync(user.Id, whInfo.Id, ct);
+            await SyncUserWarehouseAsync(user.Id, whInfo.Id, ct: ct);
 
             var profile = new UserProfile
             {
@@ -3103,7 +3106,11 @@ public async Task<IActionResult> GetSsn(int id)
         });
     }
 
-    private async Task SyncUserWarehouseAsync(int userId, int warehouseId, CancellationToken ct = default)
+    private async Task SyncUserWarehouseAsync(
+        int userId,
+        int warehouseId,
+        string? identificationNumber = null,
+        CancellationToken ct = default)
     {
         // Clear IsPrimary on all other warehouses for this user
         var others = await _authContext.UserWarehouses
@@ -3119,19 +3126,21 @@ public async Task<IActionResult> GetSsn(int id)
         {
             _authContext.UserWarehouses.Add(new TToApp.Model.UserWarehouse
             {
-                UserId = userId,
-                WarehouseId = warehouseId,
-                IsPrimary = true,
-                IsActive = true,
-                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
-                CreatedAt = DateTime.UtcNow
+                UserId               = userId,
+                WarehouseId          = warehouseId,
+                IsPrimary            = true,
+                IsActive             = true,
+                StartDate            = DateOnly.FromDateTime(DateTime.UtcNow),
+                CreatedAt            = DateTime.UtcNow,
+                IdentificationNumber = identificationNumber
             });
         }
         else
         {
             existing.IsPrimary = true;
-            existing.IsActive = true;
-            existing.EndDate = null;
+            existing.IsActive  = true;
+            existing.EndDate   = null;
+            if (identificationNumber != null)  existing.IdentificationNumber = identificationNumber;
         }
     }
 

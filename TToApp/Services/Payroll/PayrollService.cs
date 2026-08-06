@@ -313,7 +313,6 @@ namespace TToApp.Services.Payroll
             decimal gross = 0m;
             var warnings = new List<string>();
 
-            if (hasRoutesInThisPayRun)
             {
                 var pendingFines = await _db.PayrollFines
                     .Where(f =>
@@ -321,7 +320,8 @@ namespace TToApp.Services.Payroll
                         f.IsActive &&
                         f.Amount > 0 &&
                         f.ChargedAt == null &&
-                        f.PayRunId == null)
+                        f.PayRunId == null &&
+                        (f.WarehouseId == null || f.WarehouseId == (int?)warehouseId))
                     .OrderBy(f => f.CreatedAt)
                     .ToListAsync();
 
@@ -556,7 +556,7 @@ namespace TToApp.Services.Payroll
                             if (delivered > 0)
                             {
                                 var stopRate   = activeZoneRule?.BaseAmount ?? effectivePerStop;
-                                var extraRate  = activeZoneRule.UseDriverRateForExtra
+                                var extraRate  = activeZoneRule?.UseDriverRateForExtra == true
                                             ? effectivePerStop
                                             : activeZoneRule?.ExtraAmount ?? 0m;
                                 var diff       = Math.Max(0m, (decimal)route.Volumen - delivered);
@@ -748,6 +748,137 @@ namespace TToApp.Services.Payroll
                     );
                 }
             }
+
+            // PerDay: fixed daily amount per punch day, no route calculations
+            // Includes global rates (null WarehouseId) — they fall back to the payrun's warehouse for punch lookup
+            var perDayRates = rates
+                .Where(r =>
+                    r.RateType == "PerDay" &&
+                    r.DailyAmount.GetValueOrDefault() > 0)
+                .ToList();
+
+            if (perDayRates.Any())
+            {
+                // Resolve effective warehouse IDs to query punches for:
+                // specific-warehouse rates use their own warehouse;
+                // global rates use the payrun's warehouseId as fallback.
+                var perDayWarehouseIds = perDayRates
+                    .Select(r => r.WarehouseId ?? (warehouseId.HasValue ? (int?)warehouseId.Value : null))
+                    .Where(id => id.HasValue)
+                    .Select(id => id!.Value)
+                    .Distinct()
+                    .ToList();
+
+                if (perDayWarehouseIds.Any())
+                {
+                    var startUtc        = weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                    var endExclusiveUtc = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+
+                    var punchDays = await _db.DriverPunches
+                        .AsNoTracking()
+                        .Where(p =>
+                            p.DriverId == driverId &&
+                            perDayWarehouseIds.Contains(p.WarehouseId) &&
+                            p.OccurredAtUtc >= startUtc &&
+                            p.OccurredAtUtc < endExclusiveUtc)
+                        .Select(p => new
+                        {
+                            Day = DateOnly.FromDateTime(p.OccurredAtUtc),
+                            p.WarehouseId
+                        })
+                        .Distinct()
+                        .OrderBy(x => x.Day)
+                        .ToListAsync();
+
+                    foreach (var punchDay in punchDays)
+                    {
+                        // Warehouse-specific rate wins over global rate
+                        var rateObj = perDayRates
+                            .Where(r =>
+                                (r.WarehouseId == punchDay.WarehouseId || r.WarehouseId == null) &&
+                                r.EffectiveFrom <= punchDay.Day &&
+                                (r.EffectiveTo == null || r.EffectiveTo >= punchDay.Day))
+                            .OrderByDescending(r => r.WarehouseId != null)
+                            .ThenByDescending(r => r.EffectiveFrom)
+                            .FirstOrDefault();
+
+                        if (rateObj == null) continue;
+
+                        var dayAmount = rateObj.DailyAmount!.Value;
+
+                        AddLine(
+                            payRun,
+                            "PerDay",
+                            driverId.ToString(),
+                            $"Daily pay: {punchDay.Day:MMM dd, yyyy} - WH {punchDay.WarehouseId}",
+                            1m,
+                            dayAmount,
+                            "PER_DAY",
+                            punchDay.Day.ToDateTime(TimeOnly.MinValue)
+                        );
+
+                        gross += dayAmount;
+                    }
+                }
+            }
+
+            // PerPeriod: flat amount added once per pay period, regardless of routes or punches.
+            // Warehouse-specific rate wins over global; only one rate is applied.
+            var perPeriodRate = rates
+                .Where(r =>
+                    r.RateType == "PerPeriod" &&
+                    r.BaseAmount > 0 &&
+                    r.EffectiveFrom <= weekEnd)
+                .OrderByDescending(r => r.WarehouseId != null) // specific wins
+                .ThenByDescending(r => r.EffectiveFrom)
+                .FirstOrDefault();
+
+            if (perPeriodRate != null)
+            {
+                AddLine(
+                    payRun,
+                    "PerPeriod",
+                    driverId.ToString(),
+                    $"Fixed period pay ({weekStart:MMM dd} - {weekEnd:MMM dd, yyyy})",
+                    1m,
+                    perPeriodRate.BaseAmount,
+                    "PER_PERIOD",
+                    weekStart.ToDateTime(TimeOnly.MinValue)
+                );
+
+                gross += perPeriodRate.BaseAmount;
+            }
+
+            // if (routeRate.RateType == "Mixed" && routeRate.DailyAmount > 0) {
+ 
+            //     var startUtc = weekStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            //     var endExclusiveUtc = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+
+            //     var days = await _db.DriverPunches
+            //         .AsNoTracking()
+            //         .Where(p => p.DriverId == driverId)
+            //         .Where(p => p.OccurredAtUtc >= startUtc && p.OccurredAtUtc < endExclusiveUtc)
+            //         .Select(p => DateOnly.FromDateTime(p.OccurredAtUtc))
+            //         .Distinct()
+            //         .OrderBy(d => d)
+            //         .ToListAsync();
+            //     var dailyRate = rate.DailyAmount.GetValueOrDefault();
+            //     foreach (var day in days)
+            //     {
+            //         AddLine(
+            //             payRun,
+            //             "DailyAmount",
+            //             driverId.ToString(),
+            //             $"Daily Amount on: {day:MMM dd, yyyy}" ,
+            //             1m,
+            //             dailyRate,
+            //             "DAILY_AMOUNT",
+            //             day.ToDateTime(TimeOnly.MinValue)
+                        
+            //         );
+            //     }
+            //     gross += days.Count * dailyRate;
+            // }
             
             if (warnings.Count > 0)
                 AddLine(payRun, "Info", null, $"Warnings: {warnings.Count}", 0m, 0m, "WARN_SUMMARY");
@@ -770,14 +901,16 @@ namespace TToApp.Services.Payroll
             await ApplyLoanDeductionsAsync(payRun, userId);
             await _db.SaveChangesAsync();
 
-        //2) recalcula Adjustments total (incluye loan deductions y bonos)
+            //2) recalcula Adjustments total (incluye loan deductions y bonos)
             payRun.Adjustments = await _db.PayrollAdjustments
                 .Where(a => a.PayRunId == payRun.Id)
                 .SumAsync(a => (decimal?)a.Amount) ?? 0m;
 
+            payRun.NetAmount = payRun.GrossAmount + payRun.Adjustments;
+
             payRun.CalculatedAt = DateTime.UtcNow;
             payRun.CalculatedBy = userId;
-                
+
             await _db.SaveChangesAsync();
             return payRun;
         }
@@ -807,7 +940,7 @@ namespace TToApp.Services.Payroll
                 decimal desired = loan.InstallmentAmount;
 
                 if (desired <= 0)
-                    desired = (decimal)loan.MaxDeductionPerPayRun;
+                    desired = loan.MaxDeductionPerPayRun ?? 0m;
 
                 if (desired <= 0)
                     desired = loan.Balance;

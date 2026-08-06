@@ -60,6 +60,7 @@ public class PayrollFineDto
     public DateTime? UpdatedAt { get; set; }
     public DateTime? ChargedAt { get; set; }
     public long? PayRunId { get; set; }
+    public int? WarehouseId { get; set; }
 
     // opcional: datos relacionados “light”
     public string? UserName { get; set; }

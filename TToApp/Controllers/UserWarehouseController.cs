@@ -80,6 +80,7 @@ namespace TToApp.Controllers
                 existing.IsActive = true;
                 existing.EndDate = null;
                 if (req.IsPrimary) existing.IsPrimary = true;
+                if (req.IdentificationNumber != null) existing.IdentificationNumber = req.IdentificationNumber;
             }
             else
             {
@@ -90,7 +91,8 @@ namespace TToApp.Controllers
                     IsPrimary = req.IsPrimary,
                     IsActive = true,
                     StartDate = req.StartDate,
-                    CreatedBy = req.CreatedBy
+                    CreatedBy = req.CreatedBy,
+                    IdentificationNumber = req.IdentificationNumber
                 });
             }
 
@@ -121,6 +123,26 @@ namespace TToApp.Controllers
 
             await _db.SaveChangesAsync(ct);
             return Ok(new { message = "Warehouse assigned successfully." });
+        }
+
+        // PUT /api/users/{userId}/warehouses/{warehouseId}
+        [HttpPut("{warehouseId:int}")]
+        public async Task<IActionResult> UpdateWarehouseAssignment(
+            int userId, int warehouseId,
+            [FromBody] UpdateWarehouseAssignmentRequest req,
+            CancellationToken ct)
+        {
+            var entry = await _db.UserWarehouses
+                .FirstOrDefaultAsync(uw => uw.UserId == userId && uw.WarehouseId == warehouseId, ct);
+
+            if (entry == null)
+                return NotFound(new { message = "This user is not assigned to that warehouse." });
+
+            if (req.IdentificationNumber != null) entry.IdentificationNumber = req.IdentificationNumber;
+            if (req.StartDate.HasValue)         entry.StartDate = req.StartDate;
+
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { message = "Warehouse assignment updated." });
         }
 
         // PUT /api/users/{userId}/warehouses/{warehouseId}/set-primary
@@ -176,11 +198,18 @@ namespace TToApp.Controllers
         }
     }
 
+    public class UpdateWarehouseAssignmentRequest
+    {
+        public string? IdentificationNumber { get; set; }
+        public DateOnly? StartDate { get; set; }
+    }
+
     public class AssignWarehouseRequest
     {
         public int WarehouseId { get; set; }
         public bool IsPrimary { get; set; } = false;
         public DateOnly? StartDate { get; set; }
         public int? CreatedBy { get; set; }
+        public string? IdentificationNumber { get; set; }
     }
 }

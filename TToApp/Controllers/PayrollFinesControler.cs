@@ -137,7 +137,8 @@ public class PayrollFinesController : ControllerBase
             Type        = string.IsNullOrWhiteSpace(dto.Type) ? "Other" : dto.Type.Trim(),
             Description = dto.Description ?? "",
             CreatedAt   = DateTime.UtcNow,
-            UpdatedAt   = null
+            UpdatedAt   = null,
+            WarehouseId = package.Routes?.WarehouseId
         };
 
         _context.PayrollFines.Add(entity);
@@ -237,7 +238,7 @@ public class PayrollFinesController : ControllerBase
     }
 
     [HttpPost("import/details")]
-    public async Task<ActionResult> ImportFromExcelDetails([FromForm] PayrollFineImportRequest request)
+    public async Task<ActionResult> ImportFromExcelDetails([FromForm] PayrollFineImportRequest request, [FromQuery] int? warehouseId = null)
     {
         var file = request.File;
         if (file == null || file.Length == 0)
@@ -328,14 +329,15 @@ public class PayrollFinesController : ControllerBase
 
             var entity = new PayrollFine
             {
-                UserId = userId,
-                PackageId = package.Id,
-                Tracking = tracking,
-                Amount = amount,
-                Type = type,
+                UserId      = userId,
+                PackageId   = package.Id,
+                Tracking    = tracking,
+                Amount      = amount,
+                Type        = type,
                 Description = description,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = null
+                CreatedAt   = DateTime.UtcNow,
+                UpdatedAt   = null,
+                WarehouseId = warehouseId  // optional query param
             };
 
             _context.PayrollFines.Add(entity);
@@ -477,7 +479,8 @@ public class PayrollFinesController : ControllerBase
                     uw.User.Id,
                     uw.User.Name,
                     uw.User.LastName,
-                    uw.User.IdentificationNumber
+                    // per-warehouse IdentificationNumber takes precedence over the global one
+                    IdentificationNumber = uw.IdentificationNumber ?? uw.User.IdentificationNumber
                 })
                 .ToListAsync();
 

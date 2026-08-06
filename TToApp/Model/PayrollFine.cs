@@ -45,6 +45,7 @@ public class PayrollFine
     public DateTime? ChargedAt { get; set; }
     public long? PayRunId { get; set; }
     public PayRun? PayRun { get; set; }
+    public int? WarehouseId { get; set; }
     public User User { get; set; } = null!;
     public Packages? Package { get; set; }
 }

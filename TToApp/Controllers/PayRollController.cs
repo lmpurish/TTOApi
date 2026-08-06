@@ -49,7 +49,10 @@ namespace TToApp.Controllers
         // -------------------------
 
         private static readonly HashSet<string> AllowedRateTypes = new(StringComparer.OrdinalIgnoreCase)
-    { "PerRoute", "PerStop", "PerPackage", "PerMile", "Hourly", "Mixed" };
+    { "PerRoute", "PerStop", "PerPackage", "PerMile", "Hourly", "Mixed", "PerDay", "PerPeriod" };
+
+        [HttpGet("rate-types")]
+        public ActionResult<IEnumerable<string>> GetRateTypes() => Ok(AllowedRateTypes.OrderBy(x => x));
 
         public sealed class ComputePayrollRequest
         {
@@ -553,6 +556,160 @@ namespace TToApp.Controllers
             };
 
             return Ok(dto);
+        }
+
+        // POST /periods/compute/staff
+        // Computes payroll only for Admin, Recruiter and Assistant roles.
+        // When warehouseId is omitted, each staff member is computed once per active warehouse they belong to.
+        //[Authorize(Roles = "Admin")]
+        [HttpPost("periods/compute/staff")]
+        public async Task<ActionResult> ComputeStaffPeriod([FromBody] ComputePeriodRequest req)
+        {
+            var start = ParseDateOnly(req.StartDate);
+            var end   = ParseDateOnly(req.EndDate);
+
+            var staffRoles = new[]
+            {
+                global::User.Role.Admin,
+                global::User.Role.Recruiter,
+                global::User.Role.Assistant
+            };
+
+            // 1) Load (userId, warehouseId) pairs filtered by global UserRole
+            var pairsQuery =
+                from uw in _db.UserWarehouses.AsNoTracking()
+                join u  in _db.Users.AsNoTracking() on uw.UserId equals u.Id
+                where uw.IsActive &&
+                      u.IsActive &&
+                      u.CompanyId == req.CompanyId &&
+                      u.UserRole.HasValue &&
+                      staffRoles.Contains(u.UserRole.Value)
+                select new { UserId = (long)u.Id, uw.WarehouseId };
+
+            if (req.WarehouseId.HasValue && req.WarehouseId.Value != 0)
+                pairsQuery = pairsQuery.Where(x => x.WarehouseId == (int)req.WarehouseId.Value);
+
+            var pairs = await pairsQuery.Distinct().ToListAsync();
+
+            if (pairs.Count == 0)
+                return Ok(new { message = "No staff users found for the given warehouse and roles." });
+
+            var allStaffIds = pairs.Select(p => p.UserId).Distinct().ToList();
+
+            // 2) Which staff have a DriverRate
+            var staffWithRates = (await _db.DriverRates
+                .AsNoTracking()
+                .Where(r => allStaffIds.Contains(r.DriverId))
+                .Select(r => r.DriverId)
+                .Distinct()
+                .ToListAsync()).ToHashSet();
+
+            var usersWithoutRates = await _db.Users
+                .AsNoTracking()
+                .Where(u => allStaffIds.Contains((long)u.Id) && !staffWithRates.Contains((long)u.Id))
+                .Select(u => new UserMissingRateDto { UserId = (long)u.Id, Name = u.Name, LastName = u.LastName })
+                .ToListAsync();
+
+            // 3) Group by warehouse → one period per warehouse
+            var periodIds    = new List<long>();
+            var byWarehouse  = pairs.GroupBy(p => p.WarehouseId);
+
+            foreach (var wg in byWarehouse)
+            {
+                long whId = wg.Key;
+
+                var period = await _db.PayPeriods.FirstOrDefaultAsync(p =>
+                    p.CompanyId   == req.CompanyId &&
+                    p.WarehouseId == whId &&
+                    p.StartDate   == start &&
+                    p.EndDate     == end);
+
+                if (period is null)
+                {
+                    period = new PayPeriod
+                    {
+                        CompanyId   = req.CompanyId,
+                        WarehouseId = whId,
+                        StartDate   = start,
+                        EndDate     = end,
+                        Status      = "Open",
+                        CreatedBy   = req.UserId
+                    };
+                    _db.PayPeriods.Add(period);
+                    await _db.SaveChangesAsync();
+                }
+
+                periodIds.Add(period.Id);
+
+                // Skip already-computed unless RecalculateAll
+                var already = new HashSet<int>();
+                if (!req.RecalculateAll)
+                {
+                    already = (await _db.PayRuns
+                        .Where(x => x.PayPeriodId == period.Id)
+                        .Select(x => x.DriverId)
+                        .ToListAsync()).ToHashSet();
+                }
+
+                // 4) Compute each staff member for this warehouse
+                foreach (var entry in wg)
+                {
+                    if (!staffWithRates.Contains(entry.UserId)) continue;
+                    if (!req.RecalculateAll && already.Contains((int)entry.UserId)) continue;
+
+                    try
+                    {
+                        await _service.ComputeDriverWeeklyAsync(
+                            companyId:    req.CompanyId,
+                            driverId:     entry.UserId,
+                            weekStart:    start,
+                            weekEnd:      end,
+                            warehouseId:  whId,
+                            userId:       req.UserId,
+                            filterZoneId: req.ZoneId);
+                    }
+                    catch (Exception ex)
+                    {
+                        return BadRequest(new
+                        {
+                            message  = "ComputeDriverWeeklyAsync failed",
+                            driverId = entry.UserId,
+                            warehouseId = whId,
+                            error    = ex.Message
+                        });
+                    }
+                }
+            }
+
+            // 5) Summary across all periods created/updated
+            var runs = await (
+                from r in _db.PayRuns.AsNoTracking()
+                join u in _db.Users.AsNoTracking() on r.DriverId equals u.Id into gj
+                from u in gj.DefaultIfEmpty()
+                where periodIds.Contains(r.PayPeriodId) && allStaffIds.Contains(r.DriverId)
+                select new PeriodSummaryRow
+                {
+                    DriverId    = r.DriverId,
+                    DriverName  = u != null ? (u.Name + " " + u.LastName).Trim() : "Unknown",
+                    Gross       = r.GrossAmount,
+                    Adjustments = r.Adjustments,
+                    Net         = r.NetAmount,
+                    Run         = r.Id,
+                    Status      = r.Status,
+                    Fine        = _db.PayrollFines
+                                    .Where(f => f.PayRunId == r.Id)
+                                    .Sum(f => (decimal?)f.Amount) ?? 0m
+                }
+            ).ToListAsync();
+
+            return Ok(new
+            {
+                StartDate        = start.ToString("yyyy-MM-dd"),
+                EndDate          = end.ToString("yyyy-MM-dd"),
+                PeriodIds        = periodIds,
+                Drivers          = runs,
+                UsersWithOutRate = usersWithoutRates
+            });
         }
 
         public sealed class PeriodRouteDebugDto
@@ -2041,7 +2198,10 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
             Adjustments = r.Adjustments,
             Net = r.NetAmount,
             Run = r.Id,
-            Status = r.Status
+            Status = r.Status,
+            Fine = _db.PayrollFines
+                .Where(f => f.PayRunId == r.Id)
+                .Sum(f => (decimal?)f.Amount) ?? 0m
         }
     ).ToListAsync();
 
@@ -2391,8 +2551,9 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                     line.Description = $"{adjustment.Type} - {adjustment.Reason}";
             }
 
-            // Recalculate: sum from DB (still has old amount) minus old, plus new
+            // Recalculate: sum directly from DB (bypasses change tracker) minus old, plus new
             var dbSum = await _db.PayrollAdjustments
+                .AsNoTracking()
                 .Where(a => a.PayRunId == run.Id)
                 .SumAsync(a => (decimal?)a.Amount) ?? 0m;
 

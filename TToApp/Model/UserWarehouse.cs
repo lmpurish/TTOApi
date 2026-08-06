@@ -19,6 +19,9 @@ namespace TToApp.Model
 
         public Warehouse Warehouse { get; set; } = null!;
 
+        [StringLength(50)]
+        public string? IdentificationNumber { get; set; }
+
         public bool IsPrimary { get; set; } = false;
 
         public bool IsActive { get; set; } = true;

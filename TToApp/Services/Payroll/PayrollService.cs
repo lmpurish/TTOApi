@@ -414,7 +414,7 @@ namespace TToApp.Services.Payroll
                 decimal routeSubtotal = 0m;
                 var qtyExtraWeigth = 0m;
 
-                var effectivePaymentType = activeZoneRule?.PaymentType ?? route.PaymentType;
+                var effectivePaymentType = activeZoneRule?.PaymentType ?? PaymentType.PerStop;
                  
                 // ✅ PAYMENT TYPE — se prioriza el ZonePayRule activo de la zona
 

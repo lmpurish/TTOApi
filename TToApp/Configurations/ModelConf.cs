@@ -47,6 +47,8 @@
                 b.Property(x => x.RateType).HasMaxLength(16).IsRequired();
 
                 b.Property(x => x.BaseAmount).HasColumnType("decimal(10,2)").IsRequired();
+                b.Property(x => x.DailyAmount).HasColumnType("decimal(10,2)");
+                b.Property(x => x.ExtraAmount).HasColumnType("decimal(10,2)");
                 b.Property(x => x.MinPayPerRoute).HasColumnType("decimal(10,2)");
                 b.Property(x => x.OverStopBonusPerStop).HasColumnType("decimal(10,2)");
                 b.Property(x => x.FailedStopPenalty).HasColumnType("decimal(10,2)");
@@ -70,12 +72,13 @@
                 b.Property(x => x.DriverId).IsRequired();
 
                 b.Property(x => x.GrossAmount).HasColumnType("decimal(10,2)").HasDefaultValue(0m);
+                b.Property(x => x.PrepaidAmount).HasColumnType("decimal(10,2)").HasDefaultValue(0m);
                 b.Property(x => x.Adjustments).HasColumnType("decimal(10,2)").HasDefaultValue(0m);
 
-                // Computada: NetAmount = GrossAmount + Adjustments
+                // Computada: NetAmount = GrossAmount - PrepaidAmount + Adjustments
                 b.Property(x => x.NetAmount)
                     .HasColumnType("decimal(10,2)")
-                    .HasComputedColumnSql("[GrossAmount] + [Adjustments]", stored: true);
+                    .HasComputedColumnSql("[GrossAmount] - [PrepaidAmount] + [Adjustments]", stored: true);
 
                 b.Property(x => x.Status).HasMaxLength(16).HasDefaultValue("Draft").IsRequired();
                 b.Property(x => x.CalculatedAt).HasColumnType("datetime2");

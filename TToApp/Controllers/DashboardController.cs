@@ -503,6 +503,7 @@ namespace TToApp.Controllers
                 pr.Id,
                 pr.Status,
                 pr.GrossAmount,
+                pr.PrepaidAmount,
                 adjustmentsTotal = pr.Adjustments,
                 pr.NetAmount,
                 calculatedAt = pr.CalculatedAt,
@@ -1059,6 +1060,7 @@ namespace TToApp.Controllers
                     pr.PayPeriod.Status
                 },
                 pr.GrossAmount,
+                pr.PrepaidAmount,
                 adjustmentsTotal = pr.Adjustments,
                 pr.NetAmount,
                 calculatedAt = pr.CalculatedAt,

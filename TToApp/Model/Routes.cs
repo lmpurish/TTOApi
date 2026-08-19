@@ -65,6 +65,7 @@ namespace TToApp.Model
         Created,    // La ruta esta creada pero no es visible
         Available,   // La ruta esta disponible 
         Loading,
-        PendingCompletion
+        PendingCompletion,
+        Paid
     }
 }

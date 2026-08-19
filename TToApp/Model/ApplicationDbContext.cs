@@ -56,6 +56,12 @@ namespace TToApp.Model
         public DbSet<PackageReturnEvidence> PackageReturnEvidences { get; set; }
         public DbSet<CompanyRevenue> CompanyRevenues { get; set; }
 
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        {
+            optionsBuilder.ConfigureWarnings(w =>
+                w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
+        }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -505,6 +511,9 @@ namespace TToApp.Model
     })
     .IsUnique();
 });
+
+            modelBuilder.Entity<UserWarehouse>()
+                .Property(uw => uw.ManagerDailyRate).HasColumnType("decimal(10,2)");
 
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;

@@ -8,6 +8,7 @@
         public int DriverId { get; set; }
         public User? Driver {  get; set; }
         public decimal GrossAmount { get; set; }
+        public decimal PrepaidAmount { get; set; } = 0m;
         public decimal Adjustments { get; set; }
         public decimal NetAmount { get;  set; } // Computada
         public string Status { get; set; } = "Draft";   // Draft|Approved (sugerido)

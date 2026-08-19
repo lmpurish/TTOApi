@@ -122,7 +122,7 @@ namespace TToApp.Services.Payroll
                 .IgnoreQueryFilters()
                 .AsNoTracking()
                 .Where(r =>
-                    r.routeStatus == RouteStatus.Completed &&
+                    (r.routeStatus == RouteStatus.Completed || r.routeStatus == RouteStatus.Paid) &&
                     r.DeliveryStops > 0 &&
                     r.Date >= startDt &&
                     r.Date < endExclusive &&
@@ -311,6 +311,7 @@ namespace TToApp.Services.Payroll
             }
 
             decimal gross = 0m;
+            decimal paidInAdvance = 0m;
             var warnings = new List<string>();
 
             {
@@ -617,8 +618,10 @@ namespace TToApp.Services.Payroll
                 }
 
                 gross += routeSubtotal;
-                
-                // Penalidades por multas asociadas a la ruta 
+                if (route.routeStatus == RouteStatus.Paid)
+                    paidInAdvance += routeSubtotal;
+
+                // Penalidades por multas asociadas a la ruta
 
                 /*if (penaltyRules?.Count > 0 && finesByRoute.TryGetValue(route.Id, out var fine))
                 {
@@ -936,7 +939,8 @@ if (perPeriodRate != null)
                 }
             }
 
-            payRun.GrossAmount = gross;
+            payRun.GrossAmount    = gross;
+            payRun.PrepaidAmount  = paidInAdvance;
 
             await ApplyLoanDeductionsAsync(payRun, userId);
             await _db.SaveChangesAsync();
@@ -946,7 +950,7 @@ if (perPeriodRate != null)
                 .Where(a => a.PayRunId == payRun.Id)
                 .SumAsync(a => (decimal?)a.Amount) ?? 0m;
 
-            payRun.NetAmount = payRun.GrossAmount + payRun.Adjustments;
+            payRun.NetAmount = payRun.GrossAmount - payRun.PrepaidAmount + payRun.Adjustments;
 
             payRun.CalculatedAt = DateTime.UtcNow;
             payRun.CalculatedBy = userId;

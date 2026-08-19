@@ -84,6 +84,7 @@ namespace TToApp.Controllers
             public string DriverName {  get; set; }
             public long DriverId { get; set; }
             public decimal Gross { get; set; }
+            public decimal Prepaid { get; set; }
             public decimal Adjustments { get; set; }
             public decimal Net { get; set; }
             public decimal Fine { get; set; }
@@ -1077,68 +1078,29 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
     }
 
 
-    // ============================================================
-    // 20. PAYRUNS GENERADOS
-    // ============================================================
-
-    var runs = await (
-        from r in _db.PayRuns
-            .AsNoTracking()
-
-        join u in _db.Set<User>()
-            .AsNoTracking()
-
-            on r.DriverId equals u.Id into gj
-
-        from u in gj.DefaultIfEmpty()
-
-        where
-            r.PayPeriodId ==
-                period.Id
-
-        select new PeriodSummaryRow
-        {
-            DriverId =
-                r.DriverId,
-
-            DriverName =
-                u != null
-                    ? (
-                        u.Name +
-                        " " +
-                        u.LastName
-                    ).Trim()
-                    : null,
-
-            Gross =
-                r.GrossAmount,
-
-            Adjustments =
-                r.Adjustments,
-
-            Net =
-                r.NetAmount,
-
-            Run =
-                r.Id,
-
-            Status =
-                r.Status,
-
-            Fine =
-                _db.PayrollFines
-                    .Where(f =>
-                        f.PayRunId ==
-                            r.Id
-                    )
-                    .Sum(f =>
-                        (decimal?)f.Amount
-                    )
-                ?? 0m
-        }
-    )
-    .ToListAsync();
-
+            // 6) Summary
+            var runs = await (
+                from r in _db.PayRuns.AsNoTracking()
+                join u in _db.Set<User>().AsNoTracking()
+                    on r.DriverId equals u.Id into gj
+                from u in gj.DefaultIfEmpty()
+                where r.PayPeriodId == period.Id
+                select new PeriodSummaryRow
+                {
+                    DriverId = r.DriverId,
+                    DriverName = u != null
+                        ? (u.Name + " " + u.LastName).Trim()
+                        : null,
+                    Gross = r.GrossAmount,
+                    Prepaid = r.PrepaidAmount,
+                    Adjustments = r.Adjustments,
+                    Net = r.NetAmount,
+                    Run = r.Id,
+                    Fine = _db.PayrollFines
+                        .Where(f => f.PayRunId == r.Id)
+                        .Sum(f => (decimal?)f.Amount) ?? 0m
+                }
+            ).ToListAsync();
 
     // ============================================================
     // 21. RESPONSE
@@ -2304,6 +2266,7 @@ public async Task<ActionResult> ComputeStaffPeriod(
                         Deductions = deductions,
                         Adjustments = adjustments,
                         Gross = r.GrossAmount,
+                        Prepaid = r.PrepaidAmount,
                         Net = r.NetAmount
                     };
                 })
@@ -3625,6 +3588,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                 message = "Adjustment added successfully.",
                 payRunId = run.Id,
                 grossAmount = run.GrossAmount,
+                prepaidAmount = run.PrepaidAmount,
                 adjustments = run.Adjustments,
                 netAmount = run.NetAmount
             });
@@ -3736,6 +3700,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                 adjustmentId = adjustment.Id,
                 payRunId = run.Id,
                 grossAmount = run.GrossAmount,
+                prepaidAmount = run.PrepaidAmount,
                 adjustments = run.Adjustments,
                 netAmount = run.NetAmount
             });
@@ -3777,6 +3742,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                 message = "Adjustment deleted successfully.",
                 payRunId = run.Id,
                 grossAmount = run.GrossAmount,
+                prepaidAmount = run.PrepaidAmount,
                 adjustments = run.Adjustments,
                 netAmount = run.NetAmount
             });
@@ -3897,6 +3863,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                     startDate = lastPayment.PayPeriod.StartDate,
                     endDate = lastPayment.PayPeriod.EndDate,
                     grossAmount = lastPayment.GrossAmount,
+                    prepaidAmount = lastPayment.PrepaidAmount,
                     adjustments = lastPayment.Adjustments,
                     netAmount = lastPayment.NetAmount,
                     paidDate = lastPayment.ApprovedAt,
@@ -3930,6 +3897,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                     endDate = x.PayPeriod.EndDate,
                     paidDate = x.ApprovedAt,
                     grossAmount = x.GrossAmount,
+                    prepaidAmount = x.PrepaidAmount,
                     adjustments = x.Adjustments,
                     netAmount = x.NetAmount,
                     status = x.Status,
@@ -3977,6 +3945,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                 endDate = payRun.PayPeriod.EndDate,
                 paidDate = payRun.ApprovedAt,
                 grossAmount = payRun.GrossAmount,
+                prepaidAmount = payRun.PrepaidAmount,
                 adjustments = payRun.Adjustments,
                 netAmount = payRun.NetAmount,
                 status = payRun.Status,
@@ -4033,6 +4002,7 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
                 {
                     x.Id,
                     x.GrossAmount,
+                    x.PrepaidAmount,
                     x.Adjustments,
                     x.NetAmount,
                     x.ApprovedAt,

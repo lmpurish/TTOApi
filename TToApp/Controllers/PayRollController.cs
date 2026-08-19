@@ -144,574 +144,1512 @@ namespace TToApp.Controllers
         // -------------------------
         // Helpers
         // -------------------------
-        [HttpPost("periods/compute")]
-        public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod([FromBody] ComputePeriodRequest req)
-        {
-            var start = ParseDateOnly(req.StartDate);
-            var end = ParseDateOnly(req.EndDate);
-            var endExclusive = end.AddDays(1);
+     [HttpPost("periods/compute")]
+public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
+    [FromBody] ComputePeriodRequest req)
+{
+    var start = ParseDateOnly(req.StartDate);
+    var end = ParseDateOnly(req.EndDate);
+    var endExclusive = end.AddDays(1);
 
-            // 1) Crear/obtener período
-            var period = await _db.PayPeriods.FirstOrDefaultAsync(p =>
-                p.CompanyId == req.CompanyId &&
-                p.WarehouseId == req.WarehouseId &&
-                p.StartDate == start &&
-                p.EndDate == end
+    // ============================================================
+    // WAREHOUSE SOLICITADO
+    // ============================================================
+
+    int? requestedWarehouseId = null;
+
+    if (req.WarehouseId.HasValue && req.WarehouseId.Value > 0)
+    {
+        requestedWarehouseId = (int)req.WarehouseId.Value;
+    }
+
+
+    // ============================================================
+    // 1. CREAR / OBTENER PAY PERIOD
+    // ============================================================
+
+    var period = await _db.PayPeriods
+        .FirstOrDefaultAsync(p =>
+            p.CompanyId == req.CompanyId &&
+            p.WarehouseId == req.WarehouseId &&
+            p.StartDate == start &&
+            p.EndDate == end
+        );
+
+    if (period is null)
+    {
+        period = new PayPeriod
+        {
+            CompanyId = req.CompanyId,
+            WarehouseId = req.WarehouseId,
+            StartDate = start,
+            EndDate = end,
+            Status = "Open",
+            CreatedBy = req.UserId
+        };
+
+        _db.PayPeriods.Add(period);
+
+        await _db.SaveChangesAsync();
+    }
+
+
+    // ============================================================
+    // 2. RUTAS ELEGIBLES DEL PERÍODO
+    //
+    // NO CAMBIAMOS REGLAS:
+    //
+    // - UserId != null
+    // - Completed
+    // - DeliveryStops > 0
+    // - Dentro del período
+    // - Warehouse solicitado
+    // - Zone opcional
+    // ============================================================
+
+    var routesQ =
+        from r in _db.Set<Routes>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+
+        join z in _db.Set<Zone>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+
+            on r.ZoneId equals z.Id into zj
+
+        from z in zj.DefaultIfEmpty()
+
+        where
+            r.UserId != null &&
+
+            r.routeStatus == RouteStatus.Completed &&
+
+            r.DeliveryStops > 0 &&
+
+            r.Date >= start.ToDateTime(TimeOnly.MinValue) &&
+
+            r.Date <
+                endExclusive.ToDateTime(TimeOnly.MinValue) &&
+
+            (
+                !req.WarehouseId.HasValue ||
+
+                req.WarehouseId.Value == 0 ||
+
+                r.WarehouseId ==
+                    (int)req.WarehouseId.Value
+            ) &&
+
+            (
+                !req.ZoneId.HasValue ||
+
+                req.ZoneId.Value == 0 ||
+
+                r.ZoneId ==
+                    req.ZoneId.Value
+            )
+
+        select new
+        {
+            r,
+            z
+        };
+
+
+    // ============================================================
+    // 3. DRIVER + WAREHOUSE PRESENTES EN RUTAS
+    // ============================================================
+
+    var driverWarehousePairs = await routesQ
+        .Where(x =>
+            x.r.UserId.HasValue &&
+            x.r.WarehouseId.HasValue
+        )
+        .Select(x => new
+        {
+            DriverId =
+                (long)x.r.UserId!.Value,
+
+            WarehouseId =
+                x.r.WarehouseId!.Value
+        })
+        .Distinct()
+        .ToListAsync();
+
+
+    // ============================================================
+    // 4. MANTENER TU REGLA ACTUAL DE GENERAR RATE FALTANTE
+    //
+    // NO LA QUITAMOS.
+    // ============================================================
+
+    foreach (var pair in driverWarehousePairs)
+    {
+        var hasWarehouseRate =
+            await _db.DriverRates
+                .AnyAsync(r =>
+                    r.DriverId ==
+                        pair.DriverId &&
+
+                    r.WarehouseId ==
+                        pair.WarehouseId
+                );
+
+        if (!hasWarehouseRate)
+        {
+            await EnsureMissingDriverRatesForWarehouseAsync(
+                warehouseId:
+                    pair.WarehouseId,
+
+                driverId:
+                    pair.DriverId,
+
+                effectiveFrom:
+                    start,
+
+                ct:
+                    CancellationToken.None
+            );
+        }
+    }
+
+
+    // ============================================================
+    // 5. WAREHOUSES ENCONTRADOS
+    // ============================================================
+
+    var warehouseIdsAll = await routesQ
+        .Select(x => x.r.WarehouseId)
+        .Where(id => id.HasValue)
+        .Select(id => id.Value)
+        .Distinct()
+        .ToListAsync();
+
+
+    var onTracWarehousesWithNullZone =
+        new List<int>();
+
+    var onTracNullZoneByWarehouse =
+        new List<WarehouseNullZoneSummaryDto>();
+
+
+    // ============================================================
+    // SIN WAREHOUSES / SIN RUTAS ELEGIBLES
+    // ============================================================
+
+    if (warehouseIdsAll.Count == 0)
+    {
+        return Ok(
+            new PeriodSummaryDto
+            {
+                PayPeriodId =
+                    period.Id,
+
+                StartDate =
+                    period.StartDate
+                        .ToString("yyyy-MM-dd"),
+
+                EndDate =
+                    period.EndDate
+                        .ToString("yyyy-MM-dd"),
+
+                Drivers =
+                    new List<PeriodSummaryRow>(),
+
+                UsersWithOutRate =
+                    new List<UserMissingRateDto>(),
+
+                OnTracNullZoneRoutes =
+                    new List<WarehouseNullZoneSummaryDto>(),
+
+                RoleExceptionByWarehouse =
+                    new List<RoleExceptionSummaryDto>(),
+
+                DriversWhoStoppedWorking =
+                    new List<DriverStoppedWorkingDto>()
+            }
+        );
+    }
+
+
+    // ============================================================
+    // 6. IDENTIFICAR ONTRAC
+    // ============================================================
+
+    var onTracWarehouseIds =
+        await _db.Warehouses
+            .AsNoTracking()
+            .Where(w =>
+                warehouseIdsAll.Contains(w.Id) &&
+
+                w.CompanyId ==
+                    req.CompanyId &&
+
+                (w.Company ?? "")
+                    .Trim()
+                    .ToLower() ==
+                    "ontrac"
+            )
+            .Select(w => w.Id)
+            .ToListAsync();
+
+
+    // ============================================================
+    // 7. ONTRAC CON ZONE NULL
+    // ============================================================
+
+    if (onTracWarehouseIds.Count > 0)
+    {
+        onTracWarehousesWithNullZone =
+            await routesQ
+                .Where(x =>
+                    x.z == null &&
+
+                    x.r.WarehouseId.HasValue &&
+
+                    onTracWarehouseIds.Contains(
+                        x.r.WarehouseId.Value
+                    )
+                )
+                .Select(x =>
+                    x.r.WarehouseId!.Value
+                )
+                .Distinct()
+                .ToListAsync();
+    }
+
+
+    // ============================================================
+    // 8. RESUMEN ONTRAC ZONE NULL
+    // ============================================================
+
+    if (onTracWarehousesWithNullZone.Count > 0)
+    {
+        var flat = await routesQ
+            .Where(x =>
+                x.z == null &&
+
+                x.r.WarehouseId.HasValue &&
+
+                onTracWarehousesWithNullZone
+                    .Contains(
+                        x.r.WarehouseId.Value
+                    )
+            )
+            .GroupBy(x => new
+            {
+                WarehouseId =
+                    x.r.WarehouseId!.Value,
+
+                Day =
+                    x.r.Date.Date
+            })
+            .Select(g => new
+            {
+                g.Key.WarehouseId,
+
+                Date =
+                    g.Key.Day,
+
+                Count =
+                    g.Count()
+            })
+            .ToListAsync();
+
+
+        onTracNullZoneByWarehouse =
+            flat
+                .GroupBy(x =>
+                    x.WarehouseId
+                )
+                .Select(g =>
+                    new WarehouseNullZoneSummaryDto
+                    {
+                        WarehouseId =
+                            g.Key,
+
+                        NullZoneRoutesByDate =
+                            g.ToDictionary(
+                                x =>
+                                    x.Date.ToString(
+                                        "yyyy-MM-dd"
+                                    ),
+
+                                x =>
+                                    x.Count
+                            )
+                    }
+                )
+                .ToList();
+
+
+        // ========================================================
+        // MANTENER REGLA:
+        //
+        // OnTrac con Zone null NO se procesa.
+        // ========================================================
+
+        routesQ =
+            routesQ.Where(x =>
+                x.r.WarehouseId.HasValue &&
+
+                !onTracWarehousesWithNullZone
+                    .Contains(
+                        x.r.WarehouseId.Value
+                    )
+            );
+    }
+
+
+    // ============================================================
+    // 9. ROLE EXCEPTIONS
+    // ============================================================
+
+    var roleFlat = await (
+        from rq in routesQ
+
+        join u in _db.Users
+            .AsNoTracking()
+
+            on rq.r.UserId equals u.Id
+
+        where
+            u.UserRole.HasValue &&
+
+            u.UserRole.Value ==
+                global::User.Role.Applicant &&
+
+            rq.r.WarehouseId.HasValue
+
+        select new
+        {
+            WarehouseId =
+                rq.r.WarehouseId.Value,
+
+            FullName =
+                (
+                    (u.Name ?? "") +
+                    " " +
+                    (u.LastName ?? "")
+                )
+                .Trim()
+        }
+    )
+    .Distinct()
+    .ToListAsync();
+
+
+    var roleExceptionByWarehouse =
+        roleFlat
+            .GroupBy(x =>
+                x.WarehouseId
+            )
+            .Select(g =>
+                new RoleExceptionSummaryDto
+                {
+                    WarehouseId =
+                        g.Key,
+
+                    UserNames =
+                        g
+                            .Select(x =>
+                                x.FullName
+                            )
+                            .Where(n =>
+                                !string.IsNullOrWhiteSpace(n)
+                            )
+                            .Distinct(
+                                StringComparer.OrdinalIgnoreCase
+                            )
+                            .OrderBy(n => n)
+                            .ToList()
+                }
+            )
+            .ToList();
+
+
+    // ============================================================
+    // 10. WAREHOUSES DESPUÉS DE FILTROS
+    // ============================================================
+
+    var warehouseIdsFiltered =
+        await routesQ
+            .Select(x =>
+                x.r.WarehouseId
+            )
+            .Where(id =>
+                id.HasValue
+            )
+            .Select(id =>
+                id.Value
+            )
+            .Distinct()
+            .ToListAsync();
+
+
+    // ============================================================
+    // 11. USERS PRESENTES EN LAS RUTAS
+    // ============================================================
+
+    var routeUserIdsQ =
+        routesQ
+            .Select(rq =>
+                rq.r.UserId
+            )
+            .Where(id =>
+                id.HasValue
+            )
+            .Select(id =>
+                id.Value
+            )
+            .Distinct();
+
+
+    // ============================================================
+    // 12. DRIVERS / USERS DE RUTAS
+    //
+    // Mantener regla:
+    //
+    // - No Applicant
+    // - No Rsp
+    // ============================================================
+
+    var driverIds = await (
+        from uid in routeUserIdsQ
+
+        join u in _db.Users
+            .AsNoTracking()
+
+            on uid equals u.Id
+
+        where
+            u.UserRole.HasValue &&
+
+            u.UserRole.Value !=
+                global::User.Role.Applicant &&
+
+            u.UserRole.Value !=
+                global::User.Role.Rsp
+
+        select (long)u.Id
+    )
+    .Distinct()
+    .ToListAsync();
+
+
+    // ============================================================
+    // 13. SPECIAL USERS
+    //
+    // MANTENEMOS EXACTAMENTE TU REGLA.
+    // ============================================================
+
+    var specialUserIds =
+        await _db.Users
+            .AsNoTracking()
+            .Where(u =>
+                u.IsActive &&
+
+                u.UserRole.HasValue &&
+
+                u.UserRole.Value !=
+                    global::User.Role.Applicant &&
+
+                u.UserRole.Value !=
+                    global::User.Role.Driver &&
+
+                u.UserRole.Value !=
+                    global::User.Role.Rsp &&
+
+                u.WarehouseId.HasValue &&
+
+                warehouseIdsFiltered.Contains(
+                    u.WarehouseId.Value
+                )
+            )
+            .Select(u =>
+                (long)u.Id
+            )
+            .ToListAsync();
+
+
+    // ============================================================
+    // 14. CANDIDATOS
+    // ============================================================
+
+    var candidateIds =
+        driverIds
+            .Union(specialUserIds)
+            .Distinct()
+            .ToList();
+
+
+    // ============================================================
+    // 15. RATE VÁLIDO PARA ESTE PAYROLL
+    //
+    // ESTA ES LA CORRECCIÓN IMPORTANTE.
+    //
+    // Antes:
+    // solamente comprobábamos si existía CUALQUIER DriverRate.
+    //
+    // Ahora:
+    //
+    // - Debe pertenecer al candidato.
+    // - Debe estar vigente en este período.
+    // - Para warehouse específico:
+    //      rate del warehouse
+    //      O global como fallback.
+    //
+    // NO cambiamos RateType.
+    // NO cambiamos reglas de Zone.
+    // NO cambiamos reglas de peso.
+    // ============================================================
+
+    var validRateDriverIds =
+        await _db.DriverRates
+            .AsNoTracking()
+            .Where(r =>
+
+                candidateIds.Contains(
+                    r.DriverId
+                )
+
+                &&
+
+                // Rate vigente durante el período.
+                r.EffectiveFrom <= end
+
+                &&
+
+                (
+                    r.EffectiveTo == null ||
+                    r.EffectiveTo >= start
+                )
+
+                &&
+
+                (
+                    // Si no estamos calculando un warehouse
+                    // específico, mantener comportamiento general.
+                    !requestedWarehouseId.HasValue
+
+                    ||
+
+                    // Rate específico del warehouse.
+                    r.WarehouseId ==
+                        requestedWarehouseId.Value
+
+                    ||
+
+                    // Rate global como fallback.
+                    r.WarehouseId == null
+                )
+            )
+            .Select(r =>
+                r.DriverId
+            )
+            .Distinct()
+            .ToListAsync();
+
+
+    // ============================================================
+    // 16. USERS SIN RATE VÁLIDO
+    //
+    // No rompe payroll.
+    //
+    // Se devuelve en UsersWithOutRate para que Angular
+    // pueda mostrar exactamente quién falta.
+    // ============================================================
+
+    var usersWithoutRates =
+        await _db.Users
+            .AsNoTracking()
+            .Where(u =>
+
+                candidateIds.Contains(
+                    (long)u.Id
+                )
+
+                &&
+
+                !validRateDriverIds.Contains(
+                    (long)u.Id
+                )
+            )
+            .Select(u =>
+                new UserMissingRateDto
+                {
+                    UserId =
+                        (long)u.Id,
+
+                    Name =
+                        u.Name,
+
+                    LastName =
+                        u.LastName
+                }
+            )
+            .ToListAsync();
+
+
+    // ============================================================
+    // 17. PAYRUNS YA EXISTENTES
+    // ============================================================
+
+    HashSet<int> already =
+        new();
+
+
+    if (!req.RecalculateAll)
+    {
+        already =
+            (
+                await _db.PayRuns
+                    .Where(x =>
+                        x.PayPeriodId ==
+                            period.Id
+                    )
+                    .Select(x =>
+                        x.DriverId
+                    )
+                    .ToListAsync()
+            )
+            .ToHashSet();
+    }
+
+
+    // ============================================================
+    // 18. CALCULAR SOLO USERS CON RATE VÁLIDO
+    //
+    // IMPORTANTE:
+    //
+    // Un driver SIN rate ya NO llega al service.
+    // Por lo tanto no rompe el cálculo de los demás.
+    // ============================================================
+
+    foreach (var driverId in validRateDriverIds)
+    {
+        if (
+            !req.RecalculateAll &&
+            already.Contains(
+                (int)driverId
+            )
+        )
+        {
+            continue;
+        }
+
+        try
+        {
+            await _service
+                .ComputeDriverWeeklyAsync(
+                    companyId:
+                        req.CompanyId,
+
+                    driverId:
+                        driverId,
+
+                    weekStart:
+                        start,
+
+                    weekEnd:
+                        end,
+
+                    warehouseId:
+                        req.WarehouseId,
+
+                    userId:
+                        req.UserId,
+
+                    filterZoneId:
+                        req.ZoneId
+                );
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(
+                new
+                {
+                    message =
+                        "ComputeDriverWeeklyAsync failed.",
+
+                    driverId,
+
+                    error =
+                        ex.Message,
+
+                    stack =
+                        ex.StackTrace
+                }
+            );
+        }
+    }
+
+
+    // ============================================================
+    // 19. DRIVERS WHO STOPPED WORKING
+    // ============================================================
+
+    var driversWhoStopped =
+        new List<DriverStoppedWorkingDto>();
+
+    try
+    {
+        var periodStart =
+            start.ToDateTime(
+                TimeOnly.MinValue
             );
 
-            if (period is null)
-            {
-                period = new PayPeriod
-                {
-                    CompanyId = req.CompanyId,
-                    WarehouseId = req.WarehouseId,
-                    StartDate = start,
-                    EndDate = end,
-                    Status = "Open",
-                    CreatedBy = req.UserId
-                };
-                _db.PayPeriods.Add(period);
-                await _db.SaveChangesAsync();
-            }
-
-            // 2) Rutas COMPLETED, STOPS>0 en rango
-            var routesQ =
-                from r in _db.Set<Routes>().IgnoreQueryFilters().AsNoTracking()
-                join z in _db.Set<Zone>().IgnoreQueryFilters().AsNoTracking()
-                    on r.ZoneId equals z.Id into zj
-                from z in zj.DefaultIfEmpty()
-                where r.UserId != null 
-                
-                      && r.routeStatus == RouteStatus.Completed
-                      && r.DeliveryStops > 0
-                      && r.Date >= start.ToDateTime(TimeOnly.MinValue)
-                      && r.Date < endExclusive.ToDateTime(TimeOnly.MinValue)
-                      && (req.WarehouseId.HasValue == false || (int)req.WarehouseId.Value == 0 ||r.WarehouseId == (int)req.WarehouseId.Value)
-                      && (req.ZoneId.HasValue == false ||  (int)req.ZoneId.Value == 0 || r.ZoneId == (int)req.ZoneId.Value)
-                select new { r, z };
-
-            var driverWarehousePairs = await routesQ
-                .Where(x =>
-                    x.r.UserId.HasValue &&
-                    x.r.WarehouseId.HasValue)
-                .Select(x => new
-                {
-                    DriverId = (long)x.r.UserId!.Value,
-                    WarehouseId = x.r.WarehouseId!.Value
-                })
-                .Distinct()
-                .ToListAsync();
-                foreach (var pair in driverWarehousePairs)
-                {
-                    var hasWarehouseRate = await _db.DriverRates
-                        .AnyAsync(r =>
-                            r.DriverId == pair.DriverId &&
-                            r.WarehouseId == pair.WarehouseId);
-
-                    if (!hasWarehouseRate)
-                    {
-                        await EnsureMissingDriverRatesForWarehouseAsync(
-                            warehouseId: pair.WarehouseId,
-                            driverId: pair.DriverId,
-                            effectiveFrom: start,
-                            ct: CancellationToken.None);
-                    }
-                }
-
-            // Get distinct warehouseIds
-            var warehouseIdsAll = await routesQ
-                .Select(x => x.r.WarehouseId)
-                .Where(id => id.HasValue)
-                .Select(id => id.Value)
-                .Distinct()
-                .ToListAsync(); // List<int>
+        var periodEnd =
+            end
+                .AddDays(1)
+                .ToDateTime(
+                    TimeOnly.MinValue
+                );
 
 
-            var onTracWarehousesWithNullZone = new List<int>();
-            var onTracNullZoneByWarehouse = new List<WarehouseNullZoneSummaryDto>();
-
-            // Si no hay warehouses, no hay nada que procesar
-            if (warehouseIdsAll.Count == 0)
-            {
-                return Ok(new { message = "No warehouses to process " });
-            }
-
-            // Clarify if is OnTrac per warehouse
-            var onTracWarehouseIds = await _db.Warehouses
+        var warehouseLastRouteDate =
+            await _db.Routes
                 .AsNoTracking()
-                .Where(w =>
-                    warehouseIdsAll.Contains(w.Id) &&
-                    w.CompanyId == req.CompanyId &&
-                    (w.Company ?? "").Trim().ToLower() == "ontrac"
-                )
-                .Select(w => w.Id)
-                .ToListAsync();
+                .Where(r =>
+                    r.WarehouseId.HasValue &&
 
-            // Obtener warehouses OnTrac con rutas que tienen zona null
-            if (onTracWarehouseIds.Count > 0)
-            {
-                onTracWarehousesWithNullZone = await routesQ
-                    .Where(x =>
-                        x.z == null &&
-                        x.r.WarehouseId.HasValue &&
-                        onTracWarehouseIds.Contains(x.r.WarehouseId.Value)
+                    warehouseIdsFiltered.Contains(
+                        r.WarehouseId.Value
                     )
-                    .Select(x => x.r.WarehouseId!.Value)
+                )
+                .MaxAsync(r =>
+                    (DateTime?)r.Date
+                );
+
+
+        if (warehouseLastRouteDate.HasValue)
+        {
+            var driverIdsInPeriod =
+                await _db.Routes
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.UserId != null &&
+
+                        r.Date >=
+                            periodStart &&
+
+                        r.Date <
+                            periodEnd &&
+
+                        r.WarehouseId.HasValue &&
+
+                        warehouseIdsFiltered.Contains(
+                            r.WarehouseId.Value
+                        )
+                    )
+                    .Select(r =>
+                        r.UserId!.Value
+                    )
                     .Distinct()
                     .ToListAsync();
-            }
 
-            // Resumen por fecha para warehouses con zona null
-            if (onTracWarehousesWithNullZone.Count > 0)
-            {
-                var flat = await routesQ
-                    .Where(x =>
-                        x.z == null &&
-                        x.r.WarehouseId.HasValue &&
-                        onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
+
+            var driversInPeriod =
+                await _db.Users
+                    .AsNoTracking()
+                    .Where(u =>
+                        u.IsActive &&
+
+                        u.UserRole ==
+                            global::User.Role.Driver &&
+
+                        driverIdsInPeriod.Contains(
+                            u.Id
+                        )
                     )
-                    .GroupBy(x => new { WarehouseId = x.r.WarehouseId!.Value, Day = x.r.Date.Date })
-                    .Select(g => new
-                    {
-                        g.Key.WarehouseId,
-                        Date = g.Key.Day,
-                        Count = g.Count()
-                    })
+                    .Select(u =>
+                        new
+                        {
+                            u.Id,
+                            u.Name,
+                            u.LastName
+                        }
+                    )
                     .ToListAsync();
 
-                onTracNullZoneByWarehouse = flat
-                    .GroupBy(x => x.WarehouseId)
-                    .Select(g => new WarehouseNullZoneSummaryDto
-                    {
-                        WarehouseId = g.Key,
-                        NullZoneRoutesByDate = g.ToDictionary(
-                            x => x.Date.ToString("yyyy-MM-dd"),
-                            x => x.Count
-                        )
-                    })
+
+            var driverIntIds =
+                driversInPeriod
+                    .Select(d =>
+                        d.Id
+                    )
                     .ToList();
 
-                // Excluir del query principal los warehouses OnTrac con null zone
-                routesQ = routesQ.Where(x =>
-                    x.r.WarehouseId.HasValue &&
-                    !onTracWarehousesWithNullZone.Contains(x.r.WarehouseId.Value)
-                );
-            }
 
-            var roleFlat = await (
-                from rq in routesQ
-                join u in _db.Users.AsNoTracking()
-                    on rq.r.UserId equals u.Id
-                where u.UserRole.HasValue
-                    && u.UserRole.Value == global::User.Role.Applicant
-                    && rq.r.WarehouseId.HasValue
-                select new
-                {
-                    WarehouseId = rq.r.WarehouseId.Value,
-                    //UserId = u.Id,
-                    FullName = ((u.Name ?? "") + " " + (u.LastName ?? "")).Trim()
-                }
-            )
-            .Distinct()
-            .ToListAsync();
-
-            var roleExceptionByWarehouse = roleFlat
-                .GroupBy(x => x.WarehouseId)
-                .Select(g => new RoleExceptionSummaryDto
-                {
-                    WarehouseId = g.Key,
-                    UserNames = g
-                        .Select(x => x.FullName)
-                        .Where(n => !string.IsNullOrWhiteSpace(n))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(n => n)
-                        .ToList()
-                })
-                .ToList();
-
-
-           // Warehouses presentes en routesQ  (List<int>)
-            var warehouseIdsFiltered = await routesQ
-                .Select(x => x.r.WarehouseId)
-                .Where(id => id.HasValue)
-                .Select(id => id.Value)
-                .Distinct()
-                .ToListAsync();
-
-            // if (warehouseIdsFiltered.Count == 0)
-            //      return Ok(new { message = "No Users to process" });
-
-      /*      return Ok(new
-            {
-                debug = "PAYROLL_V62_2026-02-08_ABC",  // cambia esto cada vez
-                count = warehouseIdsAll.Count,
-                warehouses = warehouseIdsAll,
-                start,
-                end,
-                warehouseReq = req.WarehouseId,
-                company = req.CompanyId
-            });*/
-
-            // UserIds presentes en routesQ (List<int>)
-            var routeUserIdsQ = routesQ
-                .Select(rq => rq.r.UserId)
-                .Where(id => id.HasValue)
-                .Select(id => id.Value)
-                .Distinct();
-
-            // DriverIds (sin Applicants) -> List<long>
-            var driverIds = await (
-                from uid in routeUserIdsQ
-                join u in _db.Users.AsNoTracking()
-                    on uid equals u.Id
-                where u.UserRole.HasValue
-                && u.UserRole.Value != global::User.Role.Applicant && u.UserRole.Value != global::User.Role.Rsp
-                select (long)u.Id
-            )
-            .Distinct()
-            .ToListAsync();
-
-            // Special users (activos, no Applicant, no Driver, y warehouse dentro de los de routesQ)
-            var specialUserIds = await _db.Users
-                .AsNoTracking()
-                .Where(u =>
-                    u.IsActive &&
-                    u.UserRole.HasValue &&
-                    u.UserRole.Value != global::User.Role.Applicant &&
-                    u.UserRole.Value != global::User.Role.Driver &&
-                    u.UserRole.Value != global::User.Role.Rsp &&
-                    u.WarehouseId.HasValue &&
-                    warehouseIdsFiltered.Contains(u.WarehouseId.Value)
-                )
-                .Select(u => (long)u.Id)
-                .ToListAsync();
-
-            // 2) Candidates: union en memoria
-            var candidateIds = driverIds
-                .Union(specialUserIds)
-                .Distinct()
-                .ToList();
-
-            // 3) IDs que SÍ tienen rate (SQL)
-            var allUserIdsWithRates = await _db.DriverRates
-                .AsNoTracking()
-                .Where(r => candidateIds.Contains(r.DriverId))
-                .Select(r => r.DriverId)
-                .Distinct()
-                .ToListAsync();
-
-            // 4) Usuarios que NO tienen rate + Name/LastName (LEFT JOIN en SQL)
-            var usersWithoutRates = await (
-                from u in _db.Users.AsNoTracking()
-                where candidateIds.Contains((long)u.Id)
-                join r in _db.DriverRates.AsNoTracking()
-                    on (long)u.Id equals r.DriverId into rr
-                where !rr.Any()
-                select new UserMissingRateDto
-                {
-                    UserId = (long)u.Id,
-                    Name = u.Name,
-                    LastName = u.LastName
-                }
-            ).ToListAsync();
-
-            // 3) Evitar recalcular si ya existe (a menos que se pida)
-            HashSet<int> already = new();
-            if (!req.RecalculateAll)
-            {
-                already = (await _db.PayRuns.Where(x => x.PayPeriodId == period.Id)
-                    .Select(x => x.DriverId)
-                    .ToListAsync()).ToHashSet();
-            }
-            // 4) Calcular por driver
-            foreach (var driverId in allUserIdsWithRates)
-            {
-                if (!req.RecalculateAll && already.Contains((int)driverId)) continue;
-
-                try
-                {
-                    await _service.ComputeDriverWeeklyAsync(
-                        companyId: req.CompanyId,
-                        driverId: driverId,
-                        weekStart: start,
-                        weekEnd: end,
-                        warehouseId: req.WarehouseId,
-                        userId: req.UserId,
-                        filterZoneId: req.ZoneId
-                    );
-                }
-                catch (Exception ex)
-                {
-                    return BadRequest(new
-                    {
-                        message = "ComputeDriverWeeklyAsync falló",
-                        driverId,
-                        error = ex.Message,
-                        stack = ex.StackTrace
-                    });
-                }
-            }
-
-            var driversWhoStopped = new List<DriverStoppedWorkingDto>();
-            try
-            {
-                var periodStart = start.ToDateTime(TimeOnly.MinValue);
-                var periodEnd   = end.AddDays(1).ToDateTime(TimeOnly.MinValue);
-
-                // Última ruta del warehouse (cualquier driver, cualquier fecha)
-                var warehouseLastRouteDate = await _db.Routes
-                    .AsNoTracking()
-                    .Where(r => r.WarehouseId.HasValue && warehouseIdsFiltered.Contains(r.WarehouseId.Value))
-                    .MaxAsync(r => (DateTime?)r.Date);
-
-                if (warehouseLastRouteDate.HasValue)
-                {
-                    // Drivers con rutas en el período
-                    var driverIdsInPeriod = await _db.Routes
+            var lastRouteMap =
+                (
+                    await _db.Routes
                         .AsNoTracking()
                         .Where(r =>
                             r.UserId != null &&
-                            r.Date >= periodStart && r.Date < periodEnd &&
-                            r.WarehouseId.HasValue &&
-                            warehouseIdsFiltered.Contains(r.WarehouseId.Value))
-                        .Select(r => r.UserId!.Value)
-                        .Distinct()
-                        .ToListAsync();
 
-                    var driversInPeriod = await _db.Users
-                        .AsNoTracking()
-                        .Where(u => u.IsActive && u.UserRole == global::User.Role.Driver && driverIdsInPeriod.Contains(u.Id))
-                        .Select(u => new { u.Id, u.Name, u.LastName })
-                        .ToListAsync();
-
-                    // Última ruta de cada driver (en cualquier fecha)
-                    var driverIntIds = driversInPeriod.Select(d => d.Id).ToList();
-                    var lastRouteMap = (await _db.Routes
-                        .AsNoTracking()
-                        .Where(r => r.UserId != null && driverIntIds.Contains(r.UserId.Value))
-                        .GroupBy(r => r.UserId!.Value)
-                        .Select(g => new { DriverId = g.Key, LastDate = g.Max(r => r.Date) })
-                        .ToListAsync())
-                        .ToDictionary(x => x.DriverId, x => x.LastDate);
-
-                    var today = DateTime.UtcNow.Date;
-                    var warehouseMax = warehouseLastRouteDate.Value.Date;
-
-                    driversWhoStopped = driversInPeriod
-                        .Where(d =>
-                            lastRouteMap.TryGetValue(d.Id, out var last) &&
-                            last.Date < warehouseMax)
-                        .Select(d =>
-                        {
-                            var last = lastRouteMap[d.Id];
-                            return new DriverStoppedWorkingDto
+                            driverIntIds.Contains(
+                                r.UserId.Value
+                            )
+                        )
+                        .GroupBy(r =>
+                            r.UserId!.Value
+                        )
+                        .Select(g =>
+                            new
                             {
-                                DriverId           = d.Id,
-                                DriverName         = $"{d.Name} {d.LastName}".Trim(),
-                                LastRouteDate      = last.ToString("yyyy-MM-dd"),
-                                DaysSinceLastRoute = (warehouseMax - last.Date).Days
-                            };
-                        })
-                        .ToList();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error computing DriversWhoStopped");
-            }
+                                DriverId =
+                                    g.Key,
 
-            // 6) Summary
-            var runs = await (
-                from r in _db.PayRuns.AsNoTracking()
-                join u in _db.Set<User>().AsNoTracking()
-                    on r.DriverId equals u.Id into gj
-                from u in gj.DefaultIfEmpty()
-                where r.PayPeriodId == period.Id
-                select new PeriodSummaryRow
-                {
-                    DriverId = r.DriverId,
-                    DriverName = u != null
-                        ? (u.Name + " " + u.LastName).Trim()
-                        : null,
-                    Gross = r.GrossAmount,
-                    Adjustments = r.Adjustments,
-                    Net = r.NetAmount,
-                    Run = r.Id,
-                    Fine = _db.PayrollFines
-                        .Where(f => f.PayRunId == r.Id)
-                        .Sum(f => (decimal?)f.Amount) ?? 0m
-                }
-            ).ToListAsync();
+                                LastDate =
+                                    g.Max(r =>
+                                        r.Date
+                                    )
+                            }
+                        )
+                        .ToListAsync()
+                )
+                .ToDictionary(
+                    x =>
+                        x.DriverId,
 
-            var dto = new PeriodSummaryDto
-            {
-                PayPeriodId = period.Id,
-                StartDate = period.StartDate.ToString("yyyy-MM-dd"),
-                EndDate = period.EndDate.ToString("yyyy-MM-dd"),
-                Drivers = runs,
-                OnTracNullZoneRoutes = onTracNullZoneByWarehouse,
-                RoleExceptionByWarehouse = roleExceptionByWarehouse,
-                UsersWithOutRate = usersWithoutRates,
-                DriversWhoStoppedWorking = driversWhoStopped
-            };
+                    x =>
+                        x.LastDate
+                );
 
-            return Ok(dto);
-        }
 
-        // POST /periods/compute/staff
-        // Computes payroll only for Admin, Recruiter and Assistant roles.
-        // When warehouseId is omitted, each staff member is computed once per active warehouse they belong to.
-        //[Authorize(Roles = "Admin")]
-        [HttpPost("periods/compute/staff")]
-        public async Task<ActionResult> ComputeStaffPeriod([FromBody] ComputePeriodRequest req)
-        {
-            var start = ParseDateOnly(req.StartDate);
-            var end   = ParseDateOnly(req.EndDate);
+            var warehouseMax =
+                warehouseLastRouteDate
+                    .Value
+                    .Date;
 
-            var staffRoles = new[]
-            {
-                global::User.Role.Admin,
-                global::User.Role.Recruiter,
-                global::User.Role.Assistant
-            };
 
-            // 1) Load (userId, warehouseId) pairs filtered by global UserRole
-            var pairsQuery =
-                from uw in _db.UserWarehouses.AsNoTracking()
-                join u  in _db.Users.AsNoTracking() on uw.UserId equals u.Id
-                where uw.IsActive &&
-                      u.IsActive &&
-                      u.CompanyId == req.CompanyId &&
-                      u.UserRole.HasValue &&
-                      staffRoles.Contains(u.UserRole.Value)
-                select new { UserId = (long)u.Id, uw.WarehouseId };
+            driversWhoStopped =
+                driversInPeriod
+                    .Where(d =>
+                        lastRouteMap.TryGetValue(
+                            d.Id,
+                            out var last
+                        )
 
-            if (req.WarehouseId.HasValue && req.WarehouseId.Value != 0)
-                pairsQuery = pairsQuery.Where(x => x.WarehouseId == (int)req.WarehouseId.Value);
+                        &&
 
-            var pairs = await pairsQuery.Distinct().ToListAsync();
-
-            if (pairs.Count == 0)
-                return Ok(new { message = "No staff users found for the given warehouse and roles." });
-
-            var allStaffIds = pairs.Select(p => p.UserId).Distinct().ToList();
-
-            // 2) Which staff have a DriverRate
-            var staffWithRates = (await _db.DriverRates
-                .AsNoTracking()
-                .Where(r => allStaffIds.Contains(r.DriverId))
-                .Select(r => r.DriverId)
-                .Distinct()
-                .ToListAsync()).ToHashSet();
-
-            var usersWithoutRates = await _db.Users
-                .AsNoTracking()
-                .Where(u => allStaffIds.Contains((long)u.Id) && !staffWithRates.Contains((long)u.Id))
-                .Select(u => new UserMissingRateDto { UserId = (long)u.Id, Name = u.Name, LastName = u.LastName })
-                .ToListAsync();
-
-            // 3) Group by warehouse → one period per warehouse
-            var periodIds    = new List<long>();
-            var byWarehouse  = pairs.GroupBy(p => p.WarehouseId);
-
-            foreach (var wg in byWarehouse)
-            {
-                long whId = wg.Key;
-
-                var period = await _db.PayPeriods.FirstOrDefaultAsync(p =>
-                    p.CompanyId   == req.CompanyId &&
-                    p.WarehouseId == whId &&
-                    p.StartDate   == start &&
-                    p.EndDate     == end);
-
-                if (period is null)
-                {
-                    period = new PayPeriod
+                        last.Date <
+                            warehouseMax
+                    )
+                    .Select(d =>
                     {
-                        CompanyId   = req.CompanyId,
-                        WarehouseId = whId,
-                        StartDate   = start,
-                        EndDate     = end,
-                        Status      = "Open",
-                        CreatedBy   = req.UserId
-                    };
-                    _db.PayPeriods.Add(period);
-                    await _db.SaveChangesAsync();
-                }
+                        var last =
+                            lastRouteMap[d.Id];
 
-                periodIds.Add(period.Id);
-
-                // Skip already-computed unless RecalculateAll
-                var already = new HashSet<int>();
-                if (!req.RecalculateAll)
-                {
-                    already = (await _db.PayRuns
-                        .Where(x => x.PayPeriodId == period.Id)
-                        .Select(x => x.DriverId)
-                        .ToListAsync()).ToHashSet();
-                }
-
-                // 4) Compute each staff member for this warehouse
-                foreach (var entry in wg)
-                {
-                    if (!staffWithRates.Contains(entry.UserId)) continue;
-                    if (!req.RecalculateAll && already.Contains((int)entry.UserId)) continue;
-
-                    try
-                    {
-                        await _service.ComputeDriverWeeklyAsync(
-                            companyId:    req.CompanyId,
-                            driverId:     entry.UserId,
-                            weekStart:    start,
-                            weekEnd:      end,
-                            warehouseId:  whId,
-                            userId:       req.UserId,
-                            filterZoneId: req.ZoneId);
-                    }
-                    catch (Exception ex)
-                    {
-                        return BadRequest(new
+                        return new DriverStoppedWorkingDto
                         {
-                            message  = "ComputeDriverWeeklyAsync failed",
-                            driverId = entry.UserId,
-                            warehouseId = whId,
-                            error    = ex.Message
-                        });
-                    }
-                }
-            }
+                            DriverId =
+                                d.Id,
 
-            // 5) Summary across all periods created/updated
-            var runs = await (
-                from r in _db.PayRuns.AsNoTracking()
-                join u in _db.Users.AsNoTracking() on r.DriverId equals u.Id into gj
-                from u in gj.DefaultIfEmpty()
-                where periodIds.Contains(r.PayPeriodId) && allStaffIds.Contains(r.DriverId)
-                select new PeriodSummaryRow
-                {
-                    DriverId    = r.DriverId,
-                    DriverName  = u != null ? (u.Name + " " + u.LastName).Trim() : "Unknown",
-                    Gross       = r.GrossAmount,
-                    Adjustments = r.Adjustments,
-                    Net         = r.NetAmount,
-                    Run         = r.Id,
-                    Status      = r.Status,
-                    Fine        = _db.PayrollFines
-                                    .Where(f => f.PayRunId == r.Id)
-                                    .Sum(f => (decimal?)f.Amount) ?? 0m
-                }
-            ).ToListAsync();
+                            DriverName =
+                                $"{d.Name} {d.LastName}"
+                                    .Trim(),
 
-            return Ok(new
+                            LastRouteDate =
+                                last.ToString(
+                                    "yyyy-MM-dd"
+                                ),
+
+                            DaysSinceLastRoute =
+                                (
+                                    warehouseMax -
+                                    last.Date
+                                )
+                                .Days
+                        };
+                    })
+                    .ToList();
+        }
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(
+            ex,
+            "Error computing DriversWhoStopped"
+        );
+    }
+
+
+    // ============================================================
+    // 20. PAYRUNS GENERADOS
+    // ============================================================
+
+    var runs = await (
+        from r in _db.PayRuns
+            .AsNoTracking()
+
+        join u in _db.Set<User>()
+            .AsNoTracking()
+
+            on r.DriverId equals u.Id into gj
+
+        from u in gj.DefaultIfEmpty()
+
+        where
+            r.PayPeriodId ==
+                period.Id
+
+        select new PeriodSummaryRow
+        {
+            DriverId =
+                r.DriverId,
+
+            DriverName =
+                u != null
+                    ? (
+                        u.Name +
+                        " " +
+                        u.LastName
+                    ).Trim()
+                    : null,
+
+            Gross =
+                r.GrossAmount,
+
+            Adjustments =
+                r.Adjustments,
+
+            Net =
+                r.NetAmount,
+
+            Run =
+                r.Id,
+
+            Status =
+                r.Status,
+
+            Fine =
+                _db.PayrollFines
+                    .Where(f =>
+                        f.PayRunId ==
+                            r.Id
+                    )
+                    .Sum(f =>
+                        (decimal?)f.Amount
+                    )
+                ?? 0m
+        }
+    )
+    .ToListAsync();
+
+
+    // ============================================================
+    // 21. RESPONSE
+    // ============================================================
+
+    var dto =
+        new PeriodSummaryDto
+        {
+            PayPeriodId =
+                period.Id,
+
+            StartDate =
+                period.StartDate
+                    .ToString(
+                        "yyyy-MM-dd"
+                    ),
+
+            EndDate =
+                period.EndDate
+                    .ToString(
+                        "yyyy-MM-dd"
+                    ),
+
+            Drivers =
+                runs,
+
+            OnTracNullZoneRoutes =
+                onTracNullZoneByWarehouse,
+
+            RoleExceptionByWarehouse =
+                roleExceptionByWarehouse,
+
+            UsersWithOutRate =
+                usersWithoutRates,
+
+            DriversWhoStoppedWorking =
+                driversWhoStopped
+        };
+
+
+    return Ok(dto);
+}
+        
+[HttpPost("periods/compute/staff")]
+public async Task<ActionResult> ComputeStaffPeriod(
+    [FromBody] ComputePeriodRequest req)
+{
+    var start = ParseDateOnly(req.StartDate);
+    var end = ParseDateOnly(req.EndDate);
+
+
+    // ============================================================
+    // ROLES QUE CONSIDERAMOS STAFF
+    // ============================================================
+
+    var staffRoles = new[]
+    {
+        global::User.Role.Admin,
+        global::User.Role.Recruiter,
+        global::User.Role.Assistant
+    };
+
+
+    // ============================================================
+    // 1. STAFF ACTIVO DE LA COMPAÑÍA
+    //
+    // IMPORTANTE:
+    // Staff NO depende de UserWarehouses para cobrar salario.
+    // ============================================================
+
+    var staff = await _db.Users
+        .AsNoTracking()
+        .Where(u =>
+            u.IsActive &&
+            u.CompanyId == req.CompanyId &&
+            u.UserRole.HasValue &&
+            staffRoles.Contains(u.UserRole.Value))
+        .Select(u => new
+        {
+            UserId = u.Id,
+
+            u.Name,
+            u.LastName,
+
+            Role = u.UserRole
+        })
+        .ToListAsync();
+
+
+    if (staff.Count == 0)
+    {
+        return Ok(new
+        {
+            message = "No staff users found.",
+
+            StartDate =
+                start.ToString("yyyy-MM-dd"),
+
+            EndDate =
+                end.ToString("yyyy-MM-dd"),
+
+            PeriodId =
+                (long?)null,
+
+            Staff =
+                Array.Empty<object>(),
+
+            UsersWithOutRate =
+                Array.Empty<object>()
+        });
+    }
+
+
+    var staffIds = staff
+        .Select(x => x.UserId)
+        .ToList();
+
+
+    // ============================================================
+    // 2. STAFF CON SALARIO VÁLIDO
+    //
+    // Staff Salary:
+    //
+    // WarehouseId = NULL
+    //
+    // Permitimos:
+    //
+    // PerPeriod
+    //      BaseAmount > 0
+    //
+    // PerDay
+    //      DailyAmount > 0
+    //
+    // NO usamos aquí:
+    // PerStop
+    // PerPackage
+    // PerRoute
+    // Mixed
+    //
+    // Esos corresponden al payroll del warehouse.
+    // ============================================================
+
+    var staffWithRates = (
+        await _db.DriverRates
+            .AsNoTracking()
+            .Where(r =>
+
+                staffIds.Contains(
+                    (int)r.DriverId
+                )
+
+                &&
+
+                r.WarehouseId == null
+
+                &&
+
+                (
+                    // =========================
+                    // SALARIO POR PERIODO
+                    // =========================
+
+                    (
+                        r.RateType == "PerPeriod" &&
+                        r.BaseAmount > 0
+                    )
+
+                    ||
+
+                    // =========================
+                    // SALARIO POR DÍA
+                    // =========================
+
+                    (
+                        r.RateType == "PerDay" &&
+                        r.DailyAmount.HasValue &&
+                        r.DailyAmount.Value > 0
+                    )
+                )
+
+                &&
+
+                // Rate debe estar vigente
+                r.EffectiveFrom <= end
+
+                &&
+
+                (
+                    r.EffectiveTo == null ||
+                    r.EffectiveTo >= start
+                )
+            )
+            .Select(r =>
+                r.DriverId
+            )
+            .Distinct()
+            .ToListAsync()
+    )
+    .ToHashSet();
+
+
+    // ============================================================
+    // 3. STAFF SIN SALARIO CONFIGURADO
+    //
+    // Angular usará esta lista para abrir el modal
+    // y permitir crear PerPeriod / PerDay.
+    // ============================================================
+
+    var usersWithoutRates = staff
+        .Where(x =>
+            !staffWithRates.Contains(
+                x.UserId
+            )
+        )
+        .Select(x =>
+            new UserMissingRateDto
             {
-                StartDate        = start.ToString("yyyy-MM-dd"),
-                EndDate          = end.ToString("yyyy-MM-dd"),
-                PeriodIds        = periodIds,
-                Drivers          = runs,
-                UsersWithOutRate = usersWithoutRates
-            });
+                UserId =
+                    x.UserId,
+
+                Name =
+                    x.Name,
+
+                LastName =
+                    x.LastName
+            }
+        )
+        .ToList();
+
+
+    // ============================================================
+    // 4. PAY PERIOD GLOBAL DE STAFF
+    //
+    // WarehouseId = NULL
+    //
+    // Este PayPeriod NO pertenece a Houston, Tampa, etc.
+    // ============================================================
+
+    var period = await _db.PayPeriods
+        .FirstOrDefaultAsync(p =>
+
+            p.CompanyId ==
+                req.CompanyId
+
+            &&
+
+            p.WarehouseId ==
+                null
+
+            &&
+
+            p.StartDate ==
+                start
+
+            &&
+
+            p.EndDate ==
+                end
+        );
+
+
+    if (period == null)
+    {
+        period = new PayPeriod
+        {
+            CompanyId =
+                req.CompanyId,
+
+            WarehouseId =
+                null,
+
+            StartDate =
+                start,
+
+            EndDate =
+                end,
+
+            Status =
+                "Open",
+
+            CreatedBy =
+                req.UserId
+        };
+
+
+        _db.PayPeriods.Add(
+            period
+        );
+
+
+        await _db.SaveChangesAsync();
+    }
+
+
+    // ============================================================
+    // 5. NO RECALCULAR PAYRUN EXISTENTE
+    // salvo que venga RecalculateAll = true
+    // ============================================================
+
+    var already =
+        new HashSet<int>();
+
+
+    if (!req.RecalculateAll)
+    {
+        already = (
+            await _db.PayRuns
+                .AsNoTracking()
+                .Where(x =>
+                    x.PayPeriodId ==
+                        period.Id
+                )
+                .Select(x =>
+                    x.DriverId
+                )
+                .ToListAsync()
+        )
+        .ToHashSet();
+    }
+
+
+    // ============================================================
+    // 6. CALCULAR CADA STAFF
+    // ============================================================
+
+    foreach (var employee in staff)
+    {
+        // ------------------------------------------
+        // Si no tiene PerPeriod / PerDay global,
+        // lo dejamos para UsersWithOutRate.
+        // ------------------------------------------
+
+        if (
+            !staffWithRates.Contains(
+                employee.UserId
+            )
+        )
+        {
+            continue;
         }
 
+
+        // ------------------------------------------
+        // Ya calculado y NO es recalculación
+        // ------------------------------------------
+
+        if (
+            !req.RecalculateAll &&
+            already.Contains(
+                employee.UserId
+            )
+        )
+        {
+            continue;
+        }
+
+
+        try
+        {
+            await _service
+                .ComputeStaffWeeklyAsync(
+                    companyId:
+                        req.CompanyId,
+
+                    staffId:
+                        employee.UserId,
+
+                    weekStart:
+                        start,
+
+                    weekEnd:
+                        end,
+
+                    userId:
+                        req.UserId
+                );
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(
+                new
+                {
+                    message =
+                        "Staff payroll calculation failed.",
+
+                    userId =
+                        employee.UserId,
+
+                    employee =
+                        $"{employee.Name} {employee.LastName}",
+
+                    error =
+                        ex.Message
+                }
+            );
+        }
+    }
+
+
+    // ============================================================
+    // 7. RESULTADO
+    // ============================================================
+
+    var runs = await (
+        from r in
+            _db.PayRuns.AsNoTracking()
+
+        join u in
+            _db.Users.AsNoTracking()
+
+            on r.DriverId equals u.Id
+
+        where
+
+            r.PayPeriodId ==
+                period.Id
+
+            &&
+
+            staffIds.Contains(
+                r.DriverId
+            )
+
+        select new
+        {
+            UserId =
+                r.DriverId,
+
+
+            EmployeeName =
+                (
+                    (u.Name ?? "") +
+                    " " +
+                    (u.LastName ?? "")
+                )
+                .Trim(),
+
+
+            Role =
+                u.UserRole,
+
+
+            Gross =
+                r.GrossAmount,
+
+
+            Adjustments =
+                r.Adjustments,
+
+
+            Net =
+                r.NetAmount,
+
+
+            Run =
+                r.Id,
+
+
+            Status =
+                r.Status,
+
+
+            Fine =
+                _db.PayrollFines
+
+                    .Where(f =>
+                        f.PayRunId ==
+                            r.Id
+                    )
+
+                    .Sum(f =>
+                        (decimal?)f.Amount
+                    )
+
+                ?? 0m
+        }
+    )
+    .ToListAsync();
+
+
+    // ============================================================
+    // 8. RESPONSE
+    // ============================================================
+
+    return Ok(
+        new
+        {
+            StartDate =
+                start.ToString(
+                    "yyyy-MM-dd"
+                ),
+
+            EndDate =
+                end.ToString(
+                    "yyyy-MM-dd"
+                ),
+
+            PeriodId =
+                period.Id,
+
+            Status =
+                period.Status,
+
+            Staff =
+                runs,
+
+            UsersWithOutRate =
+                usersWithoutRates
+        }
+    );
+}
         public sealed class PeriodRouteDebugDto
         {
             public int RouteId { get; set; }
@@ -1783,6 +2721,8 @@ namespace TToApp.Controllers
         public async Task<ActionResult<IEnumerable<DriverRateDto>>> GetDriverRates(
     [FromQuery] int? warehouseId,
     CancellationToken ct)
+
+    
         {
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
@@ -1822,6 +2762,80 @@ namespace TToApp.Controllers
 
             return Ok(result);
         }
+        
+        [HttpGet("driverRates/user/{userId:long}")]
+public async Task<ActionResult> GetDriverRatesByUser(
+    long userId)
+{
+    var rates =
+        await _db.DriverRates
+
+            .AsNoTracking()
+
+            .Where(r =>
+                r.DriverId ==
+                    userId
+            )
+
+            .OrderByDescending(r =>
+                r.EffectiveFrom
+            )
+
+            .ThenBy(r =>
+                r.WarehouseId
+            )
+
+            .Select(r => new
+            {
+                r.Id,
+
+                r.DriverId,
+
+                r.WarehouseId,
+
+                r.RateType,
+
+                r.BaseAmount,
+
+                r.DailyAmount,
+
+                r.ExtraAmount,
+
+                r.MinPayPerRoute,
+
+                r.OverStopBonusThreshold,
+
+                r.OverStopBonusPerStop,
+
+                r.FailedStopPenalty,
+
+                r.RescueStopRate,
+
+                r.NightDeliveryBonus,
+
+                r.EffectiveFrom,
+
+                r.EffectiveTo,
+
+                Warehouse =
+                    r.Warehouse == null
+                        ? null
+                        : new
+                        {
+                            r.Warehouse.Id,
+                            r.Warehouse.Company,
+                            r.Warehouse.City,
+                            r.Warehouse.State,
+                            r.Warehouse.FacilityCode
+                        }
+            })
+
+            .ToListAsync();
+
+
+    return Ok(rates);
+}
+        
         [HttpPut("driverRates/bulk")]
         public async Task<IActionResult> BulkUpdateDriverRates([FromBody] List<UpdateDriverRateRequest> items, CancellationToken ct)
         {
@@ -1871,6 +2885,268 @@ namespace TToApp.Controllers
             await _db.SaveChangesAsync(ct);
             return Ok(new { message = "Bulk updated", count = entities.Count });
         }
+        public sealed class CreateStaffRateRequest
+{
+    public long DriverId { get; set; }
+
+    public string RateType { get; set; } = null!;
+
+    public decimal? BaseAmount { get; set; }
+
+    public decimal? DailyAmount { get; set; }
+
+    public DateOnly EffectiveFrom { get; set; }
+
+    public DateOnly? EffectiveTo { get; set; }
+}
+
+
+[HttpPost("staff-rates")]
+public async Task<ActionResult<DriverRateDto>> CreateStaffRate(
+    [FromBody] CreateStaffRateRequest body,
+    CancellationToken ct)
+{
+    if (body.DriverId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "Invalid staff user."
+        });
+    }
+
+
+    // Para el payroll de staff solamente permitimos
+    // estos dos tipos.
+    var allowedStaffRateTypes =
+        new[]
+        {
+            "PerPeriod",
+            "PerDay"
+        };
+
+
+    if (
+        string.IsNullOrWhiteSpace(body.RateType) ||
+        !allowedStaffRateTypes.Contains(
+            body.RateType,
+            StringComparer.OrdinalIgnoreCase)
+    )
+    {
+        return BadRequest(new
+        {
+            message =
+                "Staff RateType must be PerPeriod or PerDay."
+        });
+    }
+
+
+    var staffRoles = new[]
+    {
+        global::User.Role.Admin,
+        global::User.Role.Recruiter,
+        global::User.Role.Assistant
+    };
+
+
+    var staff = await _db.Users
+        .AsNoTracking()
+        .FirstOrDefaultAsync(
+            u =>
+                u.Id == body.DriverId &&
+                u.IsActive &&
+                u.UserRole.HasValue &&
+                staffRoles.Contains(
+                    u.UserRole.Value),
+            ct
+        );
+
+
+    if (staff == null)
+    {
+        return BadRequest(new
+        {
+            message =
+                $"User {body.DriverId} is not active Staff."
+        });
+    }
+
+
+    // =====================================================
+    // VALIDATE AMOUNT
+    // =====================================================
+
+    if (
+        body.RateType.Equals(
+            "PerPeriod",
+            StringComparison.OrdinalIgnoreCase)
+        &&
+        (!body.BaseAmount.HasValue ||
+         body.BaseAmount.Value <= 0)
+    )
+    {
+        return BadRequest(new
+        {
+            message =
+                "BaseAmount is required for PerPeriod."
+        });
+    }
+
+
+    if (
+        body.RateType.Equals(
+            "PerDay",
+            StringComparison.OrdinalIgnoreCase)
+        &&
+        (!body.DailyAmount.HasValue ||
+         body.DailyAmount.Value <= 0)
+    )
+    {
+        return BadRequest(new
+        {
+            message =
+                "DailyAmount is required for PerDay."
+        });
+    }
+
+
+    if (
+        body.EffectiveTo.HasValue &&
+        body.EffectiveFrom >
+        body.EffectiveTo.Value
+    )
+    {
+        return BadRequest(new
+        {
+            message =
+                "EffectiveFrom cannot be greater than EffectiveTo."
+        });
+    }
+
+
+    // =====================================================
+    // CHECK EXISTING GLOBAL STAFF RATE
+    // =====================================================
+
+    var existing = await _db.DriverRates
+        .FirstOrDefaultAsync(
+            r =>
+                r.DriverId ==
+                    body.DriverId &&
+
+                r.WarehouseId ==
+                    null &&
+
+                r.RateType ==
+                    body.RateType &&
+
+                r.EffectiveFrom <=
+                    body.EffectiveFrom &&
+
+                (
+                    r.EffectiveTo == null ||
+                    r.EffectiveTo >=
+                        body.EffectiveFrom
+                ),
+            ct
+        );
+
+
+    if (existing != null)
+    {
+        return Conflict(new
+        {
+            message =
+                $"An active {body.RateType} staff rate already exists for this employee."
+        });
+    }
+
+
+    var entity =
+        new DriverRate
+        {
+            DriverId =
+                body.DriverId,
+
+            // MUY IMPORTANTE
+            WarehouseId =
+                null,
+
+            RateType =
+                body.RateType,
+
+            BaseAmount =
+                body.RateType.Equals(
+                    "PerPeriod",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? body.BaseAmount!.Value
+                    : 0m,
+
+            DailyAmount =
+                body.RateType.Equals(
+                    "PerDay",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? body.DailyAmount
+                    : null,
+
+            ExtraAmount =
+                null,
+
+            EffectiveFrom =
+                body.EffectiveFrom,
+
+            EffectiveTo =
+                body.EffectiveTo,
+
+            UpdatedAt =
+                DateTime.UtcNow
+        };
+
+
+    _db.DriverRates.Add(entity);
+
+    await _db.SaveChangesAsync(ct);
+
+
+    var dto =
+        new DriverRateDto
+        {
+            Id =
+                entity.Id,
+
+            DriverId =
+                entity.DriverId,
+
+            DriverName =
+                staff.Name,
+
+            DriverLastName =
+                staff.LastName,
+
+            RateType =
+                entity.RateType,
+
+            BaseAmount =
+                entity.BaseAmount,
+
+            DailyAmount =
+                entity.DailyAmount,
+
+            ExtraAmount =
+                entity.ExtraAmount,
+
+            EffectiveFrom =
+                entity.EffectiveFrom,
+
+            EffectiveTo =
+                entity.EffectiveTo,
+
+            WarehouseId =
+                entity.WarehouseId
+        };
+
+
+    return Ok(dto);
+}
 
         [Authorize(Roles = "Admin")]
         [HttpPost("generate-missing")]
@@ -1903,157 +3179,49 @@ namespace TToApp.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
-        // [Authorize(Roles = "Admin")]
-        // [HttpPost("generate-missing")]
-        // public async Task<IActionResult> GenerateMissingDriverRates(
-        // [FromQuery] int warehouseId,
-        // CancellationToken ct)
-        // {
-        //     if (warehouseId <= 0)
-        //         return BadRequest(new { message = "warehouseId inválido." });
+        [HttpDelete("driverRates/{id:long}")]
+public async Task<IActionResult> DeleteDriverRate(
+    [FromRoute] long id,
+    CancellationToken ct)
+{
+    if (id <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "Invalid DriverRate id."
+        });
+    }
 
-        //     // 1) Traer warehouse y su rate default
-        //     var warehouse = await _db.Warehouses
-        //         .AsNoTracking()
-        //         .FirstOrDefaultAsync(w => w.Id == warehouseId, ct);
 
-        //     if (warehouse is null)
-        //         return NotFound(new { message = $"Warehouse {warehouseId} no existe." });
+    var rate =
+        await _db.DriverRates
+            .FirstOrDefaultAsync(
+                r => r.Id == id,
+                ct
+            );
 
-        //     // Ajusta el nombre según tu modelo:
-        //     var baseAmount = warehouse.DriveRate; // <-- CAMBIA si tu propiedad se llama diferente
 
-        //     if (baseAmount <= 0)
-        //         return BadRequest(new { message = "El warehouse no tiene DriveRate válido (> 0)." });
+    if (rate == null)
+    {
+        return NotFound(new
+        {
+            message = "DriverRate not found."
+        });
+    }
 
-        //     var today = new DateOnly(2025, 1, 1);
 
-        //     // 2) Obtener drivers del warehouse que NO tienen rate
-        //     //    (RoleId=3 según tu mensaje)
-        //     var driverIdsWithoutRate = await _db.Users
-        //         .AsNoTracking()
-        //         .Where(u =>
-        //                  (u.UserRole == global::User.Role.Driver ||
-        //                  u.UserRole == global::User.Role.Manager)
-        //                 && u.WarehouseId == warehouseId && u.IsActive
-        //             )
-        //         .Where(u => !_db.DriverRates.Any(dr => dr.DriverId == u.Id))
-        //         .Select(u => (long)u.Id)
-        //         .ToListAsync(ct);
+    _db.DriverRates.Remove(rate);
 
-        //     if (driverIdsWithoutRate.Count == 0)
-        //     {
-        //         return Ok(new
-        //         {
-        //             created = 0,
-        //             message = "No hay drivers sin DriverRate en ese warehouse."
-        //         });
-        //     }
 
-        //     // 3) Crear DriverRates (bulk)
-        //     var now = DateTime.UtcNow;
+    await _db.SaveChangesAsync(ct);
 
-        //     var newRates = driverIdsWithoutRate.Select(driverId => new DriverRate
-        //     {
-        //         DriverId = driverId,
-        //         RateType = "PerStop",          // o "PerStop" si ese es tu default
-        //         BaseAmount = (decimal)baseAmount,        // desde el warehouse
-        //         EffectiveFrom = today,
-        //         EffectiveTo = null,
-        //         UpdatedAt = now,
-        //         ExtraAmount = 0,
-        //         // opcional: defaults
-        //         MinPayPerRoute = null,
-        //         OverStopBonusThreshold = null,
-        //         OverStopBonusPerStop = null,
-        //         FailedStopPenalty = null,
-        //         RescueStopRate = null,
-        //         NightDeliveryBonus = null
-        //     }).ToList();
 
-        //     await _db.DriverRates.AddRangeAsync(newRates, ct);
-        //     await _db.SaveChangesAsync(ct);
-
-        //     return Ok(new
-        //     {
-        //         created = newRates.Count,
-        //         warehouseId,
-        //         baseAmount,
-        //         rateType = "PerStop",
-        //         driverIds = driverIdsWithoutRate
-        //     });
-        // }
-
-        // [HttpGet("latestGrossAmountByWarehouse1")]
-        // public async Task<IActionResult> LatestGrossAmountByWarehouse1()
-        // {
-
-        //      // 1) Último PayPeriod por Warehouse (solo lo necesario)
-        //     var latest = await _db.Set<PayPeriod>()
-        //         .AsNoTracking()
-        //         .GroupBy(p => p.WarehouseId)
-        //         .Select(g => g.OrderByDescending(p => p.Id).Select(p => new
-        //         {
-        //             PayPeriodId = p.Id,
-        //             p.WarehouseId
-        //         }).FirstOrDefault())
-        //         .ToListAsync();
-
-        //     // Por si acaso (si algún warehouse no tiene payperiod)
-        //     latest = latest.Where(x => x != null).ToList()!;
-
-        //     var latestPayPeriodIds = latest.Select(x => x!.PayPeriodId).ToList();
-
-        //     // 2) Suma GrossAmount + Max CalculatedAt por PayPeriodId (solo para los últimos)
-        //     var sums = await _db.Set<PayRun>()
-        //         .AsNoTracking()
-        //         .Where(pr => latestPayPeriodIds.Contains(pr.PayPeriodId))
-        //         .GroupBy(pr => pr.PayPeriodId)
-        //         .Select(g => new
-        //         {
-        //             PayPeriodId = g.Key,
-        //             GrossAmountTotal = g.Sum(x => x.GrossAmount),
-        //             CalculatedAt = g.Max(x => x.CalculatedAt) 
-        //         })
-        //         .ToListAsync();
-
-        //     // 3) Warehouses (para nombre City + Company)
-        //     var warehouseIds = latest.Select(x => x!.WarehouseId).Distinct().ToList();
-
-        //     var warehouses = await _db.Set<Warehouse>()
-        //         .AsNoTracking()
-        //         .Where(w => warehouseIds.Contains(w.Id))
-        //         .Select(w => new
-        //         {
-        //             w.Id,
-        //             Name = (w.Metro.City ?? "") + "(" + (w.Company ?? "") + ")"
-        //         })
-        //         .ToListAsync();
-
-        //     var whMap = warehouses.ToDictionary(x => (long)x.Id, x => x.Name);
-        //     var sumMap = sums.ToDictionary(x => x.PayPeriodId, x => x);
-
-        //     // 4) Armar respuesta final (en memoria) + formato de fecha
-        //     var result = latest.Select(x =>
-        //     {
-        //         var ppId = x!.PayPeriodId;
-        //         sumMap.TryGetValue(ppId, out var s);
-        //         whMap.TryGetValue(x.WarehouseId!.Value, out var whName);
-
-        //         return new
-        //         {
-        //             x.WarehouseId,
-        //             Warehouse = whName ?? "",
-        //             PayPeriodId = ppId,
-        //             GrossAmountTotal = s?.GrossAmountTotal ?? 0m,
-        //             Date = s?.CalculatedAt?.ToString("MMM dd yyyy", CultureInfo.InvariantCulture)
-        //         };
-        //     })
-        //     .OrderBy(x => x.WarehouseId)
-        //     .ToList();
-
-        //     return Ok(result);
-        // }
+    return Ok(new
+    {
+        message = "DriverRate deleted successfully.",
+        id
+    });
+}
         [HttpGet("latestGrossAmountByWarehouse")]
         public async Task<IActionResult> LatestGrossAmountByWarehouse()
         {

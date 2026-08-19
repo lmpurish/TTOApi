@@ -2501,6 +2501,180 @@ namespace TToApp.Controllers
             return Ok(bonus);
         }
 
+        [Authorize(Roles = "Admin,CompanyOwner")]
+[HttpGet("bonus-approvals")]
+public async Task<IActionResult> GetBonusApprovals(
+    [FromQuery] string? status = "Pending",
+    [FromQuery] int? warehouseId = null)
+{
+    var userIdClaim =
+        User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+    if (!int.TryParse(userIdClaim, out int userId))
+    {
+        return Unauthorized(new
+        {
+            message = "Invalid user."
+        });
+    }
+
+    var currentUser = await _context.Users
+        .AsNoTracking()
+        .FirstOrDefaultAsync(u => u.Id == userId);
+
+    if (currentUser == null)
+    {
+        return Unauthorized(new
+        {
+            message = "User not found."
+        });
+    }
+
+    // =========================================================
+    // RESOLVE COMPANY
+    // =========================================================
+
+    int? companyId = currentUser.CompanyId;
+
+    if (
+        currentUser.UserRole ==
+        global::User.Role.CompanyOwner
+    )
+    {
+        companyId = await _context.Companies
+            .AsNoTracking()
+            .Where(c => c.OwnerId == currentUser.Id)
+            .Select(c => (int?)c.Id)
+            .FirstOrDefaultAsync();
+    }
+
+    if (!companyId.HasValue)
+    {
+        return Forbid();
+    }
+
+    // =========================================================
+    // QUERY
+    // =========================================================
+
+    var query = _context.RouteBonuses
+        .AsNoTracking()
+        .Where(b =>
+            b.Route != null &&
+            b.Route.Warehouse != null &&
+            b.Route.Warehouse.CompanyId == companyId.Value
+        );
+
+    // =========================================================
+    // STATUS
+    // =========================================================
+
+    if (
+        !string.IsNullOrWhiteSpace(status) &&
+        !status.Equals(
+            "All",
+            StringComparison.OrdinalIgnoreCase
+        )
+    )
+    {
+        if (
+            Enum.TryParse<RouteBonusStatus>(
+                status,
+                true,
+                out var parsedStatus
+            )
+        )
+        {
+            query = query.Where(
+                b => b.Status == parsedStatus
+            );
+        }
+    }
+
+    // =========================================================
+    // WAREHOUSE
+    // =========================================================
+
+    if (warehouseId.HasValue)
+    {
+        query = query.Where(
+            b =>
+                b.Route.WarehouseId ==
+                warehouseId.Value
+        );
+    }
+
+    // =========================================================
+    // RESULT
+    // =========================================================
+
+    var bonuses = await query
+        .OrderByDescending(b => b.AssignedAt)
+        .Select(b => new
+        {
+            b.Id,
+
+            b.RouteId,
+
+            RouteCode =
+                b.Route.RouteCode ??
+                b.Route.Id.ToString(),
+
+            RouteDate =
+                b.Route.Date,
+
+            b.Type,
+            b.Amount,
+            b.Note,
+
+            Status =
+                b.Status.ToString(),
+
+            b.AssignedAt,
+
+            b.AssignedByUserId,
+
+            AssignedBy =
+                b.AssignedByUser == null
+                    ? null
+                    : new
+                    {
+                        b.AssignedByUser.Id,
+                        b.AssignedByUser.Name,
+                        b.AssignedByUser.LastName
+                    },
+
+            Driver =
+                b.Route.User == null
+                    ? null
+                    : new
+                    {
+                        b.Route.User.Id,
+                        b.Route.User.Name,
+                        b.Route.User.LastName,
+                        b.Route.User.IdentificationNumber
+                    },
+
+            Warehouse =
+                b.Route.Warehouse == null
+                    ? null
+                    : new
+                    {
+                        b.Route.Warehouse.Id,
+                        b.Route.Warehouse.Company,
+                        b.Route.Warehouse.City,
+                        b.Route.Warehouse.State
+                    },
+
+            b.ApprovedByUserId,
+            b.ApprovedAt
+        })
+        .ToListAsync();
+
+    return Ok(bonuses);
+}
+
+
         [HttpGet("users/find-similar-import-name")]
         public async Task<IActionResult> FindSimilarImportName([FromQuery] string name)
         {

@@ -32,61 +32,142 @@ namespace TToApp.Controllers
         }
 
         [HttpPost("company-revenue")]
-        public async Task<IActionResult> UpsertCompanyRevenue(
-            [FromBody] UpsertCompanyRevenueRequest request,
-            CancellationToken ct)
+public async Task<IActionResult> UpsertCompanyRevenue(
+    [FromBody] UpsertCompanyRevenueRequest request,
+    CancellationToken ct)
+{
+    var userId = GetUserId();
+    var companyId = GetCompanyId();
+
+    if (companyId <= 0)
+    {
+        return BadRequest(new
         {
-            var userId = GetUserId();
-            var companyId = GetCompanyId();
+            message = "CompanyId not found in token."
+        });
+    }
 
-            if (companyId <= 0)
-                return BadRequest(new { message = "CompanyId not found in token." });
+    if (request.PayPeriodId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "Pay period is required."
+        });
+    }
 
-            var payPeriod = await _context.PayPeriods
-                .FirstOrDefaultAsync(x => x.Id == request.PayPeriodId &&
-                                          x.CompanyId == companyId, ct);
+    if (request.WarehouseId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "Warehouse is required."
+        });
+    }
 
-            if (payPeriod == null)
-                return NotFound(new { message = "Pay period not found." });
+    if (request.Revenue < 0)
+    {
+        return BadRequest(new
+        {
+            message = "Revenue cannot be negative."
+        });
+    }
 
-            var revenue = await _context.CompanyRevenues
-                .FirstOrDefaultAsync(x =>
-                    x.CompanyId == companyId &&
-                    x.PayPeriodId == request.PayPeriodId &&
-                    x.WarehouseId == request.WarehouseId &&
-                    x.RevenueType == request.RevenueType, ct);
+    if (request.Expenses < 0)
+    {
+        return BadRequest(new
+        {
+            message = "Expenses cannot be negative."
+        });
+    }
 
-            if (revenue == null)
-            {
-                revenue = new CompanyRevenue
-                {
-                    CompanyId = (int)companyId,
-                    PayPeriodId = request.PayPeriodId,
-                    WarehouseId = request.WarehouseId,
-                    RevenueType = request.RevenueType,
-                    CreatedBy = (int)userId,
-                    CreatedAt = DateTime.UtcNow
-                };
+    var payPeriod = await _context.PayPeriods
+        .AsNoTracking()
+        .FirstOrDefaultAsync(x =>
+            x.Id == request.PayPeriodId &&
+            x.CompanyId == companyId,
+            ct);
 
-                _context.CompanyRevenues.Add(revenue);
-            }
-            else
-            {
-                revenue.UpdatedBy = (int?)userId;
-                revenue.UpdatedAt = DateTime.UtcNow;
-            }
+    if (payPeriod == null)
+    {
+        return NotFound(new
+        {
+            message = "Pay period not found."
+        });
+    }
 
-            revenue.Revenue = request.Revenue;
-            revenue.Expenses = request.Expenses;
-            revenue.Adjustments = request.Adjustments;
-            revenue.Notes = request.Notes;
-            revenue.RevenueDate = request.RevenueDate ?? DateTime.UtcNow;
+    var warehouseExists = await _context.Warehouses
+        .AsNoTracking()
+        .AnyAsync(x =>
+            x.Id == request.WarehouseId &&
+            x.CompanyId == companyId,
+            ct);
 
-            await _context.SaveChangesAsync(ct);
+    if (!warehouseExists)
+    {
+        return NotFound(new
+        {
+            message = "Warehouse not found."
+        });
+    }
 
-            return Ok(revenue);
-        }
+    var revenueType = string.IsNullOrWhiteSpace(
+        request.RevenueType
+    )
+        ? "Settlement"
+        : request.RevenueType.Trim();
 
+    var revenue = await _context.CompanyRevenues
+        .FirstOrDefaultAsync(x =>
+            x.CompanyId == companyId &&
+            x.PayPeriodId == request.PayPeriodId &&
+            x.WarehouseId == request.WarehouseId &&
+            x.RevenueType == revenueType,
+            ct);
+
+    if (revenue == null)
+    {
+        revenue = new CompanyRevenue
+        {
+            CompanyId = checked((int)companyId),
+            PayPeriodId = request.PayPeriodId,
+            WarehouseId = request.WarehouseId,
+            RevenueType = revenueType,
+            CreatedBy = checked((int)userId),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _context.CompanyRevenues.Add(revenue);
+    }
+    else
+    {
+        revenue.UpdatedBy = checked((int)userId);
+        revenue.UpdatedAt = DateTime.UtcNow;
+    }
+
+    revenue.Revenue = request.Revenue;
+    revenue.Expenses = request.Expenses;
+    revenue.Adjustments = request.Adjustments;
+    revenue.Notes = request.Notes?.Trim();
+    revenue.RevenueDate =
+        request.RevenueDate ?? DateTime.UtcNow;
+
+    await _context.SaveChangesAsync(ct);
+
+    return Ok(new
+    {
+        revenue.Id,
+        revenue.CompanyId,
+        revenue.PayPeriodId,
+        revenue.WarehouseId,
+        revenue.Revenue,
+        revenue.Expenses,
+        revenue.Adjustments,
+        revenue.RevenueType,
+        revenue.Notes,
+        revenue.RevenueDate,
+        revenue.CreatedAt,
+        revenue.UpdatedAt
+    });
+}
         [HttpGet("owner-dashboard")]
         public async Task<IActionResult> GetOwnerDashboard(
     [FromQuery] DateOnly startDate,
@@ -296,5 +377,152 @@ namespace TToApp.Controllers
                 worstWarehouse
             });
         }
+        [HttpGet("revenue-pay-periods")]
+public async Task<IActionResult> GetRevenuePayPeriods(
+    CancellationToken ct)
+{
+    var companyId = GetCompanyId();
+
+    if (companyId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "CompanyId not found in token."
+        });
     }
+
+    var periods = await _context.PayPeriods
+        .AsNoTracking()
+        .Where(x => x.CompanyId == companyId)
+        .GroupBy(x => new
+        {
+            x.StartDate,
+            x.EndDate
+        })
+        .Select(group => new
+        {
+            Id = group.Min(x => x.Id),
+
+            group.Key.StartDate,
+            group.Key.EndDate,
+
+            PayPeriodIds = group
+                .Select(x => x.Id)
+                .ToList(),
+
+            WarehouseIds = group
+                .Where(x => x.WarehouseId.HasValue)
+                .Select(x => x.WarehouseId!.Value)
+                .Distinct()
+                .ToList(),
+
+            WarehouseCount = group
+                .Where(x => x.WarehouseId.HasValue)
+                .Select(x => x.WarehouseId)
+                .Distinct()
+                .Count(),
+
+            Status = group.All(x => x.Status == "Approved")
+                ? "Approved"
+                : group.All(x => x.Status == "Locked")
+                    ? "Locked"
+                    : "Open"
+        })
+        .OrderByDescending(x => x.StartDate)
+        .ThenByDescending(x => x.EndDate)
+        .Take(52)
+        .ToListAsync(ct);
+
+    return Ok(periods);
+}
+
+[HttpGet("revenue-management")]
+public async Task<IActionResult> GetRevenueManagement(
+    [FromQuery] long payPeriodId,
+    CancellationToken ct)
+{
+    var companyId = GetCompanyId();
+
+    if (companyId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "CompanyId not found in token."
+        });
+    }
+
+    var payPeriod = await _context.PayPeriods
+        .AsNoTracking()
+        .FirstOrDefaultAsync(x =>
+            x.Id == payPeriodId &&
+            x.CompanyId == companyId,
+            ct);
+
+    if (payPeriod == null)
+    {
+        return NotFound(new
+        {
+            message = "Pay period not found."
+        });
+    }
+
+    var warehouses = await _context.Warehouses
+        .AsNoTracking()
+            .Where(x =>
+                x.CompanyId == companyId && x.IsActive == true)
+        .OrderBy(x => x.City)
+        .Select(x => new
+        {
+            x.Id,
+            Name = x.City + " - " + x.Company
+        })
+        .ToListAsync(ct);
+
+    var existingRevenues = await _context.CompanyRevenues
+        .AsNoTracking()
+        .Where(x =>
+            x.CompanyId == companyId &&
+            x.PayPeriodId == payPeriodId &&
+            x.RevenueType == "Settlement")
+        .ToListAsync(ct);
+
+    var rows = warehouses.Select(warehouse =>
+    {
+        var existing = existingRevenues.FirstOrDefault(x =>
+            x.WarehouseId == warehouse.Id
+        );
+
+        return new
+        {
+            id = existing?.Id,
+            warehouseId = warehouse.Id,
+            warehouse = warehouse.Name,
+            payPeriodId,
+            revenue = existing?.Revenue ?? 0m,
+            expenses = existing?.Expenses ?? 0m,
+            adjustments = existing?.Adjustments ?? 0m,
+            revenueType =
+                existing?.RevenueType ?? "Settlement",
+            notes = existing?.Notes ?? "",
+            revenueDate = existing?.RevenueDate,
+            isSaved = existing != null,
+            updatedAt = existing?.UpdatedAt,
+            createdAt = existing?.CreatedAt
+        };
+    });
+
+    return Ok(new
+    {
+        payPeriod = new
+        {
+            payPeriod.Id,
+            payPeriod.StartDate,
+            payPeriod.EndDate,
+            payPeriod.Status
+        },
+        rows
+    });
+}
+    }
+    
 }

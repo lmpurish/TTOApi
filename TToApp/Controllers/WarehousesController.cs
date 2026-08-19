@@ -33,139 +33,161 @@ namespace TToApp.Controllers
 
         // GET: api/Warehouses
         [Authorize(Roles = "Admin,CompanyOwner,Manager,Assistant")]
-        [HttpGet]
-        public async Task<ActionResult<IEnumerable<WarehouseDto>>> GetWarehouses()
+[HttpGet]
+public async Task<ActionResult<IEnumerable<WarehouseDto>>> GetWarehouses()
+{
+    try
+    {
+        // =========================
+        // Get Current User Id
+        // =========================
+        var userIdClaim = User.Claims
+            .FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+
+        if (!int.TryParse(userIdClaim, out int userId))
         {
-            try
+            return Unauthorized(new
             {
-                // =========================
-                // Get Current User Id
-                // =========================
-                var userIdClaim = User.Claims
-                    .FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
-
-                if (!int.TryParse(userIdClaim, out int userId))
-                {
-                    return Unauthorized(new
-                    {
-                        message = "User not authenticated"
-                    });
-                }
-
-                // =========================
-                // Get Current User
-                // =========================
-                var user = await _context.Users
-                    .AsNoTracking()
-                    .Include(u => u.Company)
-                    .FirstOrDefaultAsync(u => u.Id == userId);
-
-                if (user == null)
-                {
-                    return Unauthorized(new
-                    {
-                        message = "User not found"
-                    });
-                }
-
-                // =========================
-                // Resolve Company Id
-                // =========================
-                int? companyId = null;
-
-                if (user.UserRole == global::User.Role.CompanyOwner)
-                {
-                    companyId = await _context.Companies
-                        .AsNoTracking()
-                        .Where(c => c.OwnerId == user.Id)
-                        .Select(c => (int?)c.Id)
-                        .FirstOrDefaultAsync();
-                }
-                else
-                {
-                    companyId = user.CompanyId;
-                }
-
-                if (!companyId.HasValue)
-                {
-                    return StatusCode(StatusCodes.Status403Forbidden, new
-                    {
-                        message = "User does not belong to any company."
-                    });
-                }
-
-                // =========================
-                // Get Warehouses
-                // =========================
-                var warehouses = await _context.Warehouses
-                    .AsNoTracking()
-                    .Include(w => w.Companie)
-                    .Include(w => w.Metro)
-                    .Where(w =>
-                        w.CompanyId == companyId.Value &&
-                        w.IsActive == true)
-                    .OrderBy(w => w.Company) // <- cronológico
-                    .Select(w => new WarehouseDto
-                    {
-                        Id = w.Id,
-                        City = w.City,
-                        Company = w.Company,
-                        Address = w.Address,
-                        State = w.State,
-                        isHiring = w.IsHiring,
-                        IsActive = w.IsActive,
-                        SendPayroll = w.SendPayroll,
-                        CompanyId = w.CompanyId ?? 0,
-                        ZipCode = w.ZipCode,
-                        DriveRate = w.DriveRate,
-                        FacilityCode = w.FacilityCode,
-
-                        OpenTime = w.OpenTime.HasValue
-                            ? new TimeDto
-                            {
-                                Hours = w.OpenTime.Value.Hour,
-                                Minutes = w.OpenTime.Value.Minute
-                            }
-                            : null,
-
-                        AuthorizedPersons = _context.Permits
-                            .Where(ap => ap.WarehouseId == w.Id)
-                            .Select(ap => new AuthorizedPersonDto
-                            {
-                                Id = ap.UserId,
-                                Name = ap.User.Name,
-                                LastName = ap.User.LastName
-                            })
-                            .ToList(),
-
-                        Metro = w.Metro == null
-                            ? null
-                            : new Metro
-                            {
-                                Id = w.Metro.Id,
-                                City = w.Metro.City
-                            },
-
-                        Manager = _context.Users
-                            .Where(u =>
-                                u.WarehouseId == w.Id &&
-                                u.UserRole == global::User.Role.Manager)
-                            .Select(u => (u.Name + " " + u.LastName).Trim())
-                            .FirstOrDefault() ?? ""
-                    })
-                    .ToListAsync();
-
-                return Ok(warehouses);
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(StatusCodes.Status500InternalServerError, new
-                {
-                    message = "Server error",
-                    detail = ex.Message
-                });
-            }
+                message = "User not authenticated"
+            });
         }
+
+        // =========================
+        // Get Current User
+        // =========================
+        var user = await _context.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null)
+        {
+            return Unauthorized(new
+            {
+                message = "User not found"
+            });
+        }
+
+        // =========================
+        // Resolve Company Id
+        // =========================
+        int? companyId;
+
+        if (user.UserRole == global::User.Role.CompanyOwner)
+        {
+            companyId = await _context.Companies
+                .AsNoTracking()
+                .Where(c => c.OwnerId == user.Id)
+                .Select(c => (int?)c.Id)
+                .FirstOrDefaultAsync();
+        }
+        else
+        {
+            companyId = user.CompanyId;
+        }
+
+        if (!companyId.HasValue)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "User does not belong to any company."
+            });
+        }
+
+        // =========================
+        // Base Warehouse Query
+        // =========================
+        var warehouseQuery = _context.Warehouses
+            .AsNoTracking()
+            .Where(w =>
+                w.CompanyId == companyId.Value &&
+                w.IsActive == true);
+
+        // =========================
+        // Restrict Manager Access
+        // =========================
+        if (user.UserRole == global::User.Role.Manager)
+        {
+            warehouseQuery = warehouseQuery.Where(w =>
+                _context.UserWarehouses.Any(uw =>
+                    uw.UserId == user.Id &&
+                    uw.WarehouseId == w.Id));
+        }
+
+        
+        // Admin + CompanyOwner
+        // No additional filter:
+        // they see all company warehouses.
+
+        // =========================
+        // Execute Query
+        // =========================
+        var warehouses = await warehouseQuery
+            .OrderBy(w => w.Company)
+            .ThenBy(w => w.City)
+            .Select(w => new WarehouseDto
+            {
+                Id = w.Id,
+                City = w.City,
+                Company = w.Company,
+                Address = w.Address,
+                State = w.State,
+                isHiring = w.IsHiring,
+                IsActive = w.IsActive,
+                SendPayroll = w.SendPayroll,
+                CompanyId = w.CompanyId ?? 0,
+                ZipCode = w.ZipCode,
+                DriveRate = w.DriveRate,
+                FacilityCode = w.FacilityCode,
+
+                OpenTime = w.OpenTime.HasValue
+                    ? new TimeDto
+                    {
+                        Hours = w.OpenTime.Value.Hour,
+                        Minutes = w.OpenTime.Value.Minute
+                    }
+                    : null,
+
+                AuthorizedPersons = _context.Permits
+                    .Where(ap => ap.WarehouseId == w.Id)
+                    .Select(ap => new AuthorizedPersonDto
+                    {
+                        Id = ap.UserId,
+                        Name = ap.User.Name,
+                        LastName = ap.User.LastName
+                    })
+                    .ToList(),
+
+                Metro = w.Metro == null
+                    ? null
+                    : new Metro
+                    {
+                        Id = w.Metro.Id,
+                        City = w.Metro.City
+                    },
+
+                Manager = _context.UserWarehouses
+                    .Where(uw =>
+                        uw.WarehouseId == w.Id &&
+                        uw.User.UserRole == global::User.Role.Manager)
+                    .Select(uw =>
+                        (uw.User.Name + " " + uw.User.LastName).Trim())
+                    .FirstOrDefault() ?? ""
+            })
+            .ToListAsync();
+
+        return Ok(warehouses);
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(
+            StatusCodes.Status500InternalServerError,
+            new
+            {
+                message = "Server error",
+                detail = ex.Message
+            });
+    }
+}
 
         private static TimeOnly? ToTimeOnly(TimeDto? t)
         {

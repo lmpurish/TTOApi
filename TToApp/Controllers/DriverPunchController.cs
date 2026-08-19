@@ -632,6 +632,342 @@ namespace TToApp.Controllers
 
             return null;
         }
+
+        [Authorize(Roles = "Admin,CompanyOwner")]
+[HttpGet("admin")]
+public async Task<ActionResult<List<DriverPunchAdminRowDto>>> GetAdminPunches(
+    [FromQuery] DateOnly startDate,
+    [FromQuery] DateOnly endDate,
+    [FromQuery] int? warehouseId,
+    [FromQuery] int? driverId,
+    [FromQuery] PunchType? punchType,
+    [FromQuery] PunchSource? source,
+    CancellationToken ct)
+{
+    var companyId = GetCompanyId();
+
+    if (companyId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "CompanyId not found in token."
+        });
+    }
+
+    if (endDate < startDate)
+    {
+        return BadRequest(new
+        {
+            message = "End date cannot be before start date."
+        });
+    }
+
+    var startUtc = startDate.ToDateTime(
+        TimeOnly.MinValue,
+        DateTimeKind.Utc
+    );
+
+    var endUtc = endDate
+        .AddDays(1)
+        .ToDateTime(
+            TimeOnly.MinValue,
+            DateTimeKind.Utc
+        );
+
+    var query =
+        from punch in _db.DriverPunches.AsNoTracking()
+
+        join user in _db.Users.AsNoTracking()
+            on punch.DriverId equals user.Id
+
+        join warehouse in _db.Warehouses.AsNoTracking()
+            on punch.WarehouseId equals warehouse.Id
+
+        where punch.CompanyId == companyId
+              && punch.OccurredAtUtc >= startUtc
+              && punch.OccurredAtUtc < endUtc
+
+        select new
+        {
+            Punch = punch,
+            DriverName =
+                ((user.Name ?? "") + " " +
+                 (user.LastName ?? "")).Trim(),
+
+            WarehouseName =
+                (warehouse.City ?? "") + " - " +
+                (warehouse.Company ?? "")
+        };
+
+    if (warehouseId.HasValue && warehouseId.Value > 0)
+    {
+        query = query.Where(x =>
+            x.Punch.WarehouseId == warehouseId.Value
+        );
+    }
+
+    if (driverId.HasValue && driverId.Value > 0)
+    {
+        query = query.Where(x =>
+            x.Punch.DriverId == driverId.Value
+        );
+    }
+
+    if (punchType.HasValue)
+    {
+        query = query.Where(x =>
+            x.Punch.PunchType == punchType.Value
+        );
+    }
+
+    if (source.HasValue)
+    {
+        query = query.Where(x =>
+            x.Punch.Source == source.Value
+        );
+    }
+
+    var results = await query
+        .OrderByDescending(x => x.Punch.OccurredAtUtc)
+        .Select(x => new DriverPunchAdminRowDto
+        {
+            Id = x.Punch.Id,
+
+            DriverId = x.Punch.DriverId,
+            DriverName = x.DriverName,
+
+            WarehouseId = x.Punch.WarehouseId,
+            WarehouseName = x.WarehouseName,
+
+            PunchType = x.Punch.PunchType,
+
+            OccurredAtUtc = DateTime.SpecifyKind(
+                x.Punch.OccurredAtUtc,
+                DateTimeKind.Utc
+            ),
+
+            Latitude = x.Punch.Latitude,
+            Longitude = x.Punch.Longitude,
+            AccuracyMeters = x.Punch.AccuracyMeters,
+            DistanceMeters = x.Punch.DistanceMeters,
+
+            IsWithinGeofence =
+                x.Punch.IsWithinGeofence,
+
+            Source = x.Punch.Source,
+
+            Notes = x.Punch.Notes,
+
+            CreatedAtUtc = DateTime.SpecifyKind(
+                x.Punch.CreatedAtUtc,
+                DateTimeKind.Utc
+            )
+        })
+        .ToListAsync(ct);
+
+    return Ok(results);
+}
+
+[Authorize(Roles = "Admin,CompanyOwner")]
+[HttpPost("admin/manual")]
+public async Task<IActionResult> CreateManualPunch(
+    [FromBody] CreateManualPunchRequest request,
+    CancellationToken ct)
+{
+    var companyId = GetCompanyId();
+    var adminUserId = GetUserId();
+
+    if (companyId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "CompanyId not found in token."
+        });
+    }
+
+    if (request.DriverId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "Employee is required."
+        });
+    }
+
+    if (request.WarehouseId <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "Warehouse is required."
+        });
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Notes))
+    {
+        return BadRequest(new
+        {
+            message =
+                "Notes are required for a manual punch."
+        });
+    }
+
+    var userExists = await _db.Users
+        .AsNoTracking()
+        .AnyAsync(x =>
+            x.Id == request.DriverId &&
+            x.CompanyId == companyId,
+            ct);
+
+    if (!userExists)
+    {
+        return NotFound(new
+        {
+            message = "Employee not found."
+        });
+    }
+
+    var warehouseExists = await _db.Warehouses
+        .AsNoTracking()
+        .AnyAsync(x =>
+            x.Id == request.WarehouseId &&
+            x.CompanyId == companyId,
+            ct);
+
+    if (!warehouseExists)
+    {
+        return NotFound(new
+        {
+            message = "Warehouse not found."
+        });
+    }
+
+    var occurredAtUtc = DateTime.SpecifyKind(
+        request.OccurredAtUtc,
+        DateTimeKind.Utc
+    );
+
+    var punch = new DriverPunch
+    {
+        CompanyId = companyId,
+        WarehouseId = request.WarehouseId,
+        DriverId = request.DriverId,
+
+        PunchType = request.PunchType,
+
+        OccurredAtUtc = occurredAtUtc,
+
+        Latitude = null,
+        Longitude = null,
+        AccuracyMeters = null,
+        DistanceMeters = null,
+
+        IsWithinGeofence = false,
+
+        Source = PunchSource.Manual,
+
+        Notes =
+            $"Created by user {adminUserId}. " +
+            request.Notes.Trim(),
+
+        CreatedAtUtc = DateTime.UtcNow
+    };
+
+    _db.DriverPunches.Add(punch);
+
+    await _db.SaveChangesAsync(ct);
+
+    return Ok(new
+    {
+        punch.Id,
+        punch.DriverId,
+        punch.WarehouseId,
+        punch.PunchType,
+        punch.OccurredAtUtc,
+        punch.Source,
+        punch.Notes
+    });
+}
+
+[Authorize(Roles = "Admin,CompanyOwner")]
+[HttpPut("admin/{id:long}")]
+public async Task<IActionResult> UpdatePunch(
+    long id,
+    [FromBody] UpdateDriverPunchRequest request,
+    CancellationToken ct)
+{
+    var companyId = GetCompanyId();
+    var adminUserId = GetUserId();
+
+    var punch = await _db.DriverPunches
+        .FirstOrDefaultAsync(x =>
+            x.Id == id &&
+            x.CompanyId == companyId,
+            ct);
+
+    if (punch == null)
+    {
+        return NotFound(new
+        {
+            message = "Punch not found."
+        });
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Notes))
+    {
+        return BadRequest(new
+        {
+            message =
+                "Notes are required when editing a punch."
+        });
+    }
+
+    punch.WarehouseId = request.WarehouseId;
+    punch.PunchType = request.PunchType;
+
+    punch.OccurredAtUtc = DateTime.SpecifyKind(
+        request.OccurredAtUtc,
+        DateTimeKind.Utc
+    );
+
+    punch.Source = PunchSource.AdminOverride;
+
+    punch.Notes =
+        $"Edited by user {adminUserId}. " +
+        request.Notes.Trim();
+
+    await _db.SaveChangesAsync(ct);
+
+    return NoContent();
+}
+
+[Authorize(Roles = "Admin,CompanyOwner")]
+[HttpDelete("admin/{id:long}")]
+public async Task<IActionResult> DeletePunch(
+    long id,
+    CancellationToken ct)
+{
+    var companyId = GetCompanyId();
+
+    var punch = await _db.DriverPunches
+        .FirstOrDefaultAsync(x =>
+            x.Id == id &&
+            x.CompanyId == companyId,
+            ct);
+
+    if (punch == null)
+    {
+        return NotFound(new
+        {
+            message = "Punch not found."
+        });
+    }
+
+    _db.DriverPunches.Remove(punch);
+
+    await _db.SaveChangesAsync(ct);
+
+    return NoContent();
+}
+
     }
 
     // -------------------------
@@ -728,5 +1064,27 @@ namespace TToApp.Controllers
         public bool IsOpenShift => HasArrival && !HasDeparture;
     }
 
+    public class CreateManualPunchRequest
+{
+    public int DriverId { get; set; }
 
+    public int WarehouseId { get; set; }
+
+    public PunchType PunchType { get; set; }
+
+    public DateTime OccurredAtUtc { get; set; }
+
+    public string Notes { get; set; } = "";
+}
+
+public class UpdateDriverPunchRequest
+{
+    public int WarehouseId { get; set; }
+
+    public PunchType PunchType { get; set; }
+
+    public DateTime OccurredAtUtc { get; set; }
+
+    public string Notes { get; set; } = "";
+}
 

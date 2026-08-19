@@ -482,6 +482,30 @@ namespace TToApp.Model
             modelBuilder.Entity<UserWarehouse>()
                 .HasIndex(uw => new { uw.UserId, uw.IsActive });
 
+            modelBuilder.Entity<CompanyRevenue>(entity =>
+{
+    entity.Property(x => x.Revenue)
+        .HasPrecision(18, 2);
+
+    entity.Property(x => x.Expenses)
+        .HasPrecision(18, 2);
+
+    entity.Property(x => x.Adjustments)
+        .HasPrecision(18, 2);
+
+    entity.Property(x => x.RevenueType)
+        .HasMaxLength(50);
+
+    entity.HasIndex(x => new
+    {
+        x.CompanyId,
+        x.PayPeriodId,
+        x.WarehouseId,
+        x.RevenueType
+    })
+    .IsUnique();
+});
+
         }
         public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
 

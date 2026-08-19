@@ -822,32 +822,72 @@ namespace TToApp.Services.Payroll
                 }
             }
 
-            // PerPeriod: flat amount added once per pay period, regardless of routes or punches.
-            // Warehouse-specific rate wins over global; only one rate is applied.
-            var perPeriodRate = rates
-                .Where(r =>
-                    r.RateType == "PerPeriod" &&
-                    r.BaseAmount > 0 &&
-                    r.EffectiveFrom <= weekEnd)
-                .OrderByDescending(r => r.WarehouseId != null) // specific wins
-                .ThenByDescending(r => r.EffectiveFrom)
-                .FirstOrDefault();
+            // ============================================================
+// PER PERIOD / FIXED STAFF SALARY
+// ============================================================
+// WarehouseId == null:
+//     salario global del empleado.
+//
+// WarehouseId != null:
+//     salario específico del warehouse.
+//
+// Si estamos calculando payroll global (warehouseId == null),
+// SOLO usamos PerPeriod global para evitar duplicar salario.
+// ============================================================
 
-            if (perPeriodRate != null)
-            {
-                AddLine(
-                    payRun,
-                    "PerPeriod",
-                    driverId.ToString(),
-                    $"Fixed period pay ({weekStart:MMM dd} - {weekEnd:MMM dd, yyyy})",
-                    1m,
-                    perPeriodRate.BaseAmount,
-                    "PER_PERIOD",
-                    weekStart.ToDateTime(TimeOnly.MinValue)
-                );
+DriverRate? perPeriodRate = null;
 
-                gross += perPeriodRate.BaseAmount;
-            }
+if (!warehouseId.HasValue)
+{
+    // Payroll global de staff.
+    // El salario fijo SIEMPRE debe ser global.
+    perPeriodRate = rates
+        .Where(r =>
+            r.RateType == "PerPeriod" &&
+            r.WarehouseId == null &&
+            r.BaseAmount > 0 &&
+            r.EffectiveFrom <= weekEnd &&
+            (r.EffectiveTo == null || r.EffectiveTo >= weekStart))
+        .OrderByDescending(r => r.EffectiveFrom)
+        .FirstOrDefault();
+}
+else
+{
+    var wid = (int)warehouseId.Value;
+
+    // Payroll tradicional por warehouse.
+    // Primero específico; después global como fallback.
+    perPeriodRate = rates
+        .Where(r =>
+            r.RateType == "PerPeriod" &&
+            (r.WarehouseId == wid || r.WarehouseId == null) &&
+            r.BaseAmount > 0 &&
+            r.EffectiveFrom <= weekEnd &&
+            (r.EffectiveTo == null || r.EffectiveTo >= weekStart))
+        .OrderByDescending(r => r.WarehouseId == wid)
+        .ThenByDescending(r => r.EffectiveFrom)
+        .FirstOrDefault();
+}
+
+if (perPeriodRate != null)
+{
+    var isGlobalSalary = perPeriodRate.WarehouseId == null;
+
+    gross += AddLine(
+        payRun,
+        "PerPeriod",
+        $"PERIOD-{driverId}-{weekStart:yyyyMMdd}-{weekEnd:yyyyMMdd}",
+        isGlobalSalary
+            ? $"Fixed staff salary ({weekStart:MMM dd} - {weekEnd:MMM dd, yyyy})"
+            : $"Fixed warehouse salary - WH {perPeriodRate.WarehouseId} ({weekStart:MMM dd} - {weekEnd:MMM dd, yyyy})",
+        1m,
+        perPeriodRate.BaseAmount,
+        isGlobalSalary
+            ? "PER_PERIOD:GLOBAL"
+            : $"PER_PERIOD:WAREHOUSE:{perPeriodRate.WarehouseId}",
+        weekStart.ToDateTime(TimeOnly.MinValue)
+    );
+}
 
             // if (routeRate.RateType == "Mixed" && routeRate.DailyAmount > 0) {
  
@@ -1000,12 +1040,390 @@ namespace TToApp.Services.Payroll
 
         }
 
+public async Task<PayRun> ComputeStaffWeeklyAsync(
+    long companyId,
+    long staffId,
+    DateOnly weekStart,
+    DateOnly weekEnd,
+    long userId)
+{
+    // ============================================================
+    // 1. VALIDAR STAFF
+    // ============================================================
 
-        /// <summary>
-        /// Devuelve extras agrupados por regla:
-        /// - Por cada weight, toma la primera regla que matchee (ordenadas por Priority desc, MinWeight desc)
-        /// - Agrupa para generar líneas agregadas (qty por regla).
-        /// </summary>
+    var staffRoles = new[]
+    {
+        global::User.Role.Admin,
+        global::User.Role.Recruiter,
+        global::User.Role.Assistant
+    };
+
+    var staff = await _db.Users
+        .AsNoTracking()
+        .FirstOrDefaultAsync(u =>
+            u.Id == staffId &&
+            u.IsActive &&
+            u.CompanyId == companyId &&
+            u.UserRole.HasValue &&
+            staffRoles.Contains(u.UserRole.Value));
+
+    if (staff == null)
+    {
+        throw new InvalidOperationException(
+            $"Staff user {staffId} is not eligible for Staff Payroll.");
+    }
+
+
+    // ============================================================
+    // 2. PAY PERIOD GLOBAL DE STAFF
+    // ============================================================
+
+    var period = await _db.PayPeriods
+        .FirstOrDefaultAsync(p =>
+            p.CompanyId == companyId &&
+            p.WarehouseId == null &&
+            p.StartDate == weekStart &&
+            p.EndDate == weekEnd);
+
+    if (period == null)
+    {
+        period = new PayPeriod
+        {
+            CompanyId = companyId,
+            WarehouseId = null,
+
+            StartDate = weekStart,
+            EndDate = weekEnd,
+
+            Status = "Open",
+
+            CreatedBy = userId
+        };
+
+        _db.PayPeriods.Add(period);
+
+        await _db.SaveChangesAsync();
+    }
+
+    if (string.Equals(
+        period.Status,
+        "Locked",
+        StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException(
+            "Staff payroll period is locked.");
+    }
+
+
+    // ============================================================
+    // 3. RATE GLOBAL DE STAFF
+    //
+    // SOLAMENTE:
+    // WarehouseId = null
+    // RateType = PerPeriod
+    //
+    // NO buscamos rates de warehouse.
+    // ============================================================
+
+    var salaryRate = await _db.DriverRates
+        .AsNoTracking()
+        .Where(r =>
+            r.DriverId == staffId &&
+
+            r.WarehouseId == null &&
+
+            r.RateType == "PerPeriod" &&
+
+            r.BaseAmount > 0 &&
+
+            r.EffectiveFrom <= weekEnd &&
+
+            (r.EffectiveTo == null ||
+             r.EffectiveTo >= weekStart))
+        .OrderByDescending(r =>
+            r.EffectiveFrom)
+        .FirstOrDefaultAsync();
+
+    if (salaryRate == null)
+    {
+        throw new InvalidOperationException(
+            $"Staff {staffId} does not have a global PerPeriod salary rate.");
+    }
+
+
+    // ============================================================
+    // 4. PAYRUN
+    // ============================================================
+
+    var payRun = await _db.PayRuns
+        .FirstOrDefaultAsync(r =>
+            r.PayPeriodId == period.Id &&
+            r.DriverId == staffId);
+
+    if (payRun == null)
+    {
+        payRun = new PayRun
+        {
+            PayPeriodId = period.Id,
+
+            DriverId = (int)staffId,
+
+            Status = "Draft",
+
+            GrossAmount = 0m,
+
+            Adjustments = 0m
+        };
+
+        _db.PayRuns.Add(payRun);
+
+        await _db.SaveChangesAsync();
+    }
+    else
+    {
+        if (string.Equals(
+            payRun.Status,
+            "Approved",
+            StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Staff PayRun #{payRun.Id} is already approved.");
+        }
+
+
+        // ========================================================
+        // BORRAR LÍNEAS ANTERIORES
+        // ========================================================
+
+        var oldLines =
+            await _db.PayRunLines
+                .Where(l =>
+                    l.PayRunId == payRun.Id)
+                .ToListAsync();
+
+        _db.PayRunLines.RemoveRange(
+            oldLines);
+
+
+        // ========================================================
+        // BORRAR AJUSTES AUTOMÁTICOS
+        //
+        // Preservamos:
+        // Manual
+        // Bonus
+        // Penalty
+        // ========================================================
+
+        var oldAdjustments =
+            await _db.PayrollAdjustments
+                .Where(a =>
+                    a.PayRunId == payRun.Id &&
+
+                    a.Type != "Manual" &&
+                    a.Type != "Bonus" &&
+                    a.Type != "Penalty")
+                .ToListAsync();
+
+        _db.PayrollAdjustments.RemoveRange(
+            oldAdjustments);
+
+
+        // ========================================================
+        // REVERTIR PRÉSTAMOS DEL CÁLCULO ANTERIOR
+        // ========================================================
+
+        var oldRepayments =
+            await _db.LoanRepayments
+                .Where(r =>
+                    r.PayRunId == payRun.Id &&
+                    r.Status == "Applied")
+                .ToListAsync();
+
+        var groupedRepayments =
+            oldRepayments
+                .GroupBy(r => r.LoanId)
+                .Select(g => new
+                {
+                    LoanId = g.Key,
+                    Amount = g.Sum(x => x.Amount)
+                })
+                .ToList();
+
+        foreach (var repayment in groupedRepayments)
+        {
+            var loan =
+                await _db.EmployeeLoans
+                    .FirstOrDefaultAsync(l =>
+                        l.Id == repayment.LoanId);
+
+            if (loan != null)
+            {
+                loan.Balance += repayment.Amount;
+
+                if (
+                    loan.Balance > 0 &&
+                    loan.Status == "Completed"
+                )
+                {
+                    loan.Status = "Active";
+                }
+            }
+        }
+
+        _db.LoanRepayments.RemoveRange(
+            oldRepayments);
+
+
+        // ========================================================
+        // LIBERAR FINES ANTERIORES
+        // ========================================================
+
+        var chargedFines =
+            await _db.PayrollFines
+                .Where(f =>
+                    f.PayRunId == payRun.Id)
+                .ToListAsync();
+
+        foreach (var fine in chargedFines)
+        {
+            fine.ChargedAt = null;
+            fine.PayRunId = null;
+            fine.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync();
+    }
+
+
+    // ============================================================
+    // 5. GROSS = SOLO SALARIO STAFF
+    // ============================================================
+
+    decimal gross = 0m;
+
+    gross += AddLine(
+        payRun,
+
+        sourceType: "StaffSalary",
+
+        sourceId:
+            $"STAFF-SALARY-{staffId}-{weekStart:yyyyMMdd}",
+
+        description:
+            $"Staff salary - {weekStart:MMM dd} to {weekEnd:MMM dd, yyyy}",
+
+        qty: 1m,
+
+        rate:
+            salaryRate.BaseAmount,
+
+        tags:
+            $"STAFF_SALARY:RATE:{salaryRate.Id}",
+
+        routeDate:
+            weekStart.ToDateTime(
+                TimeOnly.MinValue)
+    );
+
+
+    // ============================================================
+    // 6. FINES
+    // ============================================================
+
+    var pendingFines =
+        await _db.PayrollFines
+            .Where(f =>
+                f.UserId == staffId &&
+                f.IsActive &&
+                f.Amount > 0 &&
+                f.ChargedAt == null &&
+                f.PayRunId == null)
+            .OrderBy(f =>
+                f.CreatedAt)
+            .ToListAsync();
+
+    foreach (var fine in pendingFines)
+    {
+        gross += AddLine(
+            payRun,
+
+            "Fine",
+
+            fine.PackageId.ToString(),
+
+            $"Fine {fine.Type} - {fine.Tracking}",
+
+            1m,
+
+            -fine.Amount,
+
+            "STAFF_FINE",
+
+            weekEnd.ToDateTime(
+                TimeOnly.MinValue)
+        );
+
+        fine.ChargedAt =
+            DateTime.UtcNow;
+
+        fine.PayRunId =
+            payRun.Id;
+
+        fine.UpdatedAt =
+            DateTime.UtcNow;
+    }
+
+
+    // ============================================================
+    // 7. GROSS
+    // ============================================================
+
+    payRun.GrossAmount = gross;
+
+
+    // ============================================================
+    // 8. LOANS
+    // ============================================================
+
+    await ApplyLoanDeductionsAsync(
+        payRun,
+        userId);
+
+    await _db.SaveChangesAsync();
+
+
+    // ============================================================
+    // 9. ADJUSTMENTS
+    // ============================================================
+
+    payRun.Adjustments =
+        await _db.PayrollAdjustments
+            .Where(a =>
+                a.PayRunId == payRun.Id)
+            .SumAsync(a =>
+                (decimal?)a.Amount)
+        ?? 0m;
+
+
+    // ============================================================
+    // 10. NET
+    // ============================================================
+
+    payRun.NetAmount =
+        payRun.GrossAmount +
+        payRun.Adjustments;
+
+    payRun.CalculatedAt =
+        DateTime.UtcNow;
+
+    payRun.CalculatedBy =
+        userId;
+
+
+    await _db.SaveChangesAsync();
+
+    return payRun;
+}
         private static List<(PayrollWeightRule Rule, decimal Count)> ComputeWeightExtras(
             List<decimal> weights,
             List<PayrollWeightRule> rules

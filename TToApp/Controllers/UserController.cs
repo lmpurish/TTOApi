@@ -300,7 +300,7 @@ public class UserController : ControllerBase
             LastName = userObj.LastName?.Trim() ?? "",
             Email = userObj.Email.Trim(),
             Password = PasswordHasher.HashPassword(userObj.Password),
-            UserRole = global::User.Role.Driver,
+            UserRole = global::User.Role.Applicant,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -1861,7 +1861,43 @@ if (user.UserRole.HasValue &&
                 dto.WarehouseId.Value,
                 identificationNumber: dto.IdentificationNumber);
         }
-        if (dto.UserRole.HasValue) user.UserRole = dto.UserRole.Value;
+        if (dto.UserRole.HasValue)
+        {
+            if (dto.UserRole.Value == global::User.Role.Driver && user.UserRole != global::User.Role.Driver)
+            {
+                var requiredDocs = await _authContext.CompanyDocumentTemplates
+                    .Where(t =>
+                        t.CompanyId == user.CompanyId &&
+                        t.IsActive &&
+                        t.RequireSignature &&
+                        (t.IsMandatoryForAllUsers ||
+                         (t.RequiredRolesCsv != null && t.RequiredRolesCsv.Contains("Driver"))))
+                    .Select(t => new { t.Id, t.Title })
+                    .ToListAsync();
+
+                if (requiredDocs.Any())
+                {
+                    var signedIds = await _authContext.UserDocumentSignatures
+                        .Where(s => s.UserId == user.Id)
+                        .Select(s => s.CompanyDocumentTemplateId)
+                        .ToListAsync();
+
+                    var unsigned = requiredDocs
+                        .Where(d => !signedIds.Contains(d.Id))
+                        .Select(d => d.Title)
+                        .ToList();
+
+                    if (unsigned.Any())
+                        return BadRequest(new
+                        {
+                            message = "User cannot be converted to Driver because they have unsigned required documents.",
+                            unsignedDocuments = unsigned
+                        });
+                }
+            }
+
+            user.UserRole = dto.UserRole.Value;
+        }
         if (dto.IdentificationNumber != null) user.IdentificationNumber = dto.IdentificationNumber;
         if (dto.Stage.HasValue) user.Stage = dto.Stage.Value;
 

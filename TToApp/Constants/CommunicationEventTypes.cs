@@ -8,5 +8,6 @@ namespace TToApp.Constants
     public const string AttendanceConfirmed = "AttendanceConfirmed";
     public const string PakagesInformationLoaded = "PakagesInformationLoaded";
     public const string RouteBonusPending = "RouteBonusPending";
+    public const string RouteCreated = "RouteCreated";
     }
 }

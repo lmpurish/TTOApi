@@ -1,5 +1,6 @@
 ﻿using ClosedXML.Excel;
 using TToApp.Services.CommunicationRecipient;
+using TToApp.Services.Sms;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -40,14 +41,16 @@ namespace TToApp.Controllers
         private readonly INotificationService _notificationService;
         private readonly AuditService _auditService;
         private readonly ICommunicationRecipientService _communicationRecipients;
+        private readonly IServiceProvider _serviceProvider;
 
-        public RoutesController(ApplicationDbContext context, EmailService emailService, INotificationService notificationService, AuditService auditService, ICommunicationRecipientService communicationRecipients)
+        public RoutesController(ApplicationDbContext context, EmailService emailService, INotificationService notificationService, AuditService auditService, ICommunicationRecipientService communicationRecipients, IServiceProvider serviceProvider)
         {
             _context = context;
             _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
             _notificationService = notificationService;
             _auditService = auditService;
             _communicationRecipients = communicationRecipients;
+            _serviceProvider = serviceProvider;
         }
 
         // GET: api/Routes
@@ -1180,7 +1183,7 @@ namespace TToApp.Controllers
         }
         [Authorize]
         [HttpPost]
-        public async Task<IActionResult> PostRoutes(RoutesDto routesDto)
+        public async Task<IActionResult> PostRoutes(RoutesDto routesDto, [FromQuery] bool notify = true)
         {
             if (routesDto == null)
                 return BadRequest("Datos inválidos.");
@@ -1225,6 +1228,134 @@ namespace TToApp.Controllers
                         routes.WarehouseId
                     })
                 });
+
+                if (notify && routes.WarehouseId.HasValue)
+                {
+                    try
+                    {
+                        var warehouseInfo = await _context.Warehouses
+                            .Where(w => w.Id == routes.WarehouseId.Value)
+                            .Select(w => new { w.CompanyId, w.City, w.State, CompanyName = w.Companie != null ? w.Companie.Name : "" })
+                            .FirstOrDefaultAsync();
+
+                        var zoneInfo = routes.ZoneId > 0
+                            ? await _context.Set<Zone>()
+                                .Where(z => z.Id == routes.ZoneId)
+                                .Select(z => new { z.ZoneCode, z.Area })
+                                .FirstOrDefaultAsync()
+                            : null;
+
+                        if (warehouseInfo?.CompanyId > 0)
+                        {
+                            var warehouseIds = new[] { routes.WarehouseId.Value };
+                            var warehouseName = $"{warehouseInfo.City}, {warehouseInfo.State}";
+                            var zoneArea = string.IsNullOrWhiteSpace(zoneInfo?.Area) ? "" : $" – {zoneInfo.Area}";
+
+                            var manager = await _context.Users
+                                .Where(u => u.WarehouseId == routes.WarehouseId.Value && u.UserRole == global::User.Role.Manager && u.IsActive)
+                                .Join(_context.UserProfiles, u => u.Id, p => p.Id, (u, p) => new { u.Name, u.LastName, u.Email, p.PhoneNumber })
+                                .FirstOrDefaultAsync();
+
+                            var managerName = manager != null ? $"{manager.Name} {manager.LastName}".Trim() : "Management Team";
+                            var managerInitial = managerName.Length > 0 ? managerName[0].ToString().ToUpper() : "M";
+                            var managerContactParts = new List<string>();
+                            if (!string.IsNullOrWhiteSpace(manager?.Email))
+                                managerContactParts.Add($"<a href=\"mailto:{manager.Email}\" style=\"color:#1d4ed8;text-decoration:none;\">{manager.Email}</a>");
+                            if (!string.IsNullOrWhiteSpace(manager?.PhoneNumber))
+                                managerContactParts.Add(manager.PhoneNumber);
+
+                            var placeholders = new Dictionary<string, string>
+                            {
+                                { "Date",           routes.Date.ToString("MMMM dd, yyyy", new CultureInfo("en-US")) },
+                                { "Stops",          routes.DeliveryStops.ToString() },
+                                { "Warehouse",      warehouseName },
+                                { "ZoneCode",       zoneInfo?.ZoneCode ?? "N/A" },
+                                { "ZoneArea",       zoneArea },
+                                { "PriceRoute",     routes.PriceRoute.HasValue ? routes.PriceRoute.Value.ToString("C") : "N/A" },
+                                { "PaymentType",    routes.PaymentType.ToString() },
+                                { "ManagerName",    managerName },
+                                { "ManagerInitial", managerInitial },
+                                { "ManagerContact", managerContactParts.Count > 0 ? string.Join(" &nbsp;·&nbsp; ", managerContactParts) : "" },
+                                { "CompanyName",    warehouseInfo.CompanyName ?? "" }
+                            };
+
+                            // Email
+                            var emailRecipients = await _communicationRecipients.GetRecipientsForEventAsync(
+                                warehouseInfo.CompanyId.Value, warehouseIds,
+                                CommunicationEventTypes.RouteCreated, CommunicationChannels.Email);
+
+                            foreach (var email in emailRecipients
+                                .Select(r => r.Email)
+                                .Where(e => !string.IsNullOrWhiteSpace(e))
+                                .Select(e => e!)
+                                .Distinct())
+                            {
+                                await _emailService.SendEmailAsync(
+                                    toEmail: email,
+                                    subject: $"New Route Available – {routes.Date:MM/dd/yyyy}",
+                                    "NewRouteNotification.cshtml",
+                                    placeholders: placeholders);
+                            }
+
+                            // SMS
+                            try
+                            {
+                                var smsRecipients = await _communicationRecipients.GetRecipientsForEventAsync(
+                                    warehouseInfo.CompanyId.Value, warehouseIds,
+                                    CommunicationEventTypes.RouteCreated, CommunicationChannels.SMS);
+
+                                Console.WriteLine($"[SMS] Recipients found: {smsRecipients.Count}");
+
+                                if (smsRecipients.Any())
+                                {
+                                    var smsService = _serviceProvider.GetService<ITtoSmsService>();
+                                    if (smsService == null)
+                                    {
+                                        Console.WriteLine("[SMS] ITtoSmsService could not be resolved — check RecruitAgent:BaseUrl config.");
+                                    }
+                                    else
+                                    {
+                                        var smsRecipientIds = smsRecipients.Select(r => r.Id).ToList();
+                                        var profiles = await _context.UserProfiles
+                                            .Where(p => smsRecipientIds.Contains(p.Id) && !string.IsNullOrWhiteSpace(p.PhoneNumber))
+                                            .Select(p => new { p.Id, p.PhoneNumber })
+                                            .ToListAsync();
+
+                                        Console.WriteLine($"[SMS] Profiles with phone: {profiles.Count}");
+
+                                        foreach (var profile in profiles)
+                                        {
+                                            await smsService.SendAsync(new SendSmsRequest
+                                            {
+                                                Kind = "new_route",
+                                                To = profile.PhoneNumber!,
+                                                ExternalId = $"route-{routes.Id}-{profile.Id}",
+                                                Vars = new Dictionary<string, string>
+                                                {
+                                                    { "date",         routes.Date.ToString("MM/dd/yyyy") },
+                                                    { "stops",        routes.DeliveryStops.ToString() },
+                                                    { "warehouse",    warehouseName },
+                                                    { "zone",         zoneInfo?.ZoneCode ?? "N/A" },
+                                                    { "price",        routes.PriceRoute.HasValue ? routes.PriceRoute.Value.ToString("C") : "N/A" },
+                                                    { "payment_type", routes.PaymentType.ToString() }
+                                                }
+                                            });
+                                            Console.WriteLine($"[SMS] Sent to userId={profile.Id} phone={profile.PhoneNumber}");
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception smsEx)
+                            {
+                                Console.WriteLine($"[SMS] Error: {smsEx.Message}");
+                            }
+                        }
+                    }
+                    catch (Exception emailEx)
+                    {
+                        Console.WriteLine($"[Email] Error: {emailEx.Message}");
+                    }
+                }
 
                 return Ok(new { message = "Route added successfully" });
             }

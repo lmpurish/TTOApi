@@ -5,6 +5,7 @@ namespace TToApp.Services.CommunicationRecipient
         Task<List<User>> GetRecipientsForEventAsync(int companyId,
             IEnumerable<int>? warehouseIds,
             string eventType,
-            string channel);
+            string channel,
+            bool includePermitUsers = true);
     }
 }

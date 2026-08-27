@@ -1183,7 +1183,7 @@ namespace TToApp.Controllers
         }
         [Authorize]
         [HttpPost]
-        public async Task<IActionResult> PostRoutes(RoutesDto routesDto, [FromQuery] bool notify = true)
+        public async Task<IActionResult> PostRoutes(RoutesDto routesDto, [FromQuery] bool notify = true, [FromQuery] bool notifySms = false)
         {
             if (routesDto == null)
                 return BadRequest("Datos inválidos.");
@@ -1282,7 +1282,7 @@ namespace TToApp.Controllers
                             // Email
                             var emailRecipients = await _communicationRecipients.GetRecipientsForEventAsync(
                                 warehouseInfo.CompanyId.Value, warehouseIds,
-                                CommunicationEventTypes.RouteCreated, CommunicationChannels.Email);
+                                CommunicationEventTypes.RouteCreated, CommunicationChannels.Email, includePermitUsers: false);
 
                             foreach (var email in emailRecipients
                                 .Select(r => r.Email)
@@ -1298,11 +1298,11 @@ namespace TToApp.Controllers
                             }
 
                             // SMS
-                            try
+                            if (notifySms) try
                             {
                                 var smsRecipients = await _communicationRecipients.GetRecipientsForEventAsync(
                                     warehouseInfo.CompanyId.Value, warehouseIds,
-                                    CommunicationEventTypes.RouteCreated, CommunicationChannels.SMS);
+                                    CommunicationEventTypes.RouteCreated, CommunicationChannels.SMS, includePermitUsers: false);
 
                                 Console.WriteLine($"[SMS] Recipients found: {smsRecipients.Count}");
 

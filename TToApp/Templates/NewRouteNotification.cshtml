@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New Route Available – Claim It Now</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #0f172a;
+            padding: 32px 16px;
+        }
+        .wrapper {
+            max-width: 580px;
+            margin: 0 auto;
+        }
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 60%, #2563eb 100%);
+            border-radius: 16px 16px 0 0;
+            padding: 36px 32px 28px;
+            text-align: center;
+        }
+        .header .badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.18);
+            color: #bfdbfe;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            padding: 5px 14px;
+            border-radius: 999px;
+            margin-bottom: 14px;
+        }
+        .header h1 {
+            color: #ffffff;
+            font-size: 26px;
+            font-weight: 800;
+            line-height: 1.2;
+            margin-bottom: 6px;
+        }
+        .header p {
+            color: #bfdbfe;
+            font-size: 14px;
+        }
+        /* Price hero */
+        .price-block {
+            background: #ffffff;
+            padding: 28px 32px 20px;
+            text-align: center;
+            border-left: 1px solid #e2e8f0;
+            border-right: 1px solid #e2e8f0;
+        }
+        .price-label {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #64748b;
+            margin-bottom: 4px;
+        }
+        .price-value {
+            font-size: 52px;
+            font-weight: 900;
+            color: #15803d;
+            line-height: 1;
+        }
+        .price-sub {
+            font-size: 13px;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+        /* Details card */
+        .details {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 24px 32px;
+        }
+        .details-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        .detail-item {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 14px 16px;
+        }
+        .detail-item .icon {
+            font-size: 20px;
+            margin-bottom: 4px;
+        }
+        .detail-item .label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: #94a3b8;
+            margin-bottom: 2px;
+        }
+        .detail-item .value {
+            font-size: 15px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+        /* Manager section */
+        .manager-section {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-top: none;
+            padding: 20px 32px;
+        }
+        .manager-section h3 {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #1d4ed8;
+            margin-bottom: 12px;
+        }
+        .manager-card {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+        .manager-avatar {
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1d4ed8, #2563eb);
+            color: #ffffff;
+            font-size: 18px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .manager-info .name {
+            font-size: 15px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+        .manager-info .contact {
+            font-size: 12px;
+            color: #475569;
+            margin-top: 2px;
+        }
+        .manager-info .contact a {
+            color: #1d4ed8;
+            text-decoration: none;
+        }
+        /* CTA */
+        .cta-section {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-top: none;
+            padding: 24px 32px;
+            text-align: center;
+        }
+        .cta-text {
+            font-size: 14px;
+            color: #475569;
+            margin-bottom: 16px;
+        }
+        .cta-urgency {
+            display: inline-block;
+            background: #fef3c7;
+            color: #92400e;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 6px 14px;
+            border-radius: 999px;
+            margin-bottom: 8px;
+        }
+        /* Footer */
+        .footer {
+            background: #1e293b;
+            border-radius: 0 0 16px 16px;
+            padding: 20px 32px;
+            text-align: center;
+        }
+        .footer p {
+            font-size: 12px;
+            color: #64748b;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+
+        <!-- Header -->
+        <div class="header">
+            <div class="badge">{{CompanyName}}</div>
+            <h1>A Route Just Opened Up</h1>
+            <p>Be the first to claim it — spots fill fast.</p>
+        </div>
+
+        <!-- Price Hero -->
+        <div class="price-block">
+            <div class="price-label">Route Value</div>
+            <div class="price-value">{{PriceRoute}}</div>
+            <div class="price-sub">{{PaymentType}} &nbsp;·&nbsp; {{Date}}</div>
+        </div>
+
+        <!-- Route Details -->
+        <div class="details">
+            <div class="details-grid">
+                <div class="detail-item">
+                    <div class="icon">📦</div>
+                    <div class="label">Delivery Stops</div>
+                    <div class="value">{{Stops}} stops</div>
+                </div>
+                <div class="detail-item">
+                    <div class="icon">📅</div>
+                    <div class="label">Date</div>
+                    <div class="value">{{Date}}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="icon">🏢</div>
+                    <div class="label">Warehouse</div>
+                    <div class="value">{{Warehouse}}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="icon">🗺️</div>
+                    <div class="label">Zone</div>
+                    <div class="value">{{ZoneCode}}{{ZoneArea}}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manager -->
+        <div class="manager-section">
+            <h3>Your Point of Contact</h3>
+            <div class="manager-card">
+                <div class="manager-avatar">{{ManagerInitial}}</div>
+                <div class="manager-info">
+                    <div class="name">{{ManagerName}}</div>
+                    <div class="contact">{{ManagerContact}}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="cta-section">
+            <div class="cta-urgency">⚡ Limited Availability</div>
+            <p class="cta-text">
+                Interested? Contact your manager or log in to the app to claim this route before it's gone.
+            </p>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>&copy; 2025 {{CompanyName}} &nbsp;·&nbsp; You're receiving this because you're registered at this warehouse.</p>
+        </div>
+
+    </div>
+</body>
+</html>

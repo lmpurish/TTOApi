@@ -41,6 +41,8 @@ namespace TToApp.Model
 
         public PaymentType PaymentType { get; set; } = PaymentType.PerStop;
 
+        public RouteType Type { get; set; } = RouteType.Delivery;
+
         public double? PriceRoute {  get; set; }
         public string? RouteCode{  get; set; }
 
@@ -52,6 +54,12 @@ namespace TToApp.Model
 
 
     
+
+    public enum RouteType
+    {
+        Delivery,
+        Pickup
+    }
 
     public enum RouteStatus
     {

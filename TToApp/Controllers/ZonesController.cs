@@ -35,32 +35,60 @@ namespace TToApp.Controllers
 
         [Authorize]
         [HttpGet("GetZonesByManager")]
-        public async Task<ActionResult<IEnumerable<Zone>>> GetZonesByManager([FromQuery] int? warehouseId)
+        public async Task<ActionResult<IEnumerable<Zone>>> GetZonesByManager(
+            [FromQuery] int? warehouseId)
         {
             if (!warehouseId.HasValue)
-                return BadRequest(new { Message = "El parámetro warehouseId es requerido." });
+            {
+                return BadRequest(new
+                {
+                    Message = "El parámetro warehouseId es requerido."
+                });
+            }
 
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
-            if (userIdClaim == null)
-                return Unauthorized("Usuario no autenticado");
 
-            int userID = int.Parse(userIdClaim.Value);
-            var user = await _context.Users.FindAsync(userID);
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+            {
+                return Unauthorized(new
+                {
+                    Message = "Usuario no autenticado."
+                });
+            }
+
+            var user = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId);
 
             if (user == null)
-                return Unauthorized("Usuario no encontrado");
+            {
+                return Unauthorized(new
+                {
+                    Message = "Usuario no encontrado."
+                });
+            }
 
-            // Validar si el usuario es Manager y está intentando acceder a otro almacén
+            // Si es Manager, validar EXCLUSIVAMENTE por UserWarehouses
             if (user.UserRole == global::User.Role.Manager)
             {
-                if (user.WarehouseId != warehouseId.Value)
+                var hasWarehouseAccess = await _context.UserWarehouses
+                    .AsNoTracking()
+                    .AnyAsync(uw =>
+                        uw.UserId == userId &&
+                        uw.WarehouseId == warehouseId.Value &&
+                        uw.IsActive
+                    );
+
+                if (!hasWarehouseAccess)
                 {
-                    return Unauthorized(new { Message = "No tiene permiso para ver zonas de este almacén." });
+                    return Forbid();
                 }
             }
 
             var zones = await _context.Zones
+                .AsNoTracking()
                 .Where(z => z.IdWarehouse == warehouseId.Value)
+                .OrderBy(z => z.Id)
                 .ToListAsync();
 
             return Ok(zones);

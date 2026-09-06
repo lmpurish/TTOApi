@@ -899,76 +899,212 @@ public async Task<ActionResult> GetEmployees()
     return Ok(result);
 }
 
-    [Authorize]
-    [HttpGet("active-by-warehouse")]
-    public async Task<IActionResult> GetActiveUsersByWarehouse([FromQuery] int? warehouseId)
+[Authorize]
+[HttpGet("active-by-warehouse")]
+public async Task<IActionResult> GetActiveUsersByWarehouse(
+    [FromQuery] int? warehouseId)
+{
+    // ============================================================
+    // 1. OBTENER USUARIO ACTUAL
+    // ============================================================
+
+    var userIdClaim =
+        User.FindFirst(ClaimTypes.NameIdentifier) ??
+        User.FindFirst("id");
+
+    if (userIdClaim == null)
     {
-        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier) ?? User.FindFirst("id");
-        if (userIdClaim == null)
-            return Unauthorized(new { message = "Invalid token" });
-
-        if (!int.TryParse(userIdClaim.Value, out int userId))
-            return Unauthorized(new { message = "Invalid user id" });
-
-        var currentUser = await _authContext.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Id == userId);
-
-        if (currentUser == null)
-            return NotFound(new { message = "User not found." });
-
-        int targetWarehouseId;
-
-        // Manager => usa su propio warehouse
-        if (currentUser.UserRole.HasValue && currentUser.UserRole.Value == global::User.Role.Manager)
+        return Unauthorized(new
         {
-            if (!currentUser.WarehouseId.HasValue)
-                return BadRequest(new { message = "Manager does not have an assigned warehouse." });
+            message = "Invalid token."
+        });
+    }
 
-            targetWarehouseId = currentUser.WarehouseId.Value;
-        }
-        // Admin / CompanyOwner / Assistant => warehouseId es obligatorio
-        else if (currentUser.UserRole.HasValue &&
-            (currentUser.UserRole.Value == global::User.Role.Admin ||
-             currentUser.UserRole.Value == global::User.Role.CompanyOwner ||
-             currentUser.UserRole.Value == global::User.Role.Assistant))
+    if (!int.TryParse(userIdClaim.Value, out int userId))
+    {
+        return Unauthorized(new
         {
-            if (!warehouseId.HasValue)
-                return BadRequest(new { message = "warehouseId is required for Admin, CompanyOwner, or Assistant." });
+            message = "Invalid user id."
+        });
+    }
 
-            targetWarehouseId = warehouseId.Value;
-        }
-        else
+    var currentUser = await _authContext.Users
+        .AsNoTracking()
+        .FirstOrDefaultAsync(u => u.Id == userId);
+
+    if (currentUser == null)
+    {
+        return NotFound(new
         {
-            return Forbid();
-        }
+            message = "User not found."
+        });
+    }
 
-        var users = await _authContext.Users
-            .AsNoTracking()
-            .Where(u =>
-                u.UserWarehouses.Any(uw => uw.WarehouseId == targetWarehouseId && uw.IsActive) &&
-                u.IsActive &&
-                u.UserRole != global::User.Role.Applicant)
-            .Select(u => new
-            {
-                u.Id,
-                u.Name,
-                u.LastName,
-                u.Email,
-                u.IsActive,
-                u.UserRole,
-                u.IdentificationNumber,
-                u.WarehouseId,
-                u.AvatarUrl,
+    if (!currentUser.UserRole.HasValue)
+    {
+        return Forbid();
+    }
 
-                Warehouse = u.Warehouse != null ? new
+
+    // ============================================================
+    // 2. WAREHOUSE OBLIGATORIO
+    // ============================================================
+
+    if (!warehouseId.HasValue || warehouseId.Value <= 0)
+    {
+        return BadRequest(new
+        {
+            message = "warehouseId is required."
+        });
+    }
+
+    int targetWarehouseId = warehouseId.Value;
+
+    var role = currentUser.UserRole.Value;
+
+
+    // ============================================================
+    // 3. VALIDAR ACCESO DEL MANAGER
+    //
+    // IMPORTANTE:
+    // NO usamos currentUser.WarehouseId.
+    // Todo sale de UserWarehouses.
+    // ============================================================
+
+    if (role == global::User.Role.Manager)
+    {
+        bool managerHasAccess =
+            await _authContext.UserWarehouses
+                .AsNoTracking()
+                .AnyAsync(uw =>
+                    uw.UserId == currentUser.Id &&
+                    uw.WarehouseId == targetWarehouseId &&
+                    uw.IsActive
+                );
+
+        if (!managerHasAccess)
+        {
+            return StatusCode(
+                StatusCodes.Status403Forbidden,
+                new
                 {
-                    u.Warehouse.Id,
-                    u.Warehouse.City,
-                    u.Warehouse.Company
-                } : null,
+                    message = "Manager does not have access to this warehouse."
+                }
+            );
+        }
+    }
 
-                Profile = u.Profile != null ? new
+    // ============================================================
+    // 4. ADMIN / OWNER / ASSISTANT
+    // ============================================================
+
+    else if (
+        role == global::User.Role.Admin ||
+        role == global::User.Role.CompanyOwner ||
+        role == global::User.Role.Assistant
+    )
+    {
+        // Permitido
+    }
+    else
+    {
+        return Forbid();
+    }
+
+
+    // ============================================================
+    // 5. VERIFICAR QUE EL WAREHOUSE EXISTA
+    // ============================================================
+
+    bool warehouseExists = await _authContext.Warehouses
+        .AsNoTracking()
+        .AnyAsync(w => w.Id == targetWarehouseId);
+
+    if (!warehouseExists)
+    {
+        return NotFound(new
+        {
+            message = "Warehouse not found."
+        });
+    }
+
+
+    // ============================================================
+    // 6. OBTENER USUARIOS
+    //
+    // AQUÍ ESTÁ EL CAMBIO IMPORTANTE.
+    //
+    // Consultamos Users pero la pertenencia al almacén se determina
+    // SOLAMENTE mediante UserWarehouses.
+    //
+    // NO Users.WarehouseId.
+    // ============================================================
+
+    var users = await _authContext.Users
+        .AsNoTracking()
+
+        .Where(u =>
+            u.IsActive &&
+
+            u.UserRole != global::User.Role.Applicant &&
+
+            u.UserWarehouses.Any(uw =>
+                uw.WarehouseId == targetWarehouseId &&
+                uw.IsActive
+            )
+        )
+
+        .Select(u => new
+        {
+            u.Id,
+            u.Name,
+            u.LastName,
+            u.Email,
+            u.IsActive,
+            u.UserRole,
+            u.IdentificationNumber,
+            u.AvatarUrl,
+
+            // ====================================================
+            // INFORMACIÓN DE LA ASIGNACIÓN AL WAREHOUSE SELECCIONADO
+            // ====================================================
+
+            WarehouseAssignment = u.UserWarehouses
+                .Where(uw =>
+                    uw.WarehouseId == targetWarehouseId &&
+                    uw.IsActive
+                )
+                .Select(uw => new
+                {
+                    uw.WarehouseId,
+                    uw.IsPrimary,
+                   
+                })
+                .FirstOrDefault(),
+
+            // ====================================================
+            // WAREHOUSE SELECCIONADO
+            // ====================================================
+
+            Warehouse = u.UserWarehouses
+                .Where(uw =>
+                    uw.WarehouseId == targetWarehouseId &&
+                    uw.IsActive
+                )
+                .Select(uw => new
+                {
+                    uw.Warehouse.Id,
+                    uw.Warehouse.City,
+                    uw.Warehouse.Company
+                })
+                .FirstOrDefault(),
+
+            // ====================================================
+            // PROFILE
+            // ====================================================
+
+            Profile = u.Profile != null
+                ? new
                 {
                     PhoneNumber = u.Profile.PhoneNumber,
                     ssn = u.Profile.SsnLast4,
@@ -977,22 +1113,76 @@ public async Task<ActionResult> GetEmployees()
                     city = u.Profile.City,
                     zipcode = u.Profile.ZipCode,
                     state = u.Profile.State
-                } : null,
+                }
+                : null,
 
-                Account = u.Accounts
-                    .Where(a => a.IsDefault)
-                    .Select(a => new
-                    {
-                        a.Id,
-                        accountNumber = a.AccountNumber,
-                        routingNumber = a.RoutingNumber
-                    })
-                    .FirstOrDefault()
-            })
-            .ToListAsync();
+            // ====================================================
+            // DEFAULT ACCOUNT
+            // ====================================================
 
-        return Ok(users);
+            Account = u.Accounts
+                .Where(a => a.IsDefault)
+                .Select(a => new
+                {
+                    a.Id,
+                    accountNumber = a.AccountNumber,
+                    routingNumber = a.RoutingNumber
+                })
+                .FirstOrDefault()
+        })
+
+        .OrderBy(u => u.Name)
+        .ThenBy(u => u.LastName)
+
+        .ToListAsync();
+
+
+    // ============================================================
+    // 7. DEBUG TEMPORAL
+    // ============================================================
+
+    Console.WriteLine(
+        "===================================================="
+    );
+
+    Console.WriteLine(
+        $"ACTIVE-BY-WAREHOUSE"
+    );
+
+    Console.WriteLine(
+        $"Current User: {currentUser.Id}"
+    );
+
+    Console.WriteLine(
+        $"Role: {role}"
+    );
+
+    Console.WriteLine(
+        $"Warehouse: {targetWarehouseId}"
+    );
+
+    Console.WriteLine(
+        $"Users returned: {users.Count}"
+    );
+
+    foreach (var user in users)
+    {
+        Console.WriteLine(
+            $"Driver: {user.Id} - {user.Name} {user.LastName} - {user.IdentificationNumber}"
+        );
     }
+
+    Console.WriteLine(
+        "===================================================="
+    );
+
+
+    // ============================================================
+    // 8. RESPUESTA
+    // ============================================================
+
+    return Ok(users);
+}
     [Authorize]
     [HttpGet("applicantByRol")]
     public async Task<ActionResult<List<User>>> GetApplicant()

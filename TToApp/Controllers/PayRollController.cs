@@ -121,6 +121,7 @@ namespace TToApp.Controllers
             public List<RoleExceptionSummaryDto> RoleExceptionByWarehouse { get; set; } = new();
             public List<UserMissingRateDto> UsersWithOutRate { get; set; } = new();
             public List<DriverStoppedWorkingDto> DriversWhoStoppedWorking { get; set; } = new();
+            public List<PayrollService.SkippedRouteInfo> SkippedPickupRoutes { get; set; } = new();
             public decimal TotalNet => Drivers.Sum(d => d.Net);
         }
 
@@ -828,6 +829,8 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
     // Por lo tanto no rompe el cálculo de los demás.
     // ============================================================
 
+    var allSkippedPickupRoutes = new List<PayrollService.SkippedRouteInfo>();
+
     foreach (var driverId in validRateDriverIds)
     {
         if (
@@ -842,7 +845,7 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
 
         try
         {
-            await _service
+            var batchResult = await _service
                 .ComputeDriverWeeklyAsync(
                     companyId:
                         req.CompanyId,
@@ -865,6 +868,8 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
                     filterZoneId:
                         req.ZoneId
                 );
+
+            allSkippedPickupRoutes.AddRange(batchResult.SkippedRoutes);
         }
         catch (Exception ex)
         {
@@ -1137,13 +1142,16 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
                 usersWithoutRates,
 
             DriversWhoStoppedWorking =
-                driversWhoStopped
+                driversWhoStopped,
+
+            SkippedPickupRoutes =
+                allSkippedPickupRoutes
         };
 
 
     return Ok(dto);
 }
-        
+
 [HttpPost("periods/compute/staff")]
 public async Task<ActionResult> ComputeStaffPeriod(
     [FromBody] ComputePeriodRequest req)
@@ -1668,23 +1676,22 @@ public async Task<ActionResult> ComputeStaffPeriod(
 
             try
             {
-                var payRun = await _service.ComputeDriverWeeklyAsync(
+                var result = await _service.ComputeDriverWeeklyAsync(
                     companyId: req.CompanyId,
                     driverId: req.DriverId,
                     weekStart: start,
                     weekEnd: end,
                     warehouseId: req.WarehouseId,
                     userId: req.UserId
-                // <-- AHORA pasamos zoneId
                 );
 
                 var full = await _db.PayRuns
                     .AsNoTracking()
                     .Include(x => x.Lines)
                     .Include(x => x.AdjustmentsList)
-                    .FirstAsync(x => x.Id == payRun.Id);
+                    .FirstAsync(x => x.Id == result.PayRun.Id);
 
-                return Ok(full);
+                return Ok(new { PayRun = full, SkippedRoutes = result.SkippedRoutes });
             }
             catch (InvalidOperationException ex)
             {

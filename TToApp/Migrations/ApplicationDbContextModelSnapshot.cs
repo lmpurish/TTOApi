@@ -52,7 +52,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Accounts", (string)null);
+                    b.ToTable("Accounts");
                 });
 
             modelBuilder.Entity("TToApp.Model.ApplicantActivity", b =>
@@ -86,7 +86,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("RecruiterId");
 
-                    b.ToTable("ApplicantActivity", (string)null);
+                    b.ToTable("ApplicantActivity");
                 });
 
             modelBuilder.Entity("TToApp.Model.AuditLogs", b =>
@@ -156,7 +156,7 @@ namespace TToApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("AuditLogs", (string)null);
+                    b.ToTable("AuditLogs");
                 });
 
             modelBuilder.Entity("TToApp.Model.CommunicationRecipientRule", b =>
@@ -201,7 +201,7 @@ namespace TToApp.Migrations
                         .IsUnique()
                         .HasFilter("[WarehouseId] IS NOT NULL");
 
-                    b.ToTable("CommunicationRecipientRules", (string)null);
+                    b.ToTable("CommunicationRecipientRules");
                 });
 
             modelBuilder.Entity("TToApp.Model.Company", b =>
@@ -263,7 +263,7 @@ namespace TToApp.Migrations
                         .IsUnique()
                         .HasFilter("[OwnerId] IS NOT NULL");
 
-                    b.ToTable("Companies", (string)null);
+                    b.ToTable("Companies");
                 });
 
             modelBuilder.Entity("TToApp.Model.CompanyDocumentAssignment", b =>
@@ -298,7 +298,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("CompanyDocumentAssignments", (string)null);
+                    b.ToTable("CompanyDocumentAssignments");
                 });
 
             modelBuilder.Entity("TToApp.Model.CompanyDocumentTemplate", b =>
@@ -371,7 +371,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("CompanyId", "IsActive", "Version");
 
-                    b.ToTable("CompanyDocumentTemplates", (string)null);
+                    b.ToTable("CompanyDocumentTemplates");
                 });
 
             modelBuilder.Entity("TToApp.Model.CompanyRevenue", b =>
@@ -439,7 +439,7 @@ namespace TToApp.Migrations
                         .IsUnique()
                         .HasFilter("[WarehouseId] IS NOT NULL");
 
-                    b.ToTable("CompanyRevenues", (string)null);
+                    b.ToTable("CompanyRevenues");
                 });
 
             modelBuilder.Entity("TToApp.Model.DriverPunch", b =>
@@ -491,7 +491,7 @@ namespace TToApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("DriverPunches", (string)null);
+                    b.ToTable("DriverPunches");
                 });
 
             modelBuilder.Entity("TToApp.Model.DriverRate", b =>
@@ -506,7 +506,7 @@ namespace TToApp.Migrations
                         .HasColumnType("decimal(10,2)");
 
                     b.Property<decimal?>("DailyAmount")
-                        .HasColumnType("decimal(18,2)");
+                        .HasColumnType("decimal(10,2)");
 
                     b.Property<long>("DriverId")
                         .HasColumnType("bigint");
@@ -518,7 +518,7 @@ namespace TToApp.Migrations
                         .HasColumnType("date");
 
                     b.Property<decimal?>("ExtraAmount")
-                        .HasColumnType("decimal(18,2)");
+                        .HasColumnType("decimal(10,2)");
 
                     b.Property<decimal?>("FailedStopPenalty")
                         .HasColumnType("decimal(10,2)");
@@ -634,7 +634,7 @@ namespace TToApp.Migrations
                         .IsUnique()
                         .HasFilter("[WarehouseId] IS NOT NULL");
 
-                    b.ToTable("EarlyWarnings", (string)null);
+                    b.ToTable("EarlyWarnings");
                 });
 
             modelBuilder.Entity("TToApp.Model.EarlyWarningConfig", b =>
@@ -674,7 +674,7 @@ namespace TToApp.Migrations
                         .IsUnique()
                         .HasFilter("[WarehouseId] IS NOT NULL");
 
-                    b.ToTable("EarlyWarningConfigs", (string)null);
+                    b.ToTable("EarlyWarningConfigs");
                 });
 
             modelBuilder.Entity("TToApp.Model.EmployeeLoan", b =>
@@ -733,7 +733,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("DriverId", "Status");
 
-                    b.ToTable("EmployeeLoans", (string)null);
+                    b.ToTable("EmployeeLoans");
                 });
 
             modelBuilder.Entity("TToApp.Model.Incidence", b =>
@@ -775,7 +775,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Incidences", (string)null);
+                    b.ToTable("Incidences");
                 });
 
             modelBuilder.Entity("TToApp.Model.LoanRepayment", b =>
@@ -824,7 +824,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("PayRunId", "DriverId");
 
-                    b.ToTable("LoanRepayments", (string)null);
+                    b.ToTable("LoanRepayments");
                 });
 
             modelBuilder.Entity("TToApp.Model.Metro", b =>
@@ -846,7 +846,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("CompanyId");
 
-                    b.ToTable("Metro", (string)null);
+                    b.ToTable("Metro");
                 });
 
             modelBuilder.Entity("TToApp.Model.Notification", b =>
@@ -889,7 +889,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Notifications", (string)null);
+                    b.ToTable("Notifications");
                 });
 
             modelBuilder.Entity("TToApp.Model.PackageReturnEvidence", b =>
@@ -956,7 +956,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("WarehouseId");
 
-                    b.ToTable("PackageReturnEvidences", (string)null);
+                    b.ToTable("PackageReturnEvidences");
                 });
 
             modelBuilder.Entity("TToApp.Model.PackageReviewEvidence", b =>
@@ -995,7 +995,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("PackageId");
 
-                    b.ToTable("PackageReviewEvidences", (string)null);
+                    b.ToTable("PackageReviewEvidences");
                 });
 
             modelBuilder.Entity("TToApp.Model.Packages", b =>
@@ -1071,7 +1071,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("RoutesId");
 
-                    b.ToTable("Packages", (string)null);
+                    b.ToTable("Packages");
                 });
 
             modelBuilder.Entity("TToApp.Model.PayPeriod", b =>
@@ -1510,7 +1510,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("WarehouseId");
 
-                    b.ToTable("Permits", (string)null);
+                    b.ToTable("Permits");
                 });
 
             modelBuilder.Entity("TToApp.Model.RentalRenter", b =>
@@ -1597,7 +1597,7 @@ namespace TToApp.Migrations
                         .IsUnique()
                         .HasFilter("[UserId] IS NOT NULL");
 
-                    b.ToTable("RentalRenters", (string)null);
+                    b.ToTable("RentalRenters");
                 });
 
             modelBuilder.Entity("TToApp.Model.RentalVehicle", b =>
@@ -1719,7 +1719,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("MetroId");
 
-                    b.ToTable("RentalVehicles", (string)null);
+                    b.ToTable("RentalVehicles");
                 });
 
             modelBuilder.Entity("TToApp.Model.RouteBonus", b =>
@@ -1769,7 +1769,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("RouteId");
 
-                    b.ToTable("RouteBonuses", (string)null);
+                    b.ToTable("RouteBonuses");
                 });
 
             modelBuilder.Entity("TToApp.Model.Routes", b =>
@@ -1813,6 +1813,9 @@ namespace TToApp.Migrations
                     b.Property<string>("RouteCode")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<int>("Type")
+                        .HasColumnType("int");
+
                     b.Property<int?>("UserId")
                         .HasColumnType("int");
 
@@ -1837,7 +1840,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("ZoneId");
 
-                    b.ToTable("Routes", (string)null);
+                    b.ToTable("Routes");
                 });
 
             modelBuilder.Entity("TToApp.Model.ScheduleEvent", b =>
@@ -1906,7 +1909,7 @@ namespace TToApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("ScheduleEvents", (string)null);
+                    b.ToTable("ScheduleEvents");
                 });
 
             modelBuilder.Entity("TToApp.Model.UserDocumentSignature", b =>
@@ -1971,7 +1974,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("CompanyId", "UserId", "CompanyDocumentTemplateId");
 
-                    b.ToTable("UserDocumentSignatures", (string)null);
+                    b.ToTable("UserDocumentSignatures");
                 });
 
             modelBuilder.Entity("TToApp.Model.UserProfile", b =>
@@ -2027,7 +2030,7 @@ namespace TToApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("UserProfiles", (string)null);
+                    b.ToTable("UserProfiles");
                 });
 
             modelBuilder.Entity("TToApp.Model.UserUiSettings", b =>
@@ -2065,7 +2068,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("UserUiSettings", (string)null);
+                    b.ToTable("UserUiSettings");
                 });
 
             modelBuilder.Entity("TToApp.Model.UserWarehouse", b =>
@@ -2096,7 +2099,7 @@ namespace TToApp.Migrations
                         .HasColumnType("bit");
 
                     b.Property<decimal?>("ManagerDailyRate")
-                        .HasColumnType("decimal(18,2)");
+                        .HasColumnType("decimal(10,2)");
 
                     b.Property<bool>("PaysManagerDailySalary")
                         .HasColumnType("bit");
@@ -2119,7 +2122,7 @@ namespace TToApp.Migrations
                     b.HasIndex("UserId", "WarehouseId")
                         .IsUnique();
 
-                    b.ToTable("UserWarehouses", (string)null);
+                    b.ToTable("UserWarehouses");
                 });
 
             modelBuilder.Entity("TToApp.Model.Vehicle", b =>
@@ -2154,7 +2157,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Vehicles", (string)null);
+                    b.ToTable("Vehicles");
                 });
 
             modelBuilder.Entity("TToApp.Model.VehicleImage", b =>
@@ -2199,7 +2202,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("VehicleId");
 
-                    b.ToTable("VehicleImages", (string)null);
+                    b.ToTable("VehicleImages");
                 });
 
             modelBuilder.Entity("TToApp.Model.VehicleRental", b =>
@@ -2263,7 +2266,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("RentalVehicleId");
 
-                    b.ToTable("VehicleRentals", null, t =>
+                    b.ToTable("VehicleRentals", t =>
                         {
                             t.HasCheckConstraint("CK_VehicleRentals_Mileage", "[EndMileage] IS NULL OR [EndMileage] >= [StartMileage]");
                         });
@@ -2349,7 +2352,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("MetroId");
 
-                    b.ToTable("Warehouses", (string)null);
+                    b.ToTable("Warehouses");
                 });
 
             modelBuilder.Entity("TToApp.Model.WarehouseMessageTemplate", b =>
@@ -2385,7 +2388,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("WarehouseId");
 
-                    b.ToTable("WarehouseMessageTemplates", (string)null);
+                    b.ToTable("WarehouseMessageTemplates");
                 });
 
             modelBuilder.Entity("TToApp.Model.ZonePayRule", b =>
@@ -2439,7 +2442,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("ZoneId", "PaymentType", "IsActive", "EffectiveFrom");
 
-                    b.ToTable("ZonePayRules", (string)null);
+                    b.ToTable("ZonePayRules");
                 });
 
             modelBuilder.Entity("TToApp.Model.ZoneWeightRule", b =>
@@ -2487,7 +2490,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("ZoneId", "IsActive", "Priority");
 
-                    b.ToTable("ZoneWeightRules", (string)null);
+                    b.ToTable("ZoneWeightRules");
                 });
 
             modelBuilder.Entity("User", b =>
@@ -2601,7 +2604,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("WarehouseId");
 
-                    b.ToTable("Users", (string)null);
+                    b.ToTable("Users");
                 });
 
             modelBuilder.Entity("Zone", b =>
@@ -2634,7 +2637,7 @@ namespace TToApp.Migrations
 
                     b.HasIndex("IdWarehouse");
 
-                    b.ToTable("Zones", (string)null);
+                    b.ToTable("Zones");
                 });
 
             modelBuilder.Entity("TToApp.Model.Accounts", b =>

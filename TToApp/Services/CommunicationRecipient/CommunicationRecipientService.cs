@@ -20,7 +20,8 @@ namespace TToApp.Services.CommunicationRecipient
             int companyId,
             IEnumerable<int>? warehouseIds,
             string eventType,
-            string channel)
+            string channel,
+            bool includePermitUsers = true)
         {
             var warehouseList = warehouseIds?.ToList();
 
@@ -39,6 +40,16 @@ namespace TToApp.Services.CommunicationRecipient
                 .Distinct()
                 .ToList();
 
+            // IDs linked via UserWarehouses many-to-many
+            var userWarehouseIds = warehouseList is { Count: > 0 }
+                ? await _db.UserWarehouses
+                    .AsNoTracking()
+                    .Where(uw => warehouseList.Contains(uw.WarehouseId))
+                    .Select(uw => uw.UserId)
+                    .Distinct()
+                    .ToListAsync()
+                : new List<int>();
+
             var roleUsers = roles.Any()
                 ? await _db.Users
                     .AsNoTracking()
@@ -52,13 +63,14 @@ namespace TToApp.Services.CommunicationRecipient
                             warehouseList == null ||
                             u.UserRole == User.Role.Admin ||
                             u.UserRole == User.Role.CompanyOwner ||
-                            u.WarehouseId.HasValue && warehouseList.Contains(u.WarehouseId.Value)
+                            (u.WarehouseId.HasValue && warehouseList.Contains(u.WarehouseId.Value)) ||
+                            userWarehouseIds.Contains(u.Id)
                         ))
                     .ToListAsync()
                 : new List<User>();
 
             var permitUsers = new List<User>();
-            if (warehouseList is { Count: > 0 })
+            if (includePermitUsers && warehouseList is { Count: > 0 })
             {
                 var permitUserIds = await _db.Permits
                     .AsNoTracking()

@@ -4906,7 +4906,8 @@ public async Task<IActionResult> UploadSwiftXDspSummary(
             return Ok(routes);
         }
 
-        [HttpGet("by-range")]
+    [Authorize]
+[HttpGet("by-range")]
 public async Task<IActionResult> GetRoutesByRange(
     [FromQuery] DateTime startDate,
     [FromQuery] DateTime endDate,
@@ -4927,46 +4928,48 @@ public async Task<IActionResult> GetRoutesByRange(
     }
 
     var routes = await query
-    .OrderBy(r => r.Date)
-    .ThenBy(r => r.ZoneId)
-    .ThenBy(r => r.RouteCode)
-    .Select(r => new
-    {
-        r.Id,
-        r.Date,
-        r.RouteCode,
-        r.routeStatus,
-        r.UserId,
-        User = r.User == null ? null : new
+        .OrderBy(r => r.Date)
+        .ThenBy(r => r.ZoneId)
+        .ThenBy(r => r.RouteCode)
+        .Select(r => new
         {
-            r.User.Id,
-            r.User.Name,
-            r.User.LastName
-        },
-        r.ZoneId,
-        Zone = r.Zone == null ? null : new
-        {
-            r.Zone.Id,
-            r.Zone.Area
-        },
-        r.Volumen,
-        r.DeliveryStops,
-        r.Attempts,
-        r.CNL,
-        r.CustomerOnTime,
-        r.BranchOnTime,
-       
-        r.PaymentType,
-        r.PriceRoute
-    })
-    .ToListAsync();
+            r.Id,
+            r.Date,
+            r.RouteCode,
+            r.routeStatus,
+            r.UserId,
 
-return Ok(routes);
+            User = r.User == null ? null : new
+            {
+                r.User.Id,
+                r.User.Name,
+                r.User.LastName
+            },
+
+            r.ZoneId,
+
+            Zone = r.Zone == null ? null : new
+            {
+                r.Zone.Id,
+                r.Zone.Area
+            },
+
+            r.WarehouseId,
+            r.Volumen,
+            r.DeliveryStops,
+            r.Attempts,
+            r.CNL,
+            r.CustomerOnTime,
+            r.BranchOnTime,
+            r.Type,
+            r.PaymentType,
+            r.PriceRoute
+        })
+        .ToListAsync();
 
     return Ok(routes);
 }
-    } 
-    
+
 }
 internal static class ClaimsExtensions
 {
@@ -5039,3 +5042,4 @@ public class RouteUpdateDto
     public decimal? PriceRoute { get; set; }
 }
 
+}

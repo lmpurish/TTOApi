@@ -35,9 +35,10 @@ public class UserController : ControllerBase
     private readonly INotificationService _notificationService;
     private readonly AuditService _auditService;
     private readonly IRecruitAgentService _recruitAgentService;
+    private readonly IConfiguration _configuration;
     public UserController(ApplicationDbContext authContext, EmailService emailService, IConfiguration config, WhatsAppService whatsAppService,
         IApplicantContactService applicantContactService, IJwtService jwtService, ISensitiveDataProtector protector, ICommunicationRecipientService communicationRecipients,
-        ILogger<UserController> logger, INotificationService notificationService, AuditService auditService, IRecruitAgentService recruitAgentService)
+        ILogger<UserController> logger, INotificationService notificationService, AuditService auditService, IRecruitAgentService recruitAgentService, IConfiguration configuration)
     {
         _authContext = authContext ?? throw new ArgumentNullException(nameof(authContext));
         _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
@@ -51,6 +52,7 @@ public class UserController : ControllerBase
         _logger = logger;
         _auditService = auditService;
         _recruitAgentService = recruitAgentService;
+        _configuration = configuration;
     }
 
     [HttpPost("authenticate")]
@@ -424,7 +426,7 @@ public class UserController : ControllerBase
                 { "Locality", whInfo.City ?? "" }
             };
 
-         
+
 
             var warehouseIds = await _authContext.Warehouses
                     .AsNoTracking()
@@ -451,7 +453,7 @@ public class UserController : ControllerBase
                     copy: false
                 );
             }
-         
+
 
             var okUserMail = await _emailService.SendEmailAsync(
                 toEmail: user.Email!,
@@ -641,548 +643,548 @@ public class UserController : ControllerBase
     }
 
     [Authorize]
-[HttpGet("driversByRol")]
-public async Task<ActionResult> GetEmployees()
-{
-    var userIdClaim =
-        User.FindFirst(ClaimTypes.NameIdentifier) ??
-        User.FindFirst("id");
-
-    if (userIdClaim == null)
+    [HttpGet("driversByRol")]
+    public async Task<ActionResult> GetEmployees()
     {
-        return Unauthorized(new
+        var userIdClaim =
+            User.FindFirst(ClaimTypes.NameIdentifier) ??
+            User.FindFirst("id");
+
+        if (userIdClaim == null)
         {
-            message = "Invalid token"
-        });
-    }
-
-    if (!int.TryParse(userIdClaim.Value, out int userId))
-    {
-        return Unauthorized(new
-        {
-            message = "Invalid user id"
-        });
-    }
-
-    var currentUser = await _authContext.Users
-        .AsNoTracking()
-        .FirstOrDefaultAsync(u => u.Id == userId);
-
-    if (currentUser == null)
-    {
-        return NotFound(new
-        {
-            message = "User not found."
-        });
-    }
-
-    IQueryable<User> query =
-        _authContext.Users.AsNoTracking();
-
-
-    // =========================================================
-    // ADMIN / COMPANY OWNER / ASSISTANT
-    // =========================================================
-
-    if (
-        currentUser.UserRole.HasValue &&
-        (
-            currentUser.UserRole.Value == global::User.Role.Admin ||
-            currentUser.UserRole.Value == global::User.Role.CompanyOwner ||
-            currentUser.UserRole.Value == global::User.Role.Assistant
-        )
-    )
-    {
-        query = query.Where(u =>
-            u.CompanyId == currentUser.CompanyId &&
-            u.UserRole != global::User.Role.Applicant
-        );
-    }
-
-    // =========================================================
-    // MANAGER
-    // =========================================================
-
-    else if (
-        currentUser.UserRole.HasValue &&
-        currentUser.UserRole.Value == global::User.Role.Manager
-    )
-    {
-        var managerWarehouseIds =
-            await _authContext.UserWarehouses
-                .AsNoTracking()
-                .Where(uw =>
-                    uw.UserId == currentUser.Id &&
-                    uw.IsActive
-                )
-                .Select(uw => uw.WarehouseId)
-                .Distinct()
-                .ToListAsync();
-
-        if (!managerWarehouseIds.Any())
-        {
-            return BadRequest(new
+            return Unauthorized(new
             {
-                message = "Manager does not have any assigned warehouses."
+                message = "Invalid token"
             });
         }
 
-        query = query.Where(u =>
-            u.CompanyId == currentUser.CompanyId &&
-            u.UserRole == global::User.Role.Driver &&
-            u.UserWarehouses.Any(uw =>
-                uw.IsActive &&
-                managerWarehouseIds.Contains(uw.WarehouseId)
-            )
-        );
-    }
-
-    // =========================================================
-    // NO ACCESS
-    // =========================================================
-
-    else
-    {
-        return Forbid();
-    }
-
-
-    // =========================================================
-    // RESULT
-    // =========================================================
-
-    var result = await query
-        .OrderBy(u => u.Name)
-        .ThenBy(u => u.LastName)
-        .Select(u => new
+        if (!int.TryParse(userIdClaim.Value, out int userId))
         {
-            // =================================================
-            // USER
-            // =================================================
-
-            u.Id,
-            u.Name,
-            u.LastName,
-            u.Email,
-            u.IsActive,
-            u.UserRole,
-            u.IdentificationNumber,
-            u.WarehouseId,
-            u.CompanyId,
-            u.MetroId,
-            u.AvatarUrl,
-
-            // Si tienes estos campos en User
-            u.CreatedAt,
-            u.UpdatedAt,
-
-            // =================================================
-            // PRIMARY / OLD WAREHOUSE
-            // =================================================
-
-            Warehouse = u.Warehouse != null
-                ? new
-                {
-                    u.Warehouse.Id,
-                    u.Warehouse.City,
-                    u.Warehouse.State,
-                    u.Warehouse.Company,
-                    u.Warehouse.Address,
-                    u.Warehouse.ZipCode,
-                    u.Warehouse.FacilityCode
-                }
-                : null,
-
-
-            // =================================================
-            // ALL USER WAREHOUSES
-            // =================================================
-
-            Warehouses = u.UserWarehouses
-                .OrderByDescending(uw => uw.IsPrimary)
-                .ThenBy(uw => uw.Warehouse.City)
-                .Select(uw => new
-                {
-                    // UserWarehouse Id
-                    uw.Id,
-
-                    uw.UserId,
-                    uw.WarehouseId,
-
-                    // Assignment
-                    uw.IsPrimary,
-                    uw.IsActive,
-                  
-
-                    // =========================================
-                    // MANAGER PAYMENT
-                    // =========================================
-
-                    uw.PaysManagerDailySalary,
-                    uw.ManagerDailyRate,
-
-                    // =========================================
-                    // WAREHOUSE
-                    // =========================================
-
-                    Warehouse = new
-                    {
-                        uw.Warehouse.Id,
-                        uw.Warehouse.Company,
-                        uw.Warehouse.City,
-                        uw.Warehouse.State,
-                        uw.Warehouse.Address,
-                        uw.Warehouse.ZipCode,
-                        uw.Warehouse.FacilityCode,
-                        uw.Warehouse.IsActive
-                    }
-                })
-                .ToList(),
-
-
-            // =================================================
-            // PROFILE
-            // =================================================
-
-            Profile = u.Profile != null
-                ? new
-                {
-                    PhoneNumber = u.Profile.PhoneNumber,
-
-                    ssn = u.Profile.SsnLast4,
-                    ssnUrl = u.Profile.SocialSecurityUrl,
-
-                    address = u.Profile.Address,
-                    city = u.Profile.City,
-                    zipcode = u.Profile.ZipCode,
-                    state = u.Profile.State,
-
-                    // Si tu Profile lo tiene
-                    dob = u.Profile.DateOfBirth
-                }
-                : null,
-
-
-            // =================================================
-            // DEFAULT ACCOUNT
-            // =================================================
-
-            Account = u.Accounts
-                .Where(a => a.IsDefault)
-                .Select(a => new
-                {
-                    a.Id,
-                    accountNumber = a.AccountNumber,
-                    routingNumber = a.RoutingNumber,
-                    a.IsDefault
-                })
-                .FirstOrDefault(),
-
-
-            // =================================================
-            // ALL ACCOUNTS
-            // =================================================
-
-            Accounts = u.Accounts
-                .Select(a => new
-                {
-                    a.Id,
-                    accountNumber = a.AccountNumber,
-                    routingNumber = a.RoutingNumber,
-                    a.IsDefault
-                })
-                .ToList()
-
-        })
-        .ToListAsync();
-
-    return Ok(result);
-}
-
-[Authorize]
-[HttpGet("active-by-warehouse")]
-public async Task<IActionResult> GetActiveUsersByWarehouse(
-    [FromQuery] int? warehouseId)
-{
-    // ============================================================
-    // 1. OBTENER USUARIO ACTUAL
-    // ============================================================
-
-    var userIdClaim =
-        User.FindFirst(ClaimTypes.NameIdentifier) ??
-        User.FindFirst("id");
-
-    if (userIdClaim == null)
-    {
-        return Unauthorized(new
-        {
-            message = "Invalid token."
-        });
-    }
-
-    if (!int.TryParse(userIdClaim.Value, out int userId))
-    {
-        return Unauthorized(new
-        {
-            message = "Invalid user id."
-        });
-    }
-
-    var currentUser = await _authContext.Users
-        .AsNoTracking()
-        .FirstOrDefaultAsync(u => u.Id == userId);
-
-    if (currentUser == null)
-    {
-        return NotFound(new
-        {
-            message = "User not found."
-        });
-    }
-
-    if (!currentUser.UserRole.HasValue)
-    {
-        return Forbid();
-    }
-
-
-    // ============================================================
-    // 2. WAREHOUSE OBLIGATORIO
-    // ============================================================
-
-    if (!warehouseId.HasValue || warehouseId.Value <= 0)
-    {
-        return BadRequest(new
-        {
-            message = "warehouseId is required."
-        });
-    }
-
-    int targetWarehouseId = warehouseId.Value;
-
-    var role = currentUser.UserRole.Value;
-
-
-    // ============================================================
-    // 3. VALIDAR ACCESO DEL MANAGER
-    //
-    // IMPORTANTE:
-    // NO usamos currentUser.WarehouseId.
-    // Todo sale de UserWarehouses.
-    // ============================================================
-
-    if (role == global::User.Role.Manager)
-    {
-        bool managerHasAccess =
-            await _authContext.UserWarehouses
-                .AsNoTracking()
-                .AnyAsync(uw =>
-                    uw.UserId == currentUser.Id &&
-                    uw.WarehouseId == targetWarehouseId &&
-                    uw.IsActive
-                );
-
-        if (!managerHasAccess)
-        {
-            return StatusCode(
-                StatusCodes.Status403Forbidden,
-                new
-                {
-                    message = "Manager does not have access to this warehouse."
-                }
-            );
+            return Unauthorized(new
+            {
+                message = "Invalid user id"
+            });
         }
-    }
 
-    // ============================================================
-    // 4. ADMIN / OWNER / ASSISTANT
-    // ============================================================
+        var currentUser = await _authContext.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == userId);
 
-    else if (
-        role == global::User.Role.Admin ||
-        role == global::User.Role.CompanyOwner ||
-        role == global::User.Role.Assistant
-    )
-    {
-        // Permitido
-    }
-    else
-    {
-        return Forbid();
-    }
-
-
-    // ============================================================
-    // 5. VERIFICAR QUE EL WAREHOUSE EXISTA
-    // ============================================================
-
-    bool warehouseExists = await _authContext.Warehouses
-        .AsNoTracking()
-        .AnyAsync(w => w.Id == targetWarehouseId);
-
-    if (!warehouseExists)
-    {
-        return NotFound(new
+        if (currentUser == null)
         {
-            message = "Warehouse not found."
-        });
-    }
+            return NotFound(new
+            {
+                message = "User not found."
+            });
+        }
+
+        IQueryable<User> query =
+            _authContext.Users.AsNoTracking();
 
 
-    // ============================================================
-    // 6. OBTENER USUARIOS
-    //
-    // AQUÍ ESTÁ EL CAMBIO IMPORTANTE.
-    //
-    // Consultamos Users pero la pertenencia al almacén se determina
-    // SOLAMENTE mediante UserWarehouses.
-    //
-    // NO Users.WarehouseId.
-    // ============================================================
+        // =========================================================
+        // ADMIN / COMPANY OWNER / ASSISTANT
+        // =========================================================
 
-    var users = await _authContext.Users
-        .AsNoTracking()
-
-        .Where(u =>
-            u.IsActive &&
-
-            u.UserRole != global::User.Role.Applicant &&
-
-            u.UserWarehouses.Any(uw =>
-                uw.WarehouseId == targetWarehouseId &&
-                uw.IsActive
+        if (
+            currentUser.UserRole.HasValue &&
+            (
+                currentUser.UserRole.Value == global::User.Role.Admin ||
+                currentUser.UserRole.Value == global::User.Role.CompanyOwner ||
+                currentUser.UserRole.Value == global::User.Role.Assistant
             )
         )
-
-        .Select(u => new
         {
-            u.Id,
-            u.Name,
-            u.LastName,
-            u.Email,
-            u.IsActive,
-            u.UserRole,
-            u.IdentificationNumber,
-            u.AvatarUrl,
+            query = query.Where(u =>
+                u.CompanyId == currentUser.CompanyId &&
+                u.UserRole != global::User.Role.Applicant
+            );
+        }
 
-            // ====================================================
-            // INFORMACIÓN DE LA ASIGNACIÓN AL WAREHOUSE SELECCIONADO
-            // ====================================================
+        // =========================================================
+        // MANAGER
+        // =========================================================
 
-            WarehouseAssignment = u.UserWarehouses
-                .Where(uw =>
-                    uw.WarehouseId == targetWarehouseId &&
-                    uw.IsActive
+        else if (
+            currentUser.UserRole.HasValue &&
+            currentUser.UserRole.Value == global::User.Role.Manager
+        )
+        {
+            var managerWarehouseIds =
+                await _authContext.UserWarehouses
+                    .AsNoTracking()
+                    .Where(uw =>
+                        uw.UserId == currentUser.Id &&
+                        uw.IsActive
+                    )
+                    .Select(uw => uw.WarehouseId)
+                    .Distinct()
+                    .ToListAsync();
+
+            if (!managerWarehouseIds.Any())
+            {
+                return BadRequest(new
+                {
+                    message = "Manager does not have any assigned warehouses."
+                });
+            }
+
+            query = query.Where(u =>
+                u.CompanyId == currentUser.CompanyId &&
+                u.UserRole == global::User.Role.Driver &&
+                u.UserWarehouses.Any(uw =>
+                    uw.IsActive &&
+                    managerWarehouseIds.Contains(uw.WarehouseId)
                 )
-                .Select(uw => new
-                {
-                    uw.WarehouseId,
-                    uw.IsPrimary,
-                   
-                })
-                .FirstOrDefault(),
+            );
+        }
 
-            // ====================================================
-            // WAREHOUSE SELECCIONADO
-            // ====================================================
+        // =========================================================
+        // NO ACCESS
+        // =========================================================
 
-            Warehouse = u.UserWarehouses
-                .Where(uw =>
-                    uw.WarehouseId == targetWarehouseId &&
-                    uw.IsActive
-                )
-                .Select(uw => new
-                {
-                    uw.Warehouse.Id,
-                    uw.Warehouse.City,
-                    uw.Warehouse.Company
-                })
-                .FirstOrDefault(),
-
-            // ====================================================
-            // PROFILE
-            // ====================================================
-
-            Profile = u.Profile != null
-                ? new
-                {
-                    PhoneNumber = u.Profile.PhoneNumber,
-                    ssn = u.Profile.SsnLast4,
-                    ssnUrl = u.Profile.SocialSecurityUrl,
-                    address = u.Profile.Address,
-                    city = u.Profile.City,
-                    zipcode = u.Profile.ZipCode,
-                    state = u.Profile.State
-                }
-                : null,
-
-            // ====================================================
-            // DEFAULT ACCOUNT
-            // ====================================================
-
-            Account = u.Accounts
-                .Where(a => a.IsDefault)
-                .Select(a => new
-                {
-                    a.Id,
-                    accountNumber = a.AccountNumber,
-                    routingNumber = a.RoutingNumber
-                })
-                .FirstOrDefault()
-        })
-
-        .OrderBy(u => u.Name)
-        .ThenBy(u => u.LastName)
-
-        .ToListAsync();
+        else
+        {
+            return Forbid();
+        }
 
 
-    // ============================================================
-    // 7. DEBUG TEMPORAL
-    // ============================================================
+        // =========================================================
+        // RESULT
+        // =========================================================
 
-    Console.WriteLine(
-        "===================================================="
-    );
+        var result = await query
+            .OrderBy(u => u.Name)
+            .ThenBy(u => u.LastName)
+            .Select(u => new
+            {
+                // =================================================
+                // USER
+                // =================================================
 
-    Console.WriteLine(
-        $"ACTIVE-BY-WAREHOUSE"
-    );
+                u.Id,
+                u.Name,
+                u.LastName,
+                u.Email,
+                u.IsActive,
+                u.UserRole,
+                u.IdentificationNumber,
+                u.WarehouseId,
+                u.CompanyId,
+                u.MetroId,
+                u.AvatarUrl,
 
-    Console.WriteLine(
-        $"Current User: {currentUser.Id}"
-    );
+                // Si tienes estos campos en User
+                u.CreatedAt,
+                u.UpdatedAt,
 
-    Console.WriteLine(
-        $"Role: {role}"
-    );
+                // =================================================
+                // PRIMARY / OLD WAREHOUSE
+                // =================================================
 
-    Console.WriteLine(
-        $"Warehouse: {targetWarehouseId}"
-    );
+                Warehouse = u.Warehouse != null
+                    ? new
+                    {
+                        u.Warehouse.Id,
+                        u.Warehouse.City,
+                        u.Warehouse.State,
+                        u.Warehouse.Company,
+                        u.Warehouse.Address,
+                        u.Warehouse.ZipCode,
+                        u.Warehouse.FacilityCode
+                    }
+                    : null,
 
-    Console.WriteLine(
-        $"Users returned: {users.Count}"
-    );
 
-    foreach (var user in users)
-    {
-        Console.WriteLine(
-            $"Driver: {user.Id} - {user.Name} {user.LastName} - {user.IdentificationNumber}"
-        );
+                // =================================================
+                // ALL USER WAREHOUSES
+                // =================================================
+
+                Warehouses = u.UserWarehouses
+                    .OrderByDescending(uw => uw.IsPrimary)
+                    .ThenBy(uw => uw.Warehouse.City)
+                    .Select(uw => new
+                    {
+                        // UserWarehouse Id
+                        uw.Id,
+
+                        uw.UserId,
+                        uw.WarehouseId,
+
+                        // Assignment
+                        uw.IsPrimary,
+                        uw.IsActive,
+
+
+                        // =========================================
+                        // MANAGER PAYMENT
+                        // =========================================
+
+                        uw.PaysManagerDailySalary,
+                        uw.ManagerDailyRate,
+
+                        // =========================================
+                        // WAREHOUSE
+                        // =========================================
+
+                        Warehouse = new
+                        {
+                            uw.Warehouse.Id,
+                            uw.Warehouse.Company,
+                            uw.Warehouse.City,
+                            uw.Warehouse.State,
+                            uw.Warehouse.Address,
+                            uw.Warehouse.ZipCode,
+                            uw.Warehouse.FacilityCode,
+                            uw.Warehouse.IsActive
+                        }
+                    })
+                    .ToList(),
+
+
+                // =================================================
+                // PROFILE
+                // =================================================
+
+                Profile = u.Profile != null
+                    ? new
+                    {
+                        PhoneNumber = u.Profile.PhoneNumber,
+
+                        ssn = u.Profile.SsnLast4,
+                        ssnUrl = u.Profile.SocialSecurityUrl,
+
+                        address = u.Profile.Address,
+                        city = u.Profile.City,
+                        zipcode = u.Profile.ZipCode,
+                        state = u.Profile.State,
+
+                        // Si tu Profile lo tiene
+                        dob = u.Profile.DateOfBirth
+                    }
+                    : null,
+
+
+                // =================================================
+                // DEFAULT ACCOUNT
+                // =================================================
+
+                Account = u.Accounts
+                    .Where(a => a.IsDefault)
+                    .Select(a => new
+                    {
+                        a.Id,
+                        accountNumber = a.AccountNumber,
+                        routingNumber = a.RoutingNumber,
+                        a.IsDefault
+                    })
+                    .FirstOrDefault(),
+
+
+                // =================================================
+                // ALL ACCOUNTS
+                // =================================================
+
+                Accounts = u.Accounts
+                    .Select(a => new
+                    {
+                        a.Id,
+                        accountNumber = a.AccountNumber,
+                        routingNumber = a.RoutingNumber,
+                        a.IsDefault
+                    })
+                    .ToList()
+
+            })
+            .ToListAsync();
+
+        return Ok(result);
     }
 
-    Console.WriteLine(
-        "===================================================="
-    );
+    [Authorize]
+    [HttpGet("active-by-warehouse")]
+    public async Task<IActionResult> GetActiveUsersByWarehouse(
+        [FromQuery] int? warehouseId)
+    {
+        // ============================================================
+        // 1. OBTENER USUARIO ACTUAL
+        // ============================================================
+
+        var userIdClaim =
+            User.FindFirst(ClaimTypes.NameIdentifier) ??
+            User.FindFirst("id");
+
+        if (userIdClaim == null)
+        {
+            return Unauthorized(new
+            {
+                message = "Invalid token."
+            });
+        }
+
+        if (!int.TryParse(userIdClaim.Value, out int userId))
+        {
+            return Unauthorized(new
+            {
+                message = "Invalid user id."
+            });
+        }
+
+        var currentUser = await _authContext.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (currentUser == null)
+        {
+            return NotFound(new
+            {
+                message = "User not found."
+            });
+        }
+
+        if (!currentUser.UserRole.HasValue)
+        {
+            return Forbid();
+        }
 
 
-    // ============================================================
-    // 8. RESPUESTA
-    // ============================================================
+        // ============================================================
+        // 2. WAREHOUSE OBLIGATORIO
+        // ============================================================
 
-    return Ok(users);
-}
+        if (!warehouseId.HasValue || warehouseId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "warehouseId is required."
+            });
+        }
+
+        int targetWarehouseId = warehouseId.Value;
+
+        var role = currentUser.UserRole.Value;
+
+
+        // ============================================================
+        // 3. VALIDAR ACCESO DEL MANAGER
+        //
+        // IMPORTANTE:
+        // NO usamos currentUser.WarehouseId.
+        // Todo sale de UserWarehouses.
+        // ============================================================
+
+        if (role == global::User.Role.Manager)
+        {
+            bool managerHasAccess =
+                await _authContext.UserWarehouses
+                    .AsNoTracking()
+                    .AnyAsync(uw =>
+                        uw.UserId == currentUser.Id &&
+                        uw.WarehouseId == targetWarehouseId &&
+                        uw.IsActive
+                    );
+
+            if (!managerHasAccess)
+            {
+                return StatusCode(
+                    StatusCodes.Status403Forbidden,
+                    new
+                    {
+                        message = "Manager does not have access to this warehouse."
+                    }
+                );
+            }
+        }
+
+        // ============================================================
+        // 4. ADMIN / OWNER / ASSISTANT
+        // ============================================================
+
+        else if (
+            role == global::User.Role.Admin ||
+            role == global::User.Role.CompanyOwner ||
+            role == global::User.Role.Assistant
+        )
+        {
+            // Permitido
+        }
+        else
+        {
+            return Forbid();
+        }
+
+
+        // ============================================================
+        // 5. VERIFICAR QUE EL WAREHOUSE EXISTA
+        // ============================================================
+
+        bool warehouseExists = await _authContext.Warehouses
+            .AsNoTracking()
+            .AnyAsync(w => w.Id == targetWarehouseId);
+
+        if (!warehouseExists)
+        {
+            return NotFound(new
+            {
+                message = "Warehouse not found."
+            });
+        }
+
+
+        // ============================================================
+        // 6. OBTENER USUARIOS
+        //
+        // AQUÍ ESTÁ EL CAMBIO IMPORTANTE.
+        //
+        // Consultamos Users pero la pertenencia al almacén se determina
+        // SOLAMENTE mediante UserWarehouses.
+        //
+        // NO Users.WarehouseId.
+        // ============================================================
+
+        var users = await _authContext.Users
+            .AsNoTracking()
+
+            .Where(u =>
+                u.IsActive &&
+
+                u.UserRole != global::User.Role.Applicant &&
+
+                u.UserWarehouses.Any(uw =>
+                    uw.WarehouseId == targetWarehouseId &&
+                    uw.IsActive
+                )
+            )
+
+            .Select(u => new
+            {
+                u.Id,
+                u.Name,
+                u.LastName,
+                u.Email,
+                u.IsActive,
+                u.UserRole,
+                u.IdentificationNumber,
+                u.AvatarUrl,
+
+                // ====================================================
+                // INFORMACIÓN DE LA ASIGNACIÓN AL WAREHOUSE SELECCIONADO
+                // ====================================================
+
+                WarehouseAssignment = u.UserWarehouses
+                    .Where(uw =>
+                        uw.WarehouseId == targetWarehouseId &&
+                        uw.IsActive
+                    )
+                    .Select(uw => new
+                    {
+                        uw.WarehouseId,
+                        uw.IsPrimary,
+
+                    })
+                    .FirstOrDefault(),
+
+                // ====================================================
+                // WAREHOUSE SELECCIONADO
+                // ====================================================
+
+                Warehouse = u.UserWarehouses
+                    .Where(uw =>
+                        uw.WarehouseId == targetWarehouseId &&
+                        uw.IsActive
+                    )
+                    .Select(uw => new
+                    {
+                        uw.Warehouse.Id,
+                        uw.Warehouse.City,
+                        uw.Warehouse.Company
+                    })
+                    .FirstOrDefault(),
+
+                // ====================================================
+                // PROFILE
+                // ====================================================
+
+                Profile = u.Profile != null
+                    ? new
+                    {
+                        PhoneNumber = u.Profile.PhoneNumber,
+                        ssn = u.Profile.SsnLast4,
+                        ssnUrl = u.Profile.SocialSecurityUrl,
+                        address = u.Profile.Address,
+                        city = u.Profile.City,
+                        zipcode = u.Profile.ZipCode,
+                        state = u.Profile.State
+                    }
+                    : null,
+
+                // ====================================================
+                // DEFAULT ACCOUNT
+                // ====================================================
+
+                Account = u.Accounts
+                    .Where(a => a.IsDefault)
+                    .Select(a => new
+                    {
+                        a.Id,
+                        accountNumber = a.AccountNumber,
+                        routingNumber = a.RoutingNumber
+                    })
+                    .FirstOrDefault()
+            })
+
+            .OrderBy(u => u.Name)
+            .ThenBy(u => u.LastName)
+
+            .ToListAsync();
+
+
+        // ============================================================
+        // 7. DEBUG TEMPORAL
+        // ============================================================
+
+        Console.WriteLine(
+            "===================================================="
+        );
+
+        Console.WriteLine(
+            $"ACTIVE-BY-WAREHOUSE"
+        );
+
+        Console.WriteLine(
+            $"Current User: {currentUser.Id}"
+        );
+
+        Console.WriteLine(
+            $"Role: {role}"
+        );
+
+        Console.WriteLine(
+            $"Warehouse: {targetWarehouseId}"
+        );
+
+        Console.WriteLine(
+            $"Users returned: {users.Count}"
+        );
+
+        foreach (var user in users)
+        {
+            Console.WriteLine(
+                $"Driver: {user.Id} - {user.Name} {user.LastName} - {user.IdentificationNumber}"
+            );
+        }
+
+        Console.WriteLine(
+            "===================================================="
+        );
+
+
+        // ============================================================
+        // 8. RESPUESTA
+        // ============================================================
+
+        return Ok(users);
+    }
     [Authorize]
     [HttpGet("applicantByRol")]
     public async Task<ActionResult<List<User>>> GetApplicant()
@@ -1312,156 +1314,156 @@ public async Task<IActionResult> GetActiveUsersByWarehouse(
 
         // Si el usuario es Manager, devolver solo los Applicants del mismo Warehouse
         // =========================
-// MANAGER
-// =========================
-if (user.UserRole.HasValue &&
-    user.UserRole.Value == global::User.Role.Manager)
-{
-    // Obtener todos los warehouses asignados al manager
-    var managerWarehouseIds = await _authContext.UserWarehouses
-        .AsNoTracking()
-        .Where(uw => uw.UserId == user.Id)
-        .Select(uw => uw.WarehouseId)
-        .Distinct()
-        .ToListAsync();
-
-    if (!managerWarehouseIds.Any())
-    {
-        return BadRequest(new
+        // MANAGER
+        // =========================
+        if (user.UserRole.HasValue &&
+            user.UserRole.Value == global::User.Role.Manager)
         {
-            message = "El Manager no tiene almacenes asignados."
-        });
-    }
+            // Obtener todos los warehouses asignados al manager
+            var managerWarehouseIds = await _authContext.UserWarehouses
+                .AsNoTracking()
+                .Where(uw => uw.UserId == user.Id)
+                .Select(uw => uw.WarehouseId)
+                .Distinct()
+                .ToListAsync();
 
-    // Obtener los metros asociados a esos warehouses
-    var managerMetroIds = await _authContext.Warehouses
-        .AsNoTracking()
-        .Where(w =>
-            managerWarehouseIds.Contains(w.Id) &&
-            w.MetroId != null)
-        .Select(w => w.MetroId)
-        .Distinct()
-        .ToListAsync();
+            if (!managerWarehouseIds.Any())
+            {
+                return BadRequest(new
+                {
+                    message = "El Manager no tiene almacenes asignados."
+                });
+            }
 
-    var applicants = await _authContext.Users
-        .AsNoTracking()
-        .Where(u =>
-            u.CompanyId == user.CompanyId &&
-            u.UserRole == global::User.Role.Applicant &&
-            (
-                // Applicant ya asignado a uno de los warehouses del manager
-                (
-                    u.WarehouseId.HasValue &&
-                    managerWarehouseIds.Contains(u.WarehouseId.Value)
+            // Obtener los metros asociados a esos warehouses
+            var managerMetroIds = await _authContext.Warehouses
+                .AsNoTracking()
+                .Where(w =>
+                    managerWarehouseIds.Contains(w.Id) &&
+                    w.MetroId != null)
+                .Select(w => w.MetroId)
+                .Distinct()
+                .ToListAsync();
+
+            var applicants = await _authContext.Users
+                .AsNoTracking()
+                .Where(u =>
+                    u.CompanyId == user.CompanyId &&
+                    u.UserRole == global::User.Role.Applicant &&
+                    (
+                        // Applicant ya asignado a uno de los warehouses del manager
+                        (
+                            u.WarehouseId.HasValue &&
+                            managerWarehouseIds.Contains(u.WarehouseId.Value)
+                        )
+
+                        ||
+
+                        // Applicant todavía sin warehouse,
+                        // pero pertenece a uno de los metros administrados
+                        (
+                            u.WarehouseId == null &&
+                            u.MetroId.HasValue &&
+                            managerMetroIds.Contains(u.MetroId.Value)
+                        )
+                    )
                 )
-
-                ||
-
-                // Applicant todavía sin warehouse,
-                // pero pertenece a uno de los metros administrados
-                (
-                    u.WarehouseId == null &&
-                    u.MetroId.HasValue &&
-                    managerMetroIds.Contains(u.MetroId.Value)
-                )
-            )
-        )
-        .Select(u => new
-        {
-            u.Id,
-            u.Name,
-            u.LastName,
-            u.Email,
-            u.IsActive,
-            u.UserRole,
-            u.WarehouseId,
-            u.AvatarUrl,
-            u.WasContacted,
-            u.IsFirstLogin,
-            u.UpdatedAt,
-            u.Stage,
-
-            Recruiter = u.RecruiterId != null
-                ? new
+                .Select(u => new
                 {
-                    Id = u.RecruiterId,
-                    FirstName = u.Recruiter!.Name,
-                    LastName = u.Recruiter!.LastName
-                }
-                : null,
+                    u.Id,
+                    u.Name,
+                    u.LastName,
+                    u.Email,
+                    u.IsActive,
+                    u.UserRole,
+                    u.WarehouseId,
+                    u.AvatarUrl,
+                    u.WasContacted,
+                    u.IsFirstLogin,
+                    u.UpdatedAt,
+                    u.Stage,
 
-            Metro = u.Metro != null
-                ? new
-                {
-                    u.Metro.Id,
-                    u.Metro.City
-                }
-                : null,
+                    Recruiter = u.RecruiterId != null
+                        ? new
+                        {
+                            Id = u.RecruiterId,
+                            FirstName = u.Recruiter!.Name,
+                            LastName = u.Recruiter!.LastName
+                        }
+                        : null,
 
-            Warehouse = u.Warehouse != null
-                ? new
-                {
-                    u.Warehouse.Id,
-                    u.Warehouse.City,
-                    u.Warehouse.Company
-                }
-                : null,
+                    Metro = u.Metro != null
+                        ? new
+                        {
+                            u.Metro.Id,
+                            u.Metro.City
+                        }
+                        : null,
 
-            Profile = u.Profile != null
-                ? new
-                {
-                    PhoneNumber = u.Profile.PhoneNumber,
-                    ssn = u.Profile.SsnLast4,
-                    ssnUrl = u.Profile.SocialSecurityUrl,
-                    address = u.Profile.Address,
-                    city = u.Profile.City,
-                    zipcode = u.Profile.ZipCode,
-                    state = u.Profile.State,
-                    dob = u.Profile.DateOfBirth
-                }
-                : null,
+                    Warehouse = u.Warehouse != null
+                        ? new
+                        {
+                            u.Warehouse.Id,
+                            u.Warehouse.City,
+                            u.Warehouse.Company
+                        }
+                        : null,
 
-            Vehicle = u.Vehicles
-                .Select(v => new
-                {
-                    v.Make,
-                    v.Model,
-                    v.Type
+                    Profile = u.Profile != null
+                        ? new
+                        {
+                            PhoneNumber = u.Profile.PhoneNumber,
+                            ssn = u.Profile.SsnLast4,
+                            ssnUrl = u.Profile.SocialSecurityUrl,
+                            address = u.Profile.Address,
+                            city = u.Profile.City,
+                            zipcode = u.Profile.ZipCode,
+                            state = u.Profile.State,
+                            dob = u.Profile.DateOfBirth
+                        }
+                        : null,
+
+                    Vehicle = u.Vehicles
+                        .Select(v => new
+                        {
+                            v.Make,
+                            v.Model,
+                            v.Type
+                        })
+                        .FirstOrDefault(),
+
+                    Account = u.Accounts
+                        .Where(a => a.IsDefault)
+                        .Select(a => new
+                        {
+                            a.Id,
+                            accountNumber = a.AccountNumber,
+                            routingNumber = a.RoutingNumber
+                        })
+                        .FirstOrDefault(),
+
+                    Activities = _authContext.ApplicantActivity
+                        .Where(act => act.ApplicantId == u.Id)
+                        .OrderByDescending(act => act.CreateAt)
+                        .Select(act => new
+                        {
+                            act.Id,
+                            act.ApplicantId,
+                            act.RecruiterId,
+                            activity = act.Activity,
+                            act.Message,
+                            act.CreateAt,
+
+                            RecruiterName = act.Recruiter != null
+                                ? act.Recruiter.Name + " " + act.Recruiter.LastName
+                                : null
+                        })
+                        .ToList()
                 })
-                .FirstOrDefault(),
+                .ToListAsync();
 
-            Account = u.Accounts
-                .Where(a => a.IsDefault)
-                .Select(a => new
-                {
-                    a.Id,
-                    accountNumber = a.AccountNumber,
-                    routingNumber = a.RoutingNumber
-                })
-                .FirstOrDefault(),
-
-            Activities = _authContext.ApplicantActivity
-                .Where(act => act.ApplicantId == u.Id)
-                .OrderByDescending(act => act.CreateAt)
-                .Select(act => new
-                {
-                    act.Id,
-                    act.ApplicantId,
-                    act.RecruiterId,
-                    activity = act.Activity,
-                    act.Message,
-                    act.CreateAt,
-
-                    RecruiterName = act.Recruiter != null
-                        ? act.Recruiter.Name + " " + act.Recruiter.LastName
-                        : null
-                })
-                .ToList()
-        })
-        .ToListAsync();
-
-    return Ok(applicants);
-}
+            return Ok(applicants);
+        }
 
         // Si el usuario es Assistant o cualquier otro, no tiene permisos
         return Forbid();
@@ -1769,15 +1771,15 @@ if (user.UserRole.HasValue &&
 
                 }
 
-               
+
                 await _authContext.SaveChangesAsync();
                 await tx.CommitAsync();
-                
+
                 return Ok(new
                 {
                     Message = "Profile section updated successfully.",
                     Section = section,
-                    
+
                 });
             }
 
@@ -2572,88 +2574,88 @@ if (user.UserRole.HasValue &&
     }
 
     [Authorize]
-[HttpGet("{id}/ssn")]
-public async Task<IActionResult> GetSsn(int id)
-{
-    var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    [HttpGet("{id}/ssn")]
+    public async Task<IActionResult> GetSsn(int id)
+    {
+        var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
-    if (string.IsNullOrWhiteSpace(userIdClaim) || !int.TryParse(userIdClaim, out int requesterId))
-        return Unauthorized();
+        if (string.IsNullOrWhiteSpace(userIdClaim) || !int.TryParse(userIdClaim, out int requesterId))
+            return Unauthorized();
 
-    var requester = await _authContext.Users
-        .AsNoTracking()
-        .Where(u => u.Id == requesterId)
-        .Select(u => new { u.Id, u.UserRole, u.CompanyId })
-        .FirstOrDefaultAsync();
+        var requester = await _authContext.Users
+            .AsNoTracking()
+            .Where(u => u.Id == requesterId)
+            .Select(u => new { u.Id, u.UserRole, u.CompanyId })
+            .FirstOrDefaultAsync();
 
-    if (requester == null)
-        return Unauthorized();
+        if (requester == null)
+            return Unauthorized();
 
-    bool isAdmin = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.Admin;
-    bool isCompanyOwner = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.CompanyOwner;
-    bool isSelf = requesterId == id;
+        bool isAdmin = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.Admin;
+        bool isCompanyOwner = requester.UserRole.HasValue && requester.UserRole.Value == global::User.Role.CompanyOwner;
+        bool isSelf = requesterId == id;
 
-    if (!isAdmin && !isCompanyOwner && !isSelf)
-        return Forbid();
+        if (!isAdmin && !isCompanyOwner && !isSelf)
+            return Forbid();
 
-    var target = await _authContext.Users
-        .AsNoTracking()
-        .Where(u => u.Id == id)
-        .Select(u => new
-        {
-            u.Id,
-            u.CompanyId,
-            Profile = u.Profile == null ? null : new
+        var target = await _authContext.Users
+            .AsNoTracking()
+            .Where(u => u.Id == id)
+            .Select(u => new
             {
-                u.Profile.SsnLast4,
-                u.Profile.SsnEncrypted
-            }
-        })
-        .FirstOrDefaultAsync();
+                u.Id,
+                u.CompanyId,
+                Profile = u.Profile == null ? null : new
+                {
+                    u.Profile.SsnLast4,
+                    u.Profile.SsnEncrypted
+                }
+            })
+            .FirstOrDefaultAsync();
 
-    if (target == null)
-        return NotFound();
+        if (target == null)
+            return NotFound();
 
-    if (isCompanyOwner && !isSelf && target.CompanyId != requester.CompanyId)
-        return Forbid();
+        if (isCompanyOwner && !isSelf && target.CompanyId != requester.CompanyId)
+            return Forbid();
 
-    var last4 = target.Profile?.SsnLast4;
-    var masked = !string.IsNullOrWhiteSpace(last4)
-        ? $"***-**-{last4}"
-        : "***-**-----";
+        var last4 = target.Profile?.SsnLast4;
+        var masked = !string.IsNullOrWhiteSpace(last4)
+            ? $"***-**-{last4}"
+            : "***-**-----";
 
-    if (string.IsNullOrWhiteSpace(target.Profile?.SsnEncrypted))
-    {
+        if (string.IsNullOrWhiteSpace(target.Profile?.SsnEncrypted))
+        {
+            return Ok(new
+            {
+                masked,
+                ssn = ""
+            });
+        }
+
+        string decrypted;
+
+        try
+        {
+            decrypted = _protector.Unprotect(target.Profile.SsnEncrypted);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error desencriptando SsnEncrypted para user {UserId}", id);
+
+            return Ok(new
+            {
+                masked,
+                ssn = ""
+            });
+        }
+
         return Ok(new
         {
             masked,
-            ssn = ""
+            ssn = FormatSsn(decrypted)
         });
     }
-
-    string decrypted;
-
-    try
-    {
-        decrypted = _protector.Unprotect(target.Profile.SsnEncrypted);
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error desencriptando SsnEncrypted para user {UserId}", id);
-
-        return Ok(new
-        {
-            masked,
-            ssn = ""
-        });
-    }
-
-    return Ok(new
-    {
-        masked,
-        ssn = FormatSsn(decrypted)
-    });
-}
 
     // Helper: extraer el user id del claim (ajusta si tu claim usa otro tipo)
     private Guid? GetUserIdFromClaims()
@@ -3584,21 +3586,21 @@ public async Task<IActionResult> GetSsn(int id)
         {
             _authContext.UserWarehouses.Add(new TToApp.Model.UserWarehouse
             {
-                UserId               = userId,
-                WarehouseId          = warehouseId,
-                IsPrimary            = true,
-                IsActive             = true,
-                StartDate            = DateOnly.FromDateTime(DateTime.UtcNow),
-                CreatedAt            = DateTime.UtcNow,
+                UserId = userId,
+                WarehouseId = warehouseId,
+                IsPrimary = true,
+                IsActive = true,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                CreatedAt = DateTime.UtcNow,
                 IdentificationNumber = identificationNumber
             });
         }
         else
         {
             existing.IsPrimary = true;
-            existing.IsActive  = true;
-            existing.EndDate   = null;
-            if (identificationNumber != null)  existing.IdentificationNumber = identificationNumber;
+            existing.IsActive = true;
+            existing.EndDate = null;
+            if (identificationNumber != null) existing.IdentificationNumber = identificationNumber;
         }
     }
 
@@ -3638,11 +3640,335 @@ public async Task<IActionResult> GetSsn(int id)
             copy: false
         );
     }
-    
+
+    [AllowAnonymous]
+    [HttpGet("recruiting-bot/applicants")]
+    public async Task<IActionResult> GetApplicantsForRecruitingBot(
+    [FromHeader(Name = "X-API-Key")] string apiKey,
+    [FromQuery] int? warehouseId = null,
+    [FromQuery] string? status = null,
+    [FromQuery] DateTime? updatedSince = null,
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 100)
+    {
+        // ============================================================
+        // 1. VALIDAR API KEY
+        // ============================================================
+
+        var configuredApiKey = _configuration["BotApiKey"];
+
+        if (string.IsNullOrWhiteSpace(configuredApiKey) ||
+            string.IsNullOrWhiteSpace(apiKey) ||
+            apiKey != configuredApiKey)
+        {
+            return Unauthorized(new
+            {
+                message = "Invalid API key."
+            });
+        }
+
+
+        // ============================================================
+        // 2. VALIDAR PAGINACIÓN
+        // ============================================================
+
+        if (page < 1)
+            page = 1;
+
+        if (pageSize < 1)
+            pageSize = 100;
+
+        // Máximo permitido por llamada
+        if (pageSize > 500)
+            pageSize = 500;
+
+
+        // ============================================================
+        // 3. QUERY BASE
+        // ============================================================
+
+        var query = _authContext.Users
+            .AsNoTracking()
+            .Where(u =>
+                u.UserRole == global::User.Role.Applicant
+            );
+
+
+        // ============================================================
+        // 4. FILTRO POR WAREHOUSE
+        // ============================================================
+
+        if (warehouseId.HasValue)
+        {
+            query = query.Where(u =>
+                u.WarehouseId == warehouseId.Value
+            );
+        }
+
+
+        // ============================================================
+        // 5. FILTRO UPDATED SINCE
+        // ============================================================
+
+        if (updatedSince.HasValue)
+        {
+            query = query.Where(u =>
+                u.UpdatedAt.HasValue &&
+                u.UpdatedAt.Value >= updatedSince.Value
+            );
+        }
+
+
+        // ============================================================
+        // 6. FILTRO POR STATUS
+        // ============================================================
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            var normalizedStatus = status
+                .Trim()
+                .ToLowerInvariant()
+                .Replace(" ", "")
+                .Replace("-", "");
+
+            switch (normalizedStatus)
+            {
+                case "joboffersend":
+                case "awaitingresponse":
+
+                    query = query.Where(u =>
+                        u.WasContacted &&
+                        u.IsActive &&
+                        u.IsFirstLogin
+                    );
+
+                    break;
+
+
+                case "onboarding":
+                case "preonboarding":
+
+                    query = query.Where(u =>
+                        u.WasContacted &&
+                        u.IsActive &&
+                        !u.IsFirstLogin
+                    );
+
+                    break;
+
+
+                case "applicant":
+
+                    query = query.Where(u =>
+                        !(u.WasContacted && u.IsActive)
+                    );
+
+                    break;
+            }
+        }
+
+
+        // ============================================================
+        // 7. TOTAL DE REGISTROS
+        // ============================================================
+
+        var totalCount = await query.CountAsync();
+
+        var totalPages = totalCount == 0
+            ? 0
+            : (int)Math.Ceiling(totalCount / (double)pageSize);
+
+
+        // ============================================================
+        // 8. OBTENER PÁGINA
+        // ============================================================
+
+        var applicants = await query
+
+            // IMPORTANTE:
+            // UpdatedAt puede ser null.
+            // CreatedAt sirve como respaldo.
+            .OrderByDescending(u => u.UpdatedAt ?? u.CreatedAt)
+            .ThenByDescending(u => u.Id)
+
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+
+            .Select(u => new
+            {
+                u.Id,
+
+                FirstName = u.Name,
+                u.LastName,
+                u.Email,
+
+                PhoneNumber = u.Profile != null
+                    ? u.Profile.PhoneNumber
+                    : null,
+
+
+                // ====================================================
+                // FECHAS
+                // ====================================================
+
+                u.CreatedAt,
+                u.UpdatedAt,
+
+                // Ya existen, así que también podemos enviarlas.
+                u.InitialDate,
+                u.ConfirmationDate,
+
+
+                // ====================================================
+                // STATUS
+                // ====================================================
+
+                Status =
+                    u.WasContacted &&
+                    u.IsActive &&
+                    u.IsFirstLogin
+
+                        ? "AwaitingResponse"
+
+                    : u.WasContacted &&
+                      u.IsActive &&
+                      !u.IsFirstLogin
+
+                        ? "PreOnboarding"
+
+                    : "Applicant",
+
+
+                StatusLabel =
+                    u.WasContacted &&
+                    u.IsActive &&
+                    u.IsFirstLogin
+
+                        ? "Job Offer Send"
+
+                    : u.WasContacted &&
+                      u.IsActive &&
+                      !u.IsFirstLogin
+
+                        ? "Onboarding"
+
+                    : "Applicant",
+
+
+                u.Stage,
+
+                u.WarehouseId,
+
+
+                // ====================================================
+                // WAREHOUSE ACTUAL
+                // ====================================================
+
+                Warehouse = u.Warehouse != null
+                    ? new
+                    {
+                        u.Warehouse.Id,
+                        u.Warehouse.City,
+                        u.Warehouse.State,
+                        u.Warehouse.Company,
+                        u.Warehouse.FacilityCode
+                    }
+                    : null,
+
+
+                // ====================================================
+                // METRO
+                // ====================================================
+
+                Metro = u.Metro != null
+                    ? new
+                    {
+                        u.Metro.Id,
+                        u.Metro.City
+                    }
+                    : null,
+
+
+                // ====================================================
+                // VEHÍCULO
+                // ====================================================
+
+                Vehicle = u.Vehicles != null
+                    ? u.Vehicles
+                        .Select(v => new
+                        {
+                            v.Make,
+                            v.Model,
+                            v.Type
+                        })
+                        .FirstOrDefault()
+                    : null,
+
+
+                // ====================================================
+                // INFORMACIÓN PARA LLAMADA
+                // ====================================================
+
+                Address = u.Profile != null
+                    ? u.Profile.Address
+                    : null,
+
+                City = u.Profile != null
+                    ? u.Profile.City
+                    : null,
+
+                State = u.Profile != null
+                    ? u.Profile.State
+                    : null,
+
+                ZipCode = u.Profile != null
+                    ? u.Profile.ZipCode
+                    : null,
+
+
+                // ====================================================
+                // FLAGS
+                // ====================================================
+
+                u.WasContacted,
+                u.IsActive,
+                u.IsFirstLogin
+            })
+            .ToListAsync();
+
+
+        // ============================================================
+        // 9. RESPONSE
+        // ============================================================
+
+        return Ok(new
+        {
+            count = applicants.Count,
+
+            pagination = new
+            {
+                page,
+                pageSize,
+                totalCount,
+                totalPages,
+
+                hasPreviousPage = page > 1,
+                hasNextPage = page < totalPages
+            },
+
+            filters = new
+            {
+                warehouseId,
+                status,
+                updatedSince
+            },
+
+            applicants
+        });
+    }
 }
 
- 
-public class BulkUpdateWarehouseDto
+    public class BulkUpdateWarehouseDto
 {
     public List<int> ApplicantIds { get; set; } = new();
     public int WarehouseId { get; set; }

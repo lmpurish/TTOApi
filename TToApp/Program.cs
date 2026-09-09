@@ -1,13 +1,15 @@
 ﻿using AutoMapper;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Stripe;
-using System.IO;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Serialization;
+using TToApp.Controllers;
 using TToApp.Helpers;
 using TToApp.Model;
 using TToApp.Services;
@@ -19,98 +21,167 @@ using TToApp.Services.Notifications;
 using TToApp.Services.Payroll;
 using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
-using TToApp.Services.Vehicle;
-using Microsoft.AspNetCore.DataProtection;
-using TToApp.Controllers;
-using System.Net.Http.Headers;
 using TToApp.Services.Sms;
+using TToApp.Services.Vehicle;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ==================== Configuración de servicios ====================
+// =====================================================
+// STRIPE
+// =====================================================
 
-// Stripe
-StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"];
+StripeConfiguration.ApiKey =
+    builder.Configuration["Stripe:SecretKey"];
 
-// Controllers + JSON
+// =====================================================
+// CONTROLLERS + JSON
+// =====================================================
+
 builder.Services
     .AddControllers()
-    .AddJsonOptions(o =>
+    .AddJsonOptions(options =>
     {
-        o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-        o.JsonSerializerOptions.NumberHandling = JsonNumberHandling.AllowReadingFromString;
+        options.JsonSerializerOptions.Converters.Add(
+            new JsonStringEnumConverter());
+
+        options.JsonSerializerOptions.NumberHandling =
+            JsonNumberHandling.AllowReadingFromString;
     });
 
-// Swagger
+// =====================================================
+// SWAGGER / OPENAPI
+// =====================================================
+
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
+
+builder.Services.AddSwaggerGen(options =>
 {
-    c.CustomSchemaIds(t => t.FullName!.Replace('+', '.'));
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "API", Version = "v1" });
-    c.SwaggerDoc("company-docs-v1", new OpenApiInfo { Title = "Company Docs", Version = "v1" });
-
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    options.SwaggerDoc("v1", new OpenApiInfo
     {
-        Description = "Pega tu JWT (solo el token, sin 'Bearer').",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.Http,
-        Scheme = "bearer",
-        BearerFormat = "JWT"
-    });
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
-        { new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" } }, Array.Empty<string>() }
+        Title = "TTO API",
+        Version = "v1",
+        Description = "TTO Logistics API"
     });
 
-    c.DocInclusionPredicate((docName, apiDesc) =>
-    {
-        var groupName = apiDesc.GroupName ?? "v1";
-        return string.Equals(groupName, docName, StringComparison.OrdinalIgnoreCase);
-    });
+    // Evita conflictos cuando existen DTOs o clases internas
+    // con el mismo nombre.
+    options.CustomSchemaIds(type =>
+        type.FullName?.Replace("+", ".") ?? type.Name);
+
+    options.AddSecurityDefinition(
+        "Bearer",
+        new OpenApiSecurityScheme
+        {
+            Name = "Authorization",
+
+            Description =
+                "Escribe el token JWT. No es necesario escribir la palabra Bearer.",
+
+            In = ParameterLocation.Header,
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT"
+        });
+
+    options.AddSecurityRequirement(
+        new OpenApiSecurityRequirement
+        {
+            {
+                new OpenApiSecurityScheme
+                {
+                    Reference = new OpenApiReference
+                    {
+                        Type = ReferenceType.SecurityScheme,
+                        Id = "Bearer"
+                    }
+                },
+                Array.Empty<string>()
+            }
+        });
 });
 
-// CORS (lee orígenes desde appsettings: CorsSettings:AllowedOrigins)
-var allowedOrigins = builder.Configuration.GetSection("CorsSettings:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+// =====================================================
+// CORS
+// =====================================================
+
+var allowedOrigins =
+    builder.Configuration
+        .GetSection("CorsSettings:AllowedOrigins")
+        .Get<string[]>()
+    ?? Array.Empty<string>();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AppCors", policy =>
     {
-        policy.WithOrigins(allowedOrigins)
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
+        if (allowedOrigins.Length > 0)
+        {
+            policy
+                .WithOrigins(allowedOrigins)
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials();
+        }
+        else
+        {
+            // Evita que el servicio falle si todavía no se
+            // configuraron orígenes.
+            policy
+                .AllowAnyOrigin()
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+        }
     });
 });
+
 builder.Services.AddMemoryCache();
 
-// EF Core
-var connectionString = builder.Configuration.GetConnectionString("Default");
+// =====================================================
+// DATABASE / EF CORE
+// =====================================================
+
+var connectionString =
+    builder.Configuration.GetConnectionString("Default");
 
 if (string.IsNullOrWhiteSpace(connectionString))
+{
     throw new InvalidOperationException(
-        "Connection string 'Default' not found. Check appsettings.{Environment}.json or environment variables."
-    );
+        "Connection string 'Default' not found. " +
+        "Check appsettings.{Environment}.json or environment variables.");
+}
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlServer(connectionString));
-
-// Servicios propios
-builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
-builder.Services.AddTransient<EmailService>();
-builder.Services.AddSingleton<IMapper>(sp =>
 {
-    var cfg = new MapperConfiguration(mc =>
+    options.UseSqlServer(connectionString);
+});
+
+// =====================================================
+// EMAIL
+// =====================================================
+
+builder.Services.Configure<EmailSettings>(
+    builder.Configuration.GetSection("EmailSettings"));
+
+builder.Services.AddTransient<EmailService>();
+
+// =====================================================
+// AUTOMAPPER
+// =====================================================
+
+builder.Services.AddSingleton<IMapper>(_ =>
+{
+    var mapperConfiguration = new MapperConfiguration(config =>
     {
-        mc.AddProfile<MappingProfile>(); // tu perfil
-        // mc.AddMaps(typeof(Program).Assembly); // opcional si tienes más perfiles
+        config.AddProfile<MappingProfile>();
     });
 
-    // Opcional: valida que los mapas sean correctos en el arranque
-    
-
-    return cfg.CreateMapper();
+    return mapperConfiguration.CreateMapper();
 });
+
+// =====================================================
+// SMS SERVICE
+// =====================================================
+
 builder.Services.AddHttpClient<ITtoSmsService, TtoSmsService>(
     (serviceProvider, client) =>
     {
@@ -129,14 +200,22 @@ builder.Services.AddHttpClient<ITtoSmsService, TtoSmsService>(
                 "RecruitAgent:BaseUrl is missing.");
         }
 
+        if (!Uri.TryCreate(
+                baseUrl,
+                UriKind.Absolute,
+                out var smsBaseUri))
+        {
+            throw new InvalidOperationException(
+                $"RecruitAgent:BaseUrl is not a valid absolute URL: {baseUrl}");
+        }
+
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             throw new InvalidOperationException(
                 "BotApiKey is missing.");
         }
 
-        client.BaseAddress = new Uri(baseUrl);
-
+        client.BaseAddress = smsBaseUri;
         client.Timeout = TimeSpan.FromSeconds(30);
 
         client.DefaultRequestHeaders.Add(
@@ -147,12 +226,59 @@ builder.Services.AddHttpClient<ITtoSmsService, TtoSmsService>(
             new MediaTypeWithQualityHeaderValue(
                 "application/json"));
     });
+
+// =====================================================
+// APPLICATION SERVICES
+// =====================================================
+
 builder.Services.AddScoped<INotificationService, NotificationService>();
-builder.Services.AddScoped<IApplicantContactService, ApplicantContactService>();
+
+builder.Services.AddScoped<
+    IApplicantContactService,
+    ApplicantContactService>();
+
 builder.Services.AddHostedService<RDMonitorService>();
+
 builder.Services.AddScoped<WhatsAppService>();
+
 builder.Services.AddScoped<IJwtService, JwtService>();
-var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"]
+
+builder.Services.AddSingleton<
+    ISensitiveDataProtector,
+    SensitiveDataProtector>();
+
+builder.Services.AddScoped<
+    IUserUiSettingsService,
+    UserUiSettingsService>();
+
+builder.Services.AddScoped<PayrollService>();
+
+builder.Services.AddScoped<PayRunApprovedSender>();
+
+builder.Services.AddScoped<IVehicleService, VehicleService>();
+
+builder.Services.AddScoped<
+    IEarlyWarningService,
+    EarlyWarningService>();
+
+builder.Services.AddScoped<
+    IEarlyWarningNotificationService,
+    EarlyWarningNotificationService>();
+
+builder.Services.AddScoped<
+    ICommunicationRecipientService,
+    CommunicationRecipientService>();
+
+builder.Services.AddHttpContextAccessor();
+
+builder.Services.AddScoped<AuditService>();
+
+// =====================================================
+// DATA PROTECTION
+// =====================================================
+
+var dataProtectionKeysPath =
+    builder.Configuration["DataProtection:KeysPath"]
     ?? "/var/ttoapp/keys";
 
 Directory.CreateDirectory(dataProtectionKeysPath);
@@ -160,67 +286,160 @@ Directory.CreateDirectory(dataProtectionKeysPath);
 builder.Services
     .AddDataProtection()
     .SetApplicationName("TToApp")
-    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
-builder.Services.AddSingleton<ISensitiveDataProtector, SensitiveDataProtector>();
-builder.Services.AddScoped<IUserUiSettingsService, UserUiSettingsService>();
-builder.Services.AddScoped<PayrollService>();
-builder.Services.AddScoped<PayRunApprovedSender>();
-builder.Services.AddScoped<IVehicleService, VehicleService>();
-builder.Services.AddScoped<IEarlyWarningService, EarlyWarningService>();
-builder.Services.AddScoped<IEarlyWarningNotificationService, EarlyWarningNotificationService>();
-builder.Services.AddScoped<ICommunicationRecipientService, CommunicationRecipientService>();
-builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<AuditService>();
-builder.Services.AddHttpClient<IRecruitAgentService, RecruitAgentService>((sp, client) =>
-{
-    var config = sp.GetRequiredService<IConfiguration>();
+    .PersistKeysToFileSystem(
+        new DirectoryInfo(dataProtectionKeysPath));
 
-    client.BaseAddress = new Uri(config["RecruitAgent:BaseUrl"]!);
-    client.DefaultRequestHeaders.Add("X-Agent-Key", config["RecruitAgent:AgentKey"]);
-});
+// =====================================================
+// RECRUIT AGENT SERVICE
+// =====================================================
 
-// Auth / JWT
-var key = Encoding.ASCII.GetBytes(builder.Configuration["JwtSettings:Secret"]);
-builder.Services.AddAuthentication(auth =>
-{
-    auth.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    auth.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(jwt =>
-{
-    jwt.RequireHttpsMetadata = false;
-    jwt.SaveToken = true;
-    jwt.TokenValidationParameters = new TokenValidationParameters
+builder.Services.AddHttpClient<
+    IRecruitAgentService,
+    RecruitAgentService>(
+    (serviceProvider, client) =>
     {
-        ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(key),
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidIssuer = builder.Configuration["JwtSettings:Issuer"],
-        ValidAudience = builder.Configuration["JwtSettings:Audience"],
-        ValidateLifetime = true
-    };
-});
+        var configuration =
+            serviceProvider.GetRequiredService<IConfiguration>();
+
+        var baseUrl =
+            configuration["RecruitAgent:BaseUrl"];
+
+        var agentKey =
+            configuration["RecruitAgent:AgentKey"];
+
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            throw new InvalidOperationException(
+                "RecruitAgent:BaseUrl is missing.");
+        }
+
+        if (!Uri.TryCreate(
+                baseUrl,
+                UriKind.Absolute,
+                out var recruitAgentBaseUri))
+        {
+            throw new InvalidOperationException(
+                $"RecruitAgent:BaseUrl is not a valid absolute URL: {baseUrl}");
+        }
+
+        if (string.IsNullOrWhiteSpace(agentKey))
+        {
+            throw new InvalidOperationException(
+                "RecruitAgent:AgentKey is missing.");
+        }
+
+        client.BaseAddress = recruitAgentBaseUri;
+        client.Timeout = TimeSpan.FromSeconds(30);
+
+        client.DefaultRequestHeaders.Add(
+            "X-Agent-Key",
+            agentKey);
+
+        client.DefaultRequestHeaders.Accept.Add(
+            new MediaTypeWithQualityHeaderValue(
+                "application/json"));
+    });
+
+// =====================================================
+// AUTHENTICATION / JWT
+// =====================================================
+
+var jwtSecret =
+    builder.Configuration["JwtSettings:Secret"];
+
+if (string.IsNullOrWhiteSpace(jwtSecret))
+{
+    throw new InvalidOperationException(
+        "JwtSettings:Secret is missing.");
+}
+
+var jwtIssuer =
+    builder.Configuration["JwtSettings:Issuer"];
+
+var jwtAudience =
+    builder.Configuration["JwtSettings:Audience"];
+
+if (string.IsNullOrWhiteSpace(jwtIssuer))
+{
+    throw new InvalidOperationException(
+        "JwtSettings:Issuer is missing.");
+}
+
+if (string.IsNullOrWhiteSpace(jwtAudience))
+{
+    throw new InvalidOperationException(
+        "JwtSettings:Audience is missing.");
+}
+
+var jwtKey =
+    Encoding.UTF8.GetBytes(jwtSecret);
+
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme =
+            JwtBearerDefaults.AuthenticationScheme;
+
+        options.DefaultChallengeScheme =
+            JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.RequireHttpsMetadata = false;
+        options.SaveToken = true;
+
+        options.TokenValidationParameters =
+            new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+
+                IssuerSigningKey =
+                    new SymmetricSecurityKey(jwtKey),
+
+                ValidateIssuer = true,
+                ValidIssuer = jwtIssuer,
+
+                ValidateAudience = true,
+                ValidAudience = jwtAudience,
+
+                ValidateLifetime = true,
+
+                ClockSkew = TimeSpan.FromMinutes(1)
+            };
+    });
+
+// =====================================================
+// BUILD
+// =====================================================
 
 var app = builder.Build();
 
-// ==================== Pipeline HTTP ====================
+// =====================================================
+// SWAGGER UI
+// =====================================================
 
-// Swagger (dev y prod)
 app.UseSwagger();
-app.UseSwaggerUI(c =>
+
+app.UseSwaggerUI(options =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1");
-    c.SwaggerEndpoint("/swagger/company-docs-v1/swagger.json", "Company Docs v1");
+    options.RoutePrefix = "swagger";
+
+    options.SwaggerEndpoint(
+        "/swagger/v1/swagger.json",
+        "TTO API v1");
+
+    options.DocumentTitle =
+        "TTO Logistics API";
+
+    options.DisplayRequestDuration();
 });
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-};
+// =====================================================
+// HTTP PIPELINE
+// =====================================================
 
-// Redirección HTTPS SOLO fuera de Development (evita romper CORS en local)
+// En desarrollo puedes trabajar por HTTP.
+// En producción se redirige a HTTPS.
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
@@ -228,30 +447,53 @@ if (!app.Environment.IsDevelopment())
 
 app.UseRouting();
 
-// CORS antes de auth/static/controllers
 app.UseCors("AppCors");
 
-// Archivos estáticos: asegurar wwwroot y wwwroot/storage
-var webRoot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+// =====================================================
+// STATIC FILES
+// =====================================================
+
+var webRoot =
+    app.Environment.WebRootPath
+    ?? Path.Combine(
+        app.Environment.ContentRootPath,
+        "wwwroot");
+
 Directory.CreateDirectory(webRoot);
-var storageRoot = Path.Combine(webRoot, "storage");
+
+var storageRoot =
+    Path.Combine(webRoot, "storage");
+
 Directory.CreateDirectory(storageRoot);
 
-// Servir wwwroot/
 app.UseStaticFiles();
 
-// Montar /storage → wwwroot/storage
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider(storageRoot),
-    RequestPath = "/storage"
-});
+app.UseStaticFiles(
+    new StaticFileOptions
+    {
+        FileProvider =
+            new PhysicalFileProvider(storageRoot),
+
+        RequestPath = "/storage"
+    });
+
+// =====================================================
+// AUTHORIZATION
+// =====================================================
 
 app.UseAuthentication();
 app.UseAuthorization();
 
+// =====================================================
+// ENDPOINTS
+// =====================================================
+
 app.MapControllers();
 
 app.MapCompanyRevenueEndpoints();
+
+// =====================================================
+// RUN
+// =====================================================
 
 app.Run();

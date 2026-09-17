@@ -36,9 +36,10 @@ public class UserController : ControllerBase
     private readonly AuditService _auditService;
     private readonly IRecruitAgentService _recruitAgentService;
     private readonly IConfiguration _configuration;
+    private readonly IAccountActivationService _accountActivationService;
     public UserController(ApplicationDbContext authContext, EmailService emailService, IConfiguration config, WhatsAppService whatsAppService,
         IApplicantContactService applicantContactService, IJwtService jwtService, ISensitiveDataProtector protector, ICommunicationRecipientService communicationRecipients,
-        ILogger<UserController> logger, INotificationService notificationService, AuditService auditService, IRecruitAgentService recruitAgentService, IConfiguration configuration)
+        ILogger<UserController> logger, INotificationService notificationService, AuditService auditService, IRecruitAgentService recruitAgentService, IConfiguration configuration, IAccountActivationService accountActivationService)
     {
         _authContext = authContext ?? throw new ArgumentNullException(nameof(authContext));
         _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
@@ -53,6 +54,7 @@ public class UserController : ControllerBase
         _auditService = auditService;
         _recruitAgentService = recruitAgentService;
         _configuration = configuration;
+        _accountActivationService = accountActivationService;
     }
 
     [HttpPost("authenticate")]
@@ -326,165 +328,576 @@ public class UserController : ControllerBase
 
     [AllowAnonymous]
     [HttpPost("apply")]
-    public async Task<IActionResult> ApplicationJob([FromBody] DriverApplicationRequest applicationRequest, CancellationToken ct)
+    public async Task<IActionResult> ApplicationJob(
+    [FromBody] DriverApplicationRequest applicationRequest,
+    CancellationToken ct)
     {
+        // =====================================================
+        // VALIDAR REQUEST
+        // =====================================================
+
         if (applicationRequest?.User is null || applicationRequest.Vehicle is null)
-            return BadRequest(new { Message = "Invalid request: User or Vehicle object is null" });
+        {
+            return BadRequest(new
+            {
+                Message = "Invalid request: User or Vehicle object is null"
+            });
+        }
 
         var u = applicationRequest.User;
         var v = applicationRequest.Vehicle;
 
-        // Email
+
+        // =====================================================
+        // EMAIL
+        // =====================================================
+
         var emailNorm = u.Email?.Trim().ToLowerInvariant();
+
         if (string.IsNullOrWhiteSpace(emailNorm))
-            return BadRequest(new { Message = "User email is required." });
+        {
+            return BadRequest(new
+            {
+                Message = "User email is required."
+            });
+        }
 
-        var exists = await _authContext.Users.AsNoTracking()
-            .AnyAsync(x => x.Email != null && x.Email.ToLower() == emailNorm, ct);
+        var exists = await _authContext.Users
+            .AsNoTracking()
+            .AnyAsync(x =>
+                x.Email != null &&
+                x.Email.ToLower() == emailNorm,
+                ct);
+
         if (exists)
-            return BadRequest(new { Message = "Sorry, that email is already in use!" });
+        {
+            return BadRequest(new
+            {
+                Message = "Sorry, that email is already in use!"
+            });
+        }
 
-        // 🚩 Warehouse obligatorio y de ahí sacamos la compañía
+
+        // =====================================================
+        // METRO
+        // =====================================================
+
         if (!u.metroId.HasValue)
-            return BadRequest(new { Message = "MetroId is required." });
+        {
+            return BadRequest(new
+            {
+                Message = "MetroId is required."
+            });
+        }
 
-        var whInfo = await _authContext.Metro.AsNoTracking()
-            .Where(w => w.Id == u.metroId.Value)
-            .Select(w => new { w.Id, w.City, w.CompanyId })
+        var metroInfo = await _authContext.Metro
+            .AsNoTracking()
+            .Where(m => m.Id == u.metroId.Value)
+            .Select(m => new
+            {
+                m.Id,
+                m.City,
+                m.CompanyId
+            })
             .FirstOrDefaultAsync(ct);
 
-        if (whInfo is null)
-            return BadRequest(new { Message = "Metro not found." });
+        if (metroInfo is null)
+        {
+            return BadRequest(new
+            {
+                Message = "Metro not found."
+            });
+        }
 
-        if (whInfo.CompanyId == null)
-            return BadRequest(new { Message = "Metro has no company assigned." });
+        if (metroInfo.CompanyId == null)
+        {
+            return BadRequest(new
+            {
+                Message = "Metro has no company assigned."
+            });
+        }
 
-        // Vehículo
-        if (string.IsNullOrWhiteSpace(v.Make) || string.IsNullOrWhiteSpace(v.Model))
-            return BadRequest(new { Message = "Vehicle make and model are required." });
 
-        // Teléfono -> UserProfile (PK compartida)
+        // =====================================================
+        // DETERMINAR WAREHOUSE
+        // =====================================================
+        //
+        // REGLAS:
+        //
+        // 1. Si viene FacilityCode:
+        //    buscar exactamente ese FacilityCode dentro del Metro.
+        //
+        // 2. Si NO viene FacilityCode:
+        //    buscar un Warehouse activo que esté contratando.
+        //
+        // 3. Si no existe ninguno contratando:
+        //    selectedWarehouse queda null.
+        //
+        // 4. Si selectedWarehouse == null:
+        //    User.WarehouseId queda null.
+        //
+        // =====================================================
+
+        Warehouse? selectedWarehouse = null;
+
+
+        // =====================================================
+        // CASO 1: VIENE FACILITY CODE
+        // =====================================================
+
+        if (!string.IsNullOrWhiteSpace(u.FacilityCode))
+        {
+            var facilityCode = u.FacilityCode.Trim();
+
+            selectedWarehouse = await _authContext.Warehouses
+                .AsNoTracking()
+                .Where(w =>
+                    w.MetroId == u.metroId.Value &&
+                    w.FacilityCode != null &&
+                    w.FacilityCode == facilityCode)
+                .FirstOrDefaultAsync(ct);
+
+            if (selectedWarehouse == null)
+            {
+                return BadRequest(new
+                {
+                    Message =
+                        $"FacilityCode '{facilityCode}' was not found in the selected metro."
+                });
+            }
+        }
+
+
+        // =====================================================
+        // CASO 2: NO VIENE FACILITY CODE
+        // =====================================================
+
+        else
+        {
+            selectedWarehouse = await _authContext.Warehouses
+                .AsNoTracking()
+                .Where(w =>
+                    w.MetroId == u.metroId.Value &&
+                    w.IsActive == true &&
+                    w.IsHiring == true)
+                .OrderBy(w => w.Id)
+                .FirstOrDefaultAsync(ct);
+
+            // Si no encuentra ninguno:
+            //
+            // selectedWarehouse = null
+            //
+            // El applicant se crea normalmente
+            // con WarehouseId = null.
+        }
+
+
+        // =====================================================
+        // VEHÍCULO
+        // =====================================================
+
+        if (string.IsNullOrWhiteSpace(v.Make) ||
+            string.IsNullOrWhiteSpace(v.Model))
+        {
+            return BadRequest(new
+            {
+                Message = "Vehicle make and model are required."
+            });
+        }
+
+
+        // =====================================================
+        // TELÉFONO
+        // =====================================================
+
         string? phone = u.PhoneNumber?
             .Trim()
-            .Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "");
-        if (phone?.Length > 20)
-            return BadRequest(new { Message = "Phone number too long." });
+            .Replace(" ", "")
+            .Replace("-", "")
+            .Replace("(", "")
+            .Replace(")", "")
+            .Replace(".", "");
 
-        await using var tx = await _authContext.Database.BeginTransactionAsync(ct);
+        if (phone?.Length > 20)
+        {
+            return BadRequest(new
+            {
+                Message = "Phone number too long."
+            });
+        }
+
+
+        // =====================================================
+        // TRANSACTION
+        // =====================================================
+
+        await using var tx =
+            await _authContext.Database.BeginTransactionAsync(ct);
+
         try
         {
-            // 👇 CompanyId viene del warehouse seleccionado
+            // =================================================
+            // CREAR APPLICANT
+            // =================================================
+
             var user = new User
             {
                 Name = u.Name?.Trim(),
+
                 LastName = u.LastName?.Trim(),
+
                 Email = emailNorm,
+
                 Password = PasswordHasher.HashPassword(u.Password),
+
                 IsActive = false,
-                AcceptsSMSNotifications = u.AcceptsSMSNotifications,
-                CompanyId = whInfo.CompanyId,           // ✅ derivado
-                MetroId = u.metroId,                // ✅ consistente
-                UserRole = global::User.Role.Applicant
+
+                AcceptsSMSNotifications =
+                    u.AcceptsSMSNotifications,
+
+                // Company viene del Metro
+                CompanyId = metroInfo.CompanyId,
+
+                MetroId = u.metroId,
+
+                // =============================================
+                // WAREHOUSE
+                // =============================================
+                //
+                // FacilityCode encontrado:
+                //      WarehouseId = facility.Id
+                //
+                // Sin FacilityCode + hay hiring:
+                //      WarehouseId = warehouse hiring
+                //
+                // Sin FacilityCode + nadie hiring:
+                //      WarehouseId = null
+                //
+                // =============================================
+
+                WarehouseId = selectedWarehouse?.Id,
+
+                UserRole = global::User.Role.Applicant,
+
+                Stage = global::User.HiringStage.New,
+
+                WasContacted = false
             };
+
+
             await _authContext.Users.AddAsync(user, ct);
+
             await _authContext.SaveChangesAsync(ct);
+
+
+            // =================================================
+            // USER PROFILE
+            // =================================================
 
             var profile = new UserProfile
             {
-                Id = user.Id,                           // ✅ PK compartida
+                Id = user.Id,
                 PhoneNumber = phone
             };
+
             await _authContext.UserProfiles.AddAsync(profile, ct);
+
             await _authContext.SaveChangesAsync(ct);
+
+
+            // =================================================
+            // VEHICLE
+            // =================================================
 
             var vehicle = new Vehicle
             {
                 UserId = user.Id,
+
                 Make = v.Make?.Trim(),
+
                 Model = v.Model?.Trim(),
-                IsDefault = true,
+
+                IsDefault = true
             };
+
             await _authContext.Vehicles.AddAsync(vehicle, ct);
+
             await _authContext.SaveChangesAsync(ct);
 
+
+            // =================================================
+            // COMMIT
+            // =================================================
+
             await tx.CommitAsync(ct);
-            await _recruitAgentService.SendApplicantSmsAsync(
+
+
+            // =================================================
+            // SMS AL APPLICANT
+            // =================================================
+
+            try
+            {
+                await _recruitAgentService.SendApplicantSmsAsync(
                     user,
                     profile,
-                    whInfo.City ?? "",
+                    metroInfo.City ?? "",
                     ct
                 );
-            // Emails / notificaciones
-            var placeholders = new Dictionary<string, string>
+            }
+            catch (Exception ex)
             {
-                { "Name", user.Name ?? "" },
-                { "LastName", user.LastName ?? "" },
-                { "Email", user.Email ?? "" },
-                { "PhoneNumber", profile.PhoneNumber ?? "" },
-                { "Make", vehicle.Make ?? "" },
-                { "Model", vehicle.Model ?? "" },
-                { "Locality", whInfo.City ?? "" }
-            };
-
-
-
-            var warehouseIds = await _authContext.Warehouses
-                    .AsNoTracking()
-                    .Where(w => w.MetroId == user.MetroId)
-                    .Select(w => w.Id)
-                    .ToListAsync(ct);
-
-
-            var recipients = await _communicationRecipients.GetRecipientsForEventAsync(
-                companyId: whInfo.CompanyId,
-                warehouseIds: warehouseIds.Any() ? warehouseIds : null,
-                eventType: CommunicationEventTypes.NewDriverApplication,
-                channel: CommunicationChannels.Email
-            );
-
-
-            foreach (var email in recipients.Select(r => r.Email).Where(e => !string.IsNullOrWhiteSpace(e)).Distinct())
-            {
-                await _emailService.SendEmailAsync(
-                    toEmail: email!,
-                    subject: "New driver on the way!",
-                    "ApplicationTemplate.cshtml",
-                    placeholders: placeholders,
-                    copy: false
+                Console.WriteLine(
+                    $"Failed to send SMS to applicant {user.Id}: {ex.Message}"
                 );
             }
 
 
-            var okUserMail = await _emailService.SendEmailAsync(
-                toEmail: user.Email!,
-                subject: "Thank you",
-               "ApplicationConfirmation.cshtml",
-                placeholders: placeholders,
-                copy: false
-            );
-            if (!okUserMail)
-                return BadRequest(new { Message = "Failed to send confirmation email." });
+            // =================================================
+            // PLACEHOLDERS EMAIL   
+            // =================================================
 
-            // Contacto si el warehouse contrata
-            var whIsHiring = await _authContext.Warehouses.AsNoTracking()
-                .Where(w => w.MetroId == user.MetroId)
-                .AnyAsync(w => w.IsHiring, ct);
+            var placeholders = new Dictionary<string, string>
+        {
+            { "Name", user.Name ?? "" },
 
-            if (whIsHiring)
-                await _applicantContactService.ContactApplicantAsync(user.Id);
+            { "LastName", user.LastName ?? "" },
 
-            return Ok(new { Message = "Thank you for applying with us!" });
+            { "Email", user.Email ?? "" },
+
+            { "PhoneNumber", profile.PhoneNumber ?? "" },
+
+            { "Make", vehicle.Make ?? "" },
+
+            { "Model", vehicle.Model ?? "" },
+
+            { "Locality", metroInfo.City ?? "" },
+
+            {
+                "FacilityCode",
+                selectedWarehouse?.FacilityCode ?? ""
+            }
+        };
+
+
+            // =================================================
+            // WAREHOUSE PARA NOTIFICACIONES
+            // =================================================
+
+            List<int>? warehouseIds = null;
+
+            if (user.WarehouseId.HasValue)
+            {
+                warehouseIds = new List<int>
+            {
+                user.WarehouseId.Value
+            };
+            }
+
+
+            // =================================================
+            // OBTENER DESTINATARIOS
+            // =================================================
+
+            try
+            {
+                var recipients =
+                    await _communicationRecipients
+                        .GetRecipientsForEventAsync(
+                            companyId: metroInfo.CompanyId,
+                            warehouseIds: warehouseIds,
+                            eventType:
+                                CommunicationEventTypes.NewDriverApplication,
+                            channel:
+                                CommunicationChannels.Email
+                        );
+
+
+                // =============================================
+                // EMAIL A MANAGERS / RECIPIENTS
+                // =============================================
+
+                foreach (var email in recipients
+                    .Select(r => r.Email)
+                    .Where(e => !string.IsNullOrWhiteSpace(e))
+                    .Distinct())
+                {
+                    await _emailService.SendEmailAsync(
+                        toEmail: email!,
+                        subject: "New driver on the way!",
+                        "ApplicationTemplate.cshtml",
+                        placeholders: placeholders,
+                        copy: false
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"Failed to send internal application notifications for applicant {user.Id}: {ex.Message}"
+                );
+            }
+
+
+            // =================================================
+            // EMAIL AL APPLICANT
+            // =================================================
+
+            try
+            {
+                var okUserMail =
+                    await _emailService.SendEmailAsync(
+                        toEmail: user.Email!,
+                        subject: "Thank you",
+                        "ApplicationConfirmation.cshtml",
+                        placeholders: placeholders,
+                        copy: false
+                    );
+
+                if (!okUserMail)
+                {
+                    Console.WriteLine(
+                        $"Could not send confirmation email to applicant {user.Id} - {user.Email}"
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"Failed to send confirmation email to applicant {user.Id}: {ex.Message}"
+                );
+            }
+
+
+            // =================================================
+            // CONTACTO AUTOMÁTICO
+            // =================================================
+            //
+            // Solo inicia contacto automático si el warehouse
+            // asignado está contratando.
+            //
+            // Si entró por FacilityCode pero ese warehouse
+            // NO está contratando:
+            //
+            // WarehouseId queda asignado,
+            // pero NO inicia contacto automático.
+            //
+            // =================================================
+            string? setPasswordUrl = null;
+            if (selectedWarehouse?.IsHiring == true)
+            {
+               
+
+                if (selectedWarehouse?.IsHiring == true)
+                {
+                    try
+                    {
+                        var contactResult =
+                            await _applicantContactService
+                                .ContactApplicantAsync(user.Id);
+
+                        if (contactResult.Success)
+                        {
+                            setPasswordUrl =
+                                contactResult.SetPasswordUrl;
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                $"Automatic contact failed for applicant {user.Id}: " +
+                                $"{contactResult.ErrorMessage}"
+                            );
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"Failed to automatically contact applicant {user.Id}: " +
+                            $"{ex.Message}"
+                        );
+                    }
+                }
+            }
+
+
+            // =================================================
+            // RESPONSE
+            // =================================================
+
+            return Ok(new
+            {
+                Message =
+                "Thank you for applying with us!",
+
+                        UserId =
+                user.Id,
+
+                        MetroId =
+                user.MetroId,
+
+                        WarehouseId =
+                user.WarehouseId,
+
+                        FacilityCode =
+                selectedWarehouse?.FacilityCode,
+
+                        IsHiring =
+                selectedWarehouse?.IsHiring ?? false,
+
+                        AutoActivated =
+                !string.IsNullOrWhiteSpace(
+                    setPasswordUrl
+                ),
+
+                        SetPasswordUrl =
+                setPasswordUrl
+                    });
         }
+
+        // =====================================================
+        // DB ERROR
+        // =====================================================
+
         catch (DbUpdateException ex)
         {
-            await tx.RollbackAsync(ct);
-            var inner = ex.InnerException?.Message ?? ex.GetBaseException().Message ?? ex.Message;
-            return StatusCode(500, new { Message = "DB update error.", Error = inner });
+            // Solo Rollback si todavía no se hizo Commit
+            if (_authContext.Database.CurrentTransaction != null)
+            {
+                await tx.RollbackAsync(ct);
+            }
+
+            var inner =
+                ex.InnerException?.Message
+                ?? ex.GetBaseException().Message
+                ?? ex.Message;
+
+            return StatusCode(500, new
+            {
+                Message = "DB update error.",
+                Error = inner
+            });
         }
+
+
+        // =====================================================
+        // GENERAL ERROR
+        // =====================================================
+
         catch (Exception ex)
         {
-            await tx.RollbackAsync(ct);
-            return StatusCode(500, new { Message = "An error occurred while processing your request.", Error = ex.Message });
+            // Solo Rollback si todavía no se hizo Commit
+            if (_authContext.Database.CurrentTransaction != null)
+            {
+                await tx.RollbackAsync(ct);
+            }
+
+            return StatusCode(500, new
+            {
+                Message =
+                    "An error occurred while processing your request.",
+
+                Error = ex.Message
+            });
         }
     }
     [AuthorizePrivateFile]
@@ -2170,11 +2583,21 @@ public class UserController : ControllerBase
 
         if (wasInactive && user.IsActive)
         {
+            var activationResult =
+                await _accountActivationService
+                    .SendAccountActivatedEmailAsync(
+                        user,
+                        "Account Activated!!"
+                    );
 
-            var okAccessEmail = await SendAccountActivatedEmail(user, "Account Activated!!");
-
-            if (!okAccessEmail)
-                return BadRequest(new { Message = "Access email was not sent." });
+            if (!activationResult.Success)
+            {
+                return BadRequest(new
+                {
+                    Message = activationResult.ErrorMessage
+                        ?? "Access email was not sent."
+                });
+            }
         }
 
         user.UpdatedAt = DateTime.UtcNow;
@@ -4090,7 +4513,9 @@ public sealed class ApplicantUserDto
     public int? metroId { get; set; }
     public string? PhoneNumber { get; set; }
     public bool AcceptsSMSNotifications { get; set; }
-   
+    // ✅ AGREGAR
+    public string? FacilityCode { get; set; }
+
 }
 
 public sealed class ApplicantVehicleDto

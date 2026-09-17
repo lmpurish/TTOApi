@@ -249,13 +249,17 @@ builder.Services.AddSingleton<
 
 builder.Services.AddScoped<
     IUserUiSettingsService,
-    UserUiSettingsService>();
+    UserUiSettingsService  
+    >();
 
 builder.Services.AddScoped<PayrollService>();
 
 builder.Services.AddScoped<PayRunApprovedSender>();
 
 builder.Services.AddScoped<IVehicleService, VehicleService>();
+builder.Services.AddScoped<
+    IAccountActivationService,
+    AccountActivationService>();
 
 builder.Services.AddScoped<
     IEarlyWarningService,

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bank Account Changed</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f2f4f8;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h2 {
+            color: #b45309;
+            text-align: center;
+            margin-top: 0;
+        }
+        p {
+            font-size: 15px;
+            color: #333;
+            line-height: 1.5;
+        }
+        .alert-box {
+            background-color: #fffbeb;
+            padding: 16px 20px;
+            margin-top: 16px;
+            border-left: 5px solid #f59e0b;
+            border-radius: 6px;
+        }
+        .alert-box p {
+            margin: 6px 0;
+        }
+        .label {
+            color: #6b7280;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .value {
+            font-weight: bold;
+            color: #111827;
+            font-size: 15px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            font-size: 13px;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>⚠️ Bank Account Change Alert</h2>
+
+        <p>
+            A driver has updated their bank account information. Please review this change
+            to ensure it is authorized.
+        </p>
+
+        <div class="alert-box">
+            <p><span class="label">Driver</span><br /><span class="value">{{DriverName}}</span></p>
+            <p><span class="label">Email</span><br /><span class="value">{{DriverEmail}}</span></p>
+            <p><span class="label">Phone</span><br /><span class="value">{{DriverPhone}}</span></p>
+            <p><span class="label">Warehouse</span><br /><span class="value">{{Warehouse}}</span></p>
+            <p><span class="label">Changed At</span><br /><span class="value">{{ChangedAt}}</span></p>
+            <p><span class="label">Account Holder</span><br /><span class="value">{{AccountHolder}}</span></p>
+        </div>
+
+        <p style="margin-top:20px; color:#6b7280; font-size:13px;">
+            If you did not authorize this change, please contact the driver immediately and
+            review your payroll settings.
+        </p>
+
+        <div class="footer">
+            &copy; 2025 TTO Logistics. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

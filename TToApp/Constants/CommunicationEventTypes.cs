@@ -9,5 +9,6 @@ namespace TToApp.Constants
     public const string PakagesInformationLoaded = "PakagesInformationLoaded";
     public const string RouteBonusPending = "RouteBonusPending";
     public const string RouteCreated = "RouteCreated";
+    public const string BankAccountChanged = "BankAccountChanged";
     }
 }

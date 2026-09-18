@@ -28,6 +28,7 @@
         public const string UserCreated = "UserCreated";
         public const string UserUpdated = "UserUpdated";
         public const string UserDeleted = "UserDeleted";
+        public const string BankAccountUpdated = "BankAccountUpdated";
 
         public const string DriverRateCreated = "DriverRateCreated";
         public const string DriverRateUpdated = "DriverRateUpdated";

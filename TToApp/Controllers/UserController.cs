@@ -1933,6 +1933,7 @@ public class UserController : ControllerBase
         var user = await _authContext.Users
             .Include(u => u.Profile)
             .Include(u => u.Warehouse)
+            .Include(u => u.Company)
             .FirstOrDefaultAsync(u => u.Id == userId);
 
         if (user == null)
@@ -2009,6 +2010,9 @@ public class UserController : ControllerBase
                             .FirstOrDefaultAsync(a => a.UserId == user.Id && a.IsDefault);
 
                         var isBankUpdate = account != null;
+                        var oldAccountNumber = account?.AccountNumber;
+                        var oldRoutingNumber  = account?.RoutingNumber;
+                        var oldFullName       = account?.FullName;
 
                         if (account == null)
                         {
@@ -2025,6 +2029,25 @@ public class UserController : ControllerBase
                         account.FullName = !string.IsNullOrWhiteSpace(request.AccountHolderName)
                             ? request.AccountHolderName
                             : $"{user.Name} {user.LastName}".Trim();
+
+                        await _auditService.LogAsync(new AuditLogDto
+                        {
+                            UserId      = user.Id,
+                            UserName    = $"{user.Name} {user.LastName}",
+                            UserRole    = user.UserRole?.ToString(),
+                            Action      = AuditLogAction.BankAccountUpdated,
+                            Entity      = "Accounts",
+                            EntityId    = user.Id.ToString(),
+                            Description = isBankUpdate ? "Bank account updated" : "Bank account created",
+                            OldValue    = isBankUpdate
+                                ? $"AccountNumber: {oldAccountNumber}, RoutingNumber: {oldRoutingNumber}, FullName: {oldFullName}"
+                                : null,
+                            NewValue    = $"AccountNumber: {account.AccountNumber}, RoutingNumber: {account.RoutingNumber}, FullName: {account.FullName}",
+                            WarehouseId  = user.WarehouseId,
+                            WarehouseName = user.Warehouse?.City,
+                            CompanyId    = user.CompanyId,
+                            CompanyName  = user.Company?.Name
+                        });
 
                         if (isBankUpdate && user.CompanyId.HasValue)
                         {

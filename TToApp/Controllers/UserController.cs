@@ -1933,6 +1933,7 @@ public class UserController : ControllerBase
         var user = await _authContext.Users
             .Include(u => u.Profile)
             .Include(u => u.Warehouse)
+            .Include(u => u.Company)
             .FirstOrDefaultAsync(u => u.Id == userId);
 
         if (user == null)
@@ -2000,6 +2001,11 @@ public class UserController : ControllerBase
                         var account = await _authContext.Accounts
                             .FirstOrDefaultAsync(a => a.UserId == user.Id && a.IsDefault);
 
+                        var isBankUpdate = account != null;
+                        var oldAccountNumber = account?.AccountNumber;
+                        var oldRoutingNumber  = account?.RoutingNumber;
+                        var oldFullName       = account?.FullName;
+
                         if (account == null)
                         {
                             account = new Accounts
@@ -2007,7 +2013,6 @@ public class UserController : ControllerBase
                                 UserId = user.Id,
                                 IsDefault = true
                             };
-
                             _authContext.Accounts.Add(account);
                         }
 
@@ -2016,6 +2021,109 @@ public class UserController : ControllerBase
                         account.FullName = !string.IsNullOrWhiteSpace(request.AccountHolderName)
                             ? request.AccountHolderName
                             : $"{user.Name} {user.LastName}".Trim();
+
+                        await _auditService.LogAsync(new AuditLogDto
+                        {
+                            UserId      = user.Id,
+                            UserName    = $"{user.Name} {user.LastName}",
+                            UserRole    = user.UserRole?.ToString(),
+                            Action      = AuditLogAction.BankAccountUpdated,
+                            Entity      = "Accounts",
+                            EntityId    = user.Id.ToString(),
+                            Description = isBankUpdate ? "Bank account updated" : "Bank account created",
+                            OldValue    = isBankUpdate
+                                ? $"AccountNumber: {oldAccountNumber}, RoutingNumber: {oldRoutingNumber}, FullName: {oldFullName}"
+                                : null,
+                            NewValue    = $"AccountNumber: {account.AccountNumber}, RoutingNumber: {account.RoutingNumber}, FullName: {account.FullName}",
+                            WarehouseId  = user.WarehouseId,
+                            WarehouseName = user.Warehouse?.City,
+                            CompanyId    = user.CompanyId,
+                            CompanyName  = user.Company?.Name
+                        });
+
+                        if (isBankUpdate && user.CompanyId.HasValue)
+                        {
+                            var warehouseIds = user.WarehouseId.HasValue
+                                ? new List<int> { user.WarehouseId.Value }
+                                : null;
+
+                            var userName = $"{user.Name} {user.LastName}".Trim();
+
+                            var activeChannels = await _authContext.CommunicationRecipientRules
+                                .AsNoTracking()
+                                .Where(r =>
+                                    r.IsActive &&
+                                    r.CompanyId == user.CompanyId.Value &&
+                                    r.EventType == CommunicationEventTypes.BankAccountChanged &&
+                                    (r.WarehouseId == null ||
+                                     (warehouseIds != null && warehouseIds.Contains(r.WarehouseId.Value))))
+                                .Select(r => r.Channel)
+                                .Distinct()
+                                .ToListAsync();
+
+                            string? warehouseName = null;
+                            Dictionary<string, string>? placeholders = null;
+
+                            foreach (var channel in activeChannels)
+                            {
+                                var channelRecipients = await _communicationRecipients.GetRecipientsForEventAsync(
+                                    companyId: user.CompanyId.Value,
+                                    warehouseIds: warehouseIds,
+                                    eventType: CommunicationEventTypes.BankAccountChanged,
+                                    channel: channel
+                                );
+
+                                if (!channelRecipients.Any()) continue;
+
+                                if (channel == CommunicationChannels.Email)
+                                {
+                                    warehouseName ??= user.WarehouseId.HasValue
+                                        ? (await _authContext.Warehouses
+                                            .AsNoTracking()
+                                            .Where(w => w.Id == user.WarehouseId.Value)
+                                            .Select(w => w.Name)
+                                            .FirstOrDefaultAsync() ?? user.WarehouseId.Value.ToString())
+                                        : "N/A";
+
+                                    placeholders ??= new Dictionary<string, string>
+                                    {
+                                        { "DriverName",    userName },
+                                        { "DriverEmail",   user.Email ?? "N/A" },
+                                        { "DriverPhone",   user.Profile?.PhoneNumber ?? "N/A" },
+                                        { "Warehouse",     warehouseName },
+                                        { "ChangedAt",     DateTime.UtcNow.ToString("MMM dd, yyyy HH:mm") + " UTC" },
+                                        { "AccountHolder", account.FullName ?? "N/A" }
+                                    };
+
+                                    foreach (var recipientEmail in channelRecipients.Select(r => r.Email).Distinct())
+                                    {
+                                        _ = _emailService.SendEmailAsync(
+                                            toEmail: recipientEmail!,
+                                            subject: $"⚠️ Bank Account Changed – {userName}",
+                                            templateFileName: "BankAccountChanged.cshtml",
+                                            placeholders: placeholders,
+                                            copy: false
+                                        );
+                                    }
+                                }
+                                else if (channel == CommunicationChannels.InApp)
+                                {
+                                    foreach (var recipient in channelRecipients)
+                                    {
+                                        _authContext.Notifications.Add(new Notification
+                                        {
+                                            UserId    = recipient.Id,
+                                            Title     = "⚠️ Bank Account Changed",
+                                            Message   = $"{userName} has updated their bank account information.",
+                                            Type      = NotificationType.Warning,
+                                            IsRead    = false,
+                                            CreatedAt = DateTime.Now,
+                                            Source    = $"BankAccountChanged-{user.Id}"
+                                        });
+                                    }
+                                }
+                            }
+                        }
 
                         break;
 

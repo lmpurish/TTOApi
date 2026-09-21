@@ -59,6 +59,7 @@ namespace TToApp.Controllers
         {
             return await _context.Routes.ToListAsync();
         }
+
         [HttpGet("by-date")]
         public async Task<ActionResult<IEnumerable<object>>> GetRoutesByDate(
     [FromQuery] DateTime date,
@@ -2001,6 +2002,7 @@ public async Task<IActionResult> UploadXmlFile(IFormFile file, int warehouseId)
                 return StatusCode(500, "Error interno del servidor.");
             }
         }
+
         [Authorize]
         [HttpPost("{id:int}/{actionSegment}")]
         public async Task<IActionResult> ChangeStatus(int id, string actionSegment)
@@ -4708,7 +4710,397 @@ public async Task<IActionResult> UploadSwiftXDspSummary(
 
             return sb.ToString();
         }
+        // =====================================================
+        // DRIVER - ROUTE DETAIL
+        // GET: /api/Routes/driver-route/{id}
+        // =====================================================
 
+        // =====================================================
+        // DRIVER - ROUTE DETAIL
+        // GET: /api/Routes/driver-route/{id}
+        // =====================================================
+
+        // =====================================================
+        // DRIVER - ROUTE DETAIL
+        // GET: /api/Routes/driver-route/{id}
+        // =====================================================
+
+        [Authorize]
+        [HttpGet("driver-route/{id:int}")]
+        public async Task<IActionResult> GetDriverRouteDetail(int id)
+        {
+            // =====================================================
+            // CURRENT USER
+            // =====================================================
+
+            var userIdStr =
+                User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (!int.TryParse(userIdStr, out var userId))
+            {
+                return Unauthorized(new
+                {
+                    message = "Invalid user."
+                });
+            }
+
+
+            // =====================================================
+            // USER
+            // =====================================================
+
+            var user = await _context.Users
+                .AsNoTracking()
+                .Where(u => u.Id == userId)
+                .Select(u => new
+                {
+                    u.Id,
+                    u.UserRole,
+                    u.CompanyId,
+                    u.WarehouseId
+                })
+                .FirstOrDefaultAsync();
+
+            if (user == null)
+            {
+                return Unauthorized(new
+                {
+                    message = "User not found."
+                });
+            }
+
+
+            // =====================================================
+            // ROUTE
+            // =====================================================
+
+            var route = await _context.Routes
+                .AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.Date,
+                    r.UserId,
+                    r.WarehouseId,
+                    r.ZoneId,
+
+                    r.DeliveryStops,
+                    r.Volumen,
+
+                    r.routeStatus,
+
+                    Zone = r.Zone == null
+                        ? null
+                        : new
+                        {
+                            r.Zone.Id,
+                            r.Zone.ZoneCode,
+                            r.Zone.Area,
+                            r.Zone.ZipCodesSerialized,
+                            r.Zone.IdWarehouse
+                        },
+
+                    Warehouse = r.Warehouse == null
+                        ? null
+                        : new
+                        {
+                            r.Warehouse.Id,
+                            r.Warehouse.City,
+                            r.Warehouse.State
+                        }
+                })
+                .FirstOrDefaultAsync();
+
+
+            // =====================================================
+            // NOT FOUND
+            // =====================================================
+
+            if (route == null)
+            {
+                return NotFound(new
+                {
+                    message = "Route not found."
+                });
+            }
+
+
+            // =====================================================
+            // SECURITY
+            // =====================================================
+
+            var isPrivileged =
+                user.UserRole == global::User.Role.Admin ||
+                user.UserRole == global::User.Role.Manager ||
+                user.UserRole == global::User.Role.CompanyOwner;
+
+
+            var driverCanView =
+                route.UserId == userId ||
+                (
+                    route.UserId == null &&
+                    (
+                        route.routeStatus == RouteStatus.Available ||
+                        route.routeStatus == RouteStatus.Future
+                    )
+                );
+
+
+            if (!isPrivileged && !driverCanView)
+            {
+                return StatusCode(
+                    StatusCodes.Status403Forbidden,
+                    new
+                    {
+                        message = "You do not have access to this route."
+                    }
+                );
+            }
+
+
+            // =====================================================
+            // ZONE PAY RULE
+            // =====================================================
+
+            ZonePayRule? payRule = null;
+
+            if (route.ZoneId.HasValue)
+            {
+                var routeDate = route.Date.Date;
+
+                payRule = await _context.ZonePayRules
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.ZoneId == route.ZoneId.Value &&
+                        x.IsActive &&
+                        x.EffectiveFrom <= routeDate &&
+                        (
+                            x.EffectiveTo == null ||
+                            x.EffectiveTo >= routeDate
+                        ) &&
+                        (
+                            x.MinPackages == null ||
+                            route.Volumen >= x.MinPackages
+                        ) &&
+                        (
+                            x.MaxPackages == null ||
+                            route.Volumen <= x.MaxPackages
+                        )
+                    )
+                    .OrderByDescending(x => x.Version)
+                    .ThenByDescending(x => x.EffectiveFrom)
+                    .FirstOrDefaultAsync();
+            }
+
+
+            // =====================================================
+            // ESTIMATED PAY
+            // =====================================================
+
+            decimal? estimatedPay = null;
+
+            decimal? baseAmount =
+                payRule?.BaseAmount;
+
+            decimal? extraAmount =
+                payRule?.ExtraAmount;
+
+            int additionalPackages =
+                Math.Max(
+                    0,
+                    route.Volumen -
+                    route.DeliveryStops
+                );
+
+
+            if (payRule != null)
+            {
+                switch (payRule.PaymentType)
+                {
+                    // =============================================
+                    // PER ROUTE
+                    // =============================================
+
+                    case PaymentType.PerRoute:
+
+                        estimatedPay =
+                            payRule.BaseAmount ?? 0m;
+
+                        break;
+
+
+                    // =============================================
+                    // PER STOP
+                    // =============================================
+
+                    case PaymentType.PerStop:
+
+                        estimatedPay =
+                            route.DeliveryStops *
+                            (payRule.BaseAmount ?? 0m);
+
+                        break;
+
+
+                    // =============================================
+                    // PER BLOCK
+                    // =============================================
+
+                    case PaymentType.PerBlock:
+
+                        // Por ahora BaseAmount representa
+                        // el pago del bloque.
+                        estimatedPay =
+                            payRule.BaseAmount ?? 0m;
+
+                        break;
+
+
+                    // =============================================
+                    // PER STOP + ADDITIONAL PACKAGE
+                    //
+                    // BaseAmount × Stops
+                    // +
+                    // ExtraAmount × Packages adicionales
+                    // =============================================
+
+                    case PaymentType.PerStopPlusAdditionalPackage:
+
+                        var stopPay =
+                            route.DeliveryStops *
+                            (payRule.BaseAmount ?? 0m);
+
+                        var extraPackagePay =
+                            additionalPackages *
+                            (payRule.ExtraAmount ?? 0m);
+
+                        estimatedPay =
+                            stopPay +
+                            extraPackagePay;
+
+                        break;
+                }
+            }
+
+
+            // =====================================================
+            // CAN CLAIM
+            // =====================================================
+
+            var canClaim =
+                route.UserId == null &&
+                (
+                    route.routeStatus == RouteStatus.Available ||
+                    route.routeStatus == RouteStatus.Future
+                );
+
+
+            // =====================================================
+            // IS MINE
+            // =====================================================
+
+            var isMine =
+                route.UserId == userId;
+
+
+            // =====================================================
+            // RESPONSE
+            // =====================================================
+
+            return Ok(new
+            {
+                // ROUTE
+                id = route.Id,
+
+                date = route.Date,
+
+                routeStatus =
+                    route.routeStatus?.ToString()
+                    ?? "Pending",
+
+
+                // ROUTE SUMMARY
+                deliveryStops =
+                    route.DeliveryStops,
+
+                volumen =
+                    route.Volumen,
+
+                additionalPackages =
+                    additionalPackages,
+
+
+                // =============================================
+                // ESTIMATED PAY
+                // =============================================
+
+                estimatedPay =
+                    estimatedPay,
+
+                paymentType =
+                    payRule?.PaymentType.ToString(),
+
+                baseAmount =
+                    baseAmount,
+
+                extraAmount =
+                    extraAmount,
+
+                hasPayRule =
+                    payRule != null,
+
+
+                // =============================================
+                // ZONE
+                // =============================================
+
+                zone = route.Zone == null
+                    ? null
+                    : new
+                    {
+                        id =
+                            route.Zone.Id,
+
+                        zoneCode =
+                            route.Zone.ZoneCode,
+
+                        area =
+                            route.Zone.Area,
+
+                        zipCodes =
+                            route.Zone.ZipCodesSerialized
+                    },
+
+
+                // =============================================
+                // WAREHOUSE
+                // =============================================
+
+                warehouse = route.Warehouse == null
+                    ? null
+                    : new
+                    {
+                        id =
+                            route.Warehouse.Id,
+
+                        city =
+                            route.Warehouse.City,
+
+                        state =
+                            route.Warehouse.State
+                    },
+
+
+                // =============================================
+                // DRIVER
+                // =============================================
+
+                canClaim,
+
+                isMine
+            });
+        }
         private static DateTime? ExtractDate(string text)
         {
             text = Regex.Replace(text ?? "", @"\s+", " ").Trim();

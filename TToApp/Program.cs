@@ -23,6 +23,7 @@ using TToApp.Services.Scheduled;
 using TToApp.Services.Settings;
 using TToApp.Services.Sms;
 using TToApp.Services.Vehicle;
+using TToApp.Services.SsnVerification;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -293,6 +294,11 @@ builder.Services
     .PersistKeysToFileSystem(
         new DirectoryInfo(dataProtectionKeysPath));
 
+builder.Services
+    .AddScoped<
+        ISsnDocumentVerificationService,
+        SsnDocumentVerificationService
+    >();
 // =====================================================
 // RECRUIT AGENT SERVICE
 // =====================================================

@@ -4970,7 +4970,149 @@ public async Task<IActionResult> GetRoutesByRange(
     return Ok(routes);
 }
 
-}
+        // =====================================================
+        // GET: api/Routes/my-route
+        // ROUTES FOR AUTHENTICATED USER
+        // =====================================================
+
+        [Authorize]
+        [HttpGet("my-route")]
+        public async Task<IActionResult> GetMyRoutes(
+            [FromQuery] DateTime? startDate = null,
+            [FromQuery] DateTime? endDate = null)
+        {
+            // =====================================================
+            // AUTHENTICATED USER
+            // =====================================================
+
+            var userIdStr =
+                User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (!int.TryParse(userIdStr, out var userId))
+            {
+                return Unauthorized(new
+                {
+                    message = "Invalid or missing user."
+                });
+            }
+
+
+            // =====================================================
+            // QUERY
+            // =====================================================
+
+            var query = _context.Routes
+                .AsNoTracking()
+                .Where(r =>
+                    r.UserId == userId);
+
+
+            // =====================================================
+            // START DATE
+            // =====================================================
+
+            if (startDate.HasValue)
+            {
+                var start =
+                    startDate.Value.Date;
+
+                query = query.Where(r =>
+                    r.Date >= start);
+            }
+
+
+            // =====================================================
+            // END DATE
+            // =====================================================
+
+            if (endDate.HasValue)
+            {
+                var end =
+                    endDate.Value.Date.AddDays(1);
+
+                query = query.Where(r =>
+                    r.Date < end);
+            }
+
+
+            // =====================================================
+            // RESULT
+            // =====================================================
+
+            var routes = await query
+                .OrderByDescending(r => r.Date)
+                .ThenByDescending(r => r.Id)
+                .Select(r => new
+                {
+                    r.Id,
+
+                    r.Date,
+
+                    r.RouteCode,
+
+                    r.Type,
+
+                    r.DeliveryStops,
+
+                    r.Volumen,
+
+                    r.Attempts,
+
+                    r.CNL,
+
+                    r.Los,
+
+                    r.CustomerOnTime,
+
+                    r.BranchOnTime,
+
+                    routeStatus =
+                        r.routeStatus.HasValue
+                            ? r.routeStatus.Value.ToString()
+                            : "Pending",
+
+                    r.ZoneId,
+
+                    Zone = r.Zone == null
+                        ? null
+                        : new
+                        {
+                            r.Zone.Id,
+                            r.Zone.ZoneCode,
+                            r.Zone.Area
+                        },
+
+                    r.WarehouseId,
+
+                    Warehouse = r.Warehouse == null
+                        ? null
+                        : new
+                        {
+                            r.Warehouse.Id,
+                            r.Warehouse.City,
+                            r.Warehouse.State
+                        },
+
+                    PaymentType =
+                        r.PaymentType.ToString(),
+
+                    r.PriceRoute
+                })
+                .ToListAsync();
+
+
+            // =====================================================
+            // RESPONSE
+            // =====================================================
+
+            return Ok(new
+            {
+                count = routes.Count,
+                routes
+            });
+        }
+
+    }
 internal static class ClaimsExtensions
 {
     public static int? GetUserId(this ClaimsPrincipal user)

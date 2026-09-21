@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using TToApp.Migrations;
 using TToApp.Model;
+using TToApp.Model.TToApp.Model;
 using static TToApp.Configurations.ModelConf;
 
 namespace TToApp.Model
@@ -55,7 +56,8 @@ namespace TToApp.Model
         public DbSet<AuditLogs> AuditLogs { get; set; }
         public DbSet<PackageReturnEvidence> PackageReturnEvidences { get; set; }
         public DbSet<CompanyRevenue> CompanyRevenues { get; set; }
-
+        public DbSet<SsnChangeRequest> SsnChangeRequests { get; set; }
+        public DbSet<ApplicantActivity> ApplicantActivity { get; set; }
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
             optionsBuilder.ConfigureWarnings(w =>
@@ -516,7 +518,7 @@ namespace TToApp.Model
                 .Property(uw => uw.ManagerDailyRate).HasColumnType("decimal(10,2)");
 
         }
-        public DbSet<TToApp.Model.ApplicantActivity> ApplicantActivity { get; set; } = default!;
+       
 
     }
 }

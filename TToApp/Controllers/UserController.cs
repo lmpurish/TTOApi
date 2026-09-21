@@ -1954,6 +1954,7 @@ public class UserController : ControllerBase
                 switch (section)
                 {
                     case "address":
+
                         if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
                             user.Profile.PhoneNumber = request.PhoneNumber;
 
@@ -1968,34 +1969,25 @@ public class UserController : ControllerBase
 
                         if (request.ZipCode != null)
                             user.Profile.ZipCode = request.ZipCode;
+
                         if (request.DateOfBirth.HasValue)
                         {
                             var dob = request.DateOfBirth.Value.Date;
 
                             if (dob > DateTime.UtcNow.Date.AddYears(-18))
-                                return BadRequest(new { Message = "Driver must be at least 18 years old." });
+                            {
+                                return BadRequest(new
+                                {
+                                    Message = "Driver must be at least 18 years old."
+                                });
+                            }
 
-                            user.Profile.DateOfBirth = DateOnly.FromDateTime(request.DateOfBirth.Value);
+                            user.Profile.DateOfBirth =
+                                DateOnly.FromDateTime(
+                                    request.DateOfBirth.Value
+                                );
                         }
-                        if (!string.IsNullOrWhiteSpace(request.SocialSecurityNumber))
-                        {
-                            var ssn = request.SocialSecurityNumber.Replace("-", "").Trim();
 
-                            if (ssn.Length != 9)
-                                return BadRequest(new { Message = "Invalid SSN." });
-
-                            if (_protector == null)
-                                return StatusCode(500, new { Message = "Encryption service not available." });
-
-                            var encrypted = _protector.Protect(ssn);
-
-                            if (string.IsNullOrWhiteSpace(encrypted))
-                                return StatusCode(500, new { Message = "Encryption failed." });
-
-                            user.Profile.SsnEncrypted = encrypted;
-                            user.Profile.SsnLast4 = ssn[^4..];
-                            user.Profile.SsnUpdatedAt = DateTime.UtcNow;
-                        }
                         break;
 
                     case "bank":
@@ -2073,32 +2065,140 @@ public class UserController : ControllerBase
                         break;
 
                     case "ssn":
-                        if (!string.IsNullOrWhiteSpace(request.SocialSecurityNumber))
+
+                        // =====================================================
+                        // EXISTING SSN CANNOT BE CHANGED HERE
+                        // =====================================================
+
+                        if (!string.IsNullOrWhiteSpace(user.Profile.SsnEncrypted))
                         {
-                            var ssn = request.SocialSecurityNumber.Replace("-", "").Trim();
-
-                            if (ssn.Length != 9)
-                                return BadRequest(new { Message = "Invalid SSN." });
-
-                            if (_protector == null)
-                                return StatusCode(500, new { Message = "Encryption service not available." });
-
-                            var encrypted = _protector.Protect(ssn);
-
-                            if (string.IsNullOrWhiteSpace(encrypted))
-                                return StatusCode(500, new { Message = "Encryption failed." });
-
-                            user.Profile.SsnEncrypted = encrypted;
-                            user.Profile.SsnLast4 = ssn[^4..];
-                            user.Profile.SsnUpdatedAt = DateTime.UtcNow;
+                            return StatusCode(
+                                StatusCodes.Status403Forbidden,
+                                new
+                                {
+                                    Message =
+                                        "Your Social Security number is already registered. " +
+                                        "To change it, submit an SSN change request for staff approval."
+                                }
+                            );
                         }
+
+
+                        // =====================================================
+                        // INITIAL SSN IS REQUIRED
+                        // =====================================================
+
+                        if (string.IsNullOrWhiteSpace(request.SocialSecurityNumber))
+                        {
+                            return BadRequest(new
+                            {
+                                Message =
+                                    "Social Security number is required."
+                            });
+                        }
+
+
+                        // =====================================================
+                        // NORMALIZE
+                        // =====================================================
+
+                        var ssn = request.SocialSecurityNumber
+                            .Replace("-", "")
+                            .Replace(" ", "")
+                            .Trim();
+
+
+                        // =====================================================
+                        // VALIDATE
+                        // =====================================================
+
+                        if (
+                            ssn.Length != 9 ||
+                            !ssn.All(char.IsDigit)
+                        )
+                        {
+                            return BadRequest(new
+                            {
+                                Message =
+                                    "Social Security number must contain exactly 9 digits."
+                            });
+                        }
+
+
+                        // =====================================================
+                        // ENCRYPT
+                        // =====================================================
+
+                        if (_protector == null)
+                        {
+                            return StatusCode(
+                                StatusCodes.Status500InternalServerError,
+                                new
+                                {
+                                    Message =
+                                        "Encryption service not available."
+                                }
+                            );
+                        }
+
+
+                        var encrypted =
+                            _protector.Protect(ssn);
+
+
+                        if (string.IsNullOrWhiteSpace(encrypted))
+                        {
+                            return StatusCode(
+                                StatusCodes.Status500InternalServerError,
+                                new
+                                {
+                                    Message =
+                                        "Encryption failed."
+                                }
+                            );
+                        }
+
+
+                        // =====================================================
+                        // SAVE
+                        // =====================================================
+
+                        user.Profile.SsnEncrypted =
+                            encrypted;
+
+                        user.Profile.SsnLast4 =
+                            ssn[^4..];
+
+                        user.Profile.SsnUpdatedAt =
+                            DateTime.UtcNow;
+
+
+                        // =====================================================
+                        // OPTIONAL DOCUMENT
+                        // =====================================================
 
                         if (request.SocialSecurityUrl != null)
                         {
-                            if (!IsAllowed(request.SocialSecurityUrl, allowPdf: true))
-                                return BadRequest(new { Message = "Invalid SSN file." });
+                            if (
+                                !IsAllowed(
+                                    request.SocialSecurityUrl,
+                                    allowPdf: true
+                                )
+                            )
+                            {
+                                return BadRequest(new
+                                {
+                                    Message =
+                                        "Invalid SSN file."
+                                });
+                            }
 
-                            user.Profile.SocialSecurityUrl = await SavePrivateAsync(request.SocialSecurityUrl, "socialSecurities");
+
+                            user.Profile.SocialSecurityUrl =
+                                await SavePrivateAsync(
+                                    request.SocialSecurityUrl,
+                                    "socialSecurities"
+                                );
                         }
 
                         break;
@@ -2160,9 +2260,184 @@ public class UserController : ControllerBase
 
                         break;
                     case "finish":
-                        user.IsFirstLogin = false;
-                        user.UpdatedAt = DateTime.UtcNow;
-                        break;
+                        {
+                            // =====================================================
+                            // 1. PERSONAL INFORMATION
+                            // =====================================================
+
+                            var personalInfoCompleted =
+                                !string.IsNullOrWhiteSpace(user.Profile.Address) &&
+                                !string.IsNullOrWhiteSpace(user.Profile.City) &&
+                                !string.IsNullOrWhiteSpace(user.Profile.State) &&
+                                !string.IsNullOrWhiteSpace(user.Profile.ZipCode) &&
+                                user.Profile.DateOfBirth.HasValue;
+
+
+                            // =====================================================
+                            // 2. DRIVER LICENSE
+                            // =====================================================
+
+                            var driverLicenseCompleted =
+                                !string.IsNullOrWhiteSpace(
+                                    user.Profile.DriverLicenseNumber
+                                ) &&
+                                user.Profile.ExpDriverLicense.HasValue &&
+                                !string.IsNullOrWhiteSpace(
+                                    user.Profile.DrivingLicenseUrl
+                                );
+
+
+                            // =====================================================
+                            // 3. INSURANCE
+                            // =====================================================
+
+                            var insuranceCompleted =
+                                user.Profile.ExpInsurance.HasValue &&
+                                !string.IsNullOrWhiteSpace(
+                                    user.Profile.InsuranceUrl
+                                );
+
+
+                            // =====================================================
+                            // 4. SOCIAL SECURITY
+                            // =====================================================
+
+                            var socialSecurityCompleted =
+                                !string.IsNullOrWhiteSpace(
+                                    user.Profile.SsnEncrypted
+                                ) &&
+                                !string.IsNullOrWhiteSpace(
+                                    user.Profile.SsnLast4
+                                );
+
+
+                            // =====================================================
+                            // 5. BANK ACCOUNT
+                            // =====================================================
+
+                            var defaultAccount =
+                                await _authContext.Accounts
+                                    .AsNoTracking()
+                                    .FirstOrDefaultAsync(a =>
+                                        a.UserId == user.Id &&
+                                        a.IsDefault
+                                    );
+
+
+                            var bankCompleted =
+                                defaultAccount != null &&
+                                !string.IsNullOrWhiteSpace(
+                                    defaultAccount.AccountNumber
+                                ) &&
+                                !string.IsNullOrWhiteSpace(
+                                    defaultAccount.RoutingNumber
+                                );
+
+
+                            // =====================================================
+                            // 6. AVATAR
+                            // =====================================================
+
+                            var avatarCompleted =
+                                !string.IsNullOrWhiteSpace(
+                                    user.AvatarUrl
+                                );
+
+
+                            // =====================================================
+                            // VALIDATE ALL SECTIONS
+                            // =====================================================
+
+                            var isProfileComplete =
+                                personalInfoCompleted &&
+                                driverLicenseCompleted &&
+                                insuranceCompleted &&
+                                socialSecurityCompleted &&
+                                bankCompleted &&
+                                avatarCompleted;
+
+
+                            if (!isProfileComplete)
+                            {
+                                var missingSections =
+                                    new List<string>();
+
+
+                                if (!personalInfoCompleted)
+                                    missingSections.Add(
+                                        "Personal Information"
+                                    );
+
+                                if (!driverLicenseCompleted)
+                                    missingSections.Add(
+                                        "Driver License"
+                                    );
+
+                                if (!insuranceCompleted)
+                                    missingSections.Add(
+                                        "Insurance"
+                                    );
+
+                                if (!socialSecurityCompleted)
+                                    missingSections.Add(
+                                        "Social Security"
+                                    );
+
+                                if (!bankCompleted)
+                                    missingSections.Add(
+                                        "Payment Information"
+                                    );
+
+                                if (!avatarCompleted)
+                                    missingSections.Add(
+                                        "Profile Photo"
+                                    );
+
+
+                                return BadRequest(new
+                                {
+                                    Message =
+                                        "Your profile is not complete.",
+
+                                    MissingSections =
+                                        missingSections,
+
+                                    Completion = new
+                                    {
+                                        PersonalInfo =
+                                            personalInfoCompleted,
+
+                                        DriverLicense =
+                                            driverLicenseCompleted,
+
+                                        Insurance =
+                                            insuranceCompleted,
+
+                                        SocialSecurity =
+                                            socialSecurityCompleted,
+
+                                        Bank =
+                                            bankCompleted,
+
+                                        Avatar =
+                                            avatarCompleted
+                                    }
+                                });
+                            }
+
+
+                            // =====================================================
+                            // PROFILE COMPLETE
+                            // =====================================================
+
+                            user.IsFirstLogin = false;
+
+                            user.UpdatedAt =
+                                DateTime.UtcNow;
+
+
+                            break;
+                        }
 
 
                     default:
@@ -4389,6 +4664,429 @@ public class UserController : ControllerBase
             applicants
         });
     }
+
+    [Authorize]
+    [HttpGet("profile-completion")]
+    public async Task<IActionResult> GetProfileCompletion()
+    {
+        // =====================================================
+        // CURRENT USER
+        // =====================================================
+
+        var userIdClaim =
+            User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        if (!int.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized(new
+            {
+                Message = "Invalid user."
+            });
+        }
+
+
+        // =====================================================
+        // LOAD USER PROFILE
+        // =====================================================
+
+        var user = await _authContext.Users
+            .AsNoTracking()
+            .Where(u => u.Id == userId)
+            .Select(u => new
+            {
+                u.Id,
+                u.AvatarUrl,
+                u.IsFirstLogin,
+
+                Profile = u.Profile == null
+                    ? null
+                    : new
+                    {
+                        u.Profile.Address,
+                        u.Profile.City,
+                        u.Profile.State,
+                        u.Profile.ZipCode,
+                        u.Profile.DateOfBirth,
+
+                        u.Profile.DriverLicenseNumber,
+                        u.Profile.ExpDriverLicense,
+                        u.Profile.DrivingLicenseUrl,
+
+                        u.Profile.ExpInsurance,
+                        u.Profile.InsuranceUrl,
+
+                        u.Profile.SsnEncrypted,
+                        u.Profile.SsnLast4,
+                        u.Profile.SocialSecurityUrl
+                    },
+
+                DefaultAccount = u.Accounts
+                    .Where(a => a.IsDefault)
+                    .Select(a => new
+                    {
+                        a.Id,
+                        a.AccountNumber,
+                        a.RoutingNumber,
+                        a.FullName
+                    })
+                    .FirstOrDefault()
+            })
+            .FirstOrDefaultAsync();
+
+
+        if (user == null)
+        {
+            return NotFound(new
+            {
+                Message = "User not found."
+            });
+        }
+
+
+        // =====================================================
+        // STEP 1 - PERSONAL INFORMATION
+        // =====================================================
+
+        var personalInfoCompleted =
+            user.Profile != null &&
+            !string.IsNullOrWhiteSpace(user.Profile.Address) &&
+            !string.IsNullOrWhiteSpace(user.Profile.City) &&
+            !string.IsNullOrWhiteSpace(user.Profile.State) &&
+            !string.IsNullOrWhiteSpace(user.Profile.ZipCode) &&
+            user.Profile.DateOfBirth.HasValue;
+
+
+        // =====================================================
+        // STEP 2 - DRIVER LICENSE
+        // =====================================================
+
+        var driverLicenseCompleted =
+            user.Profile != null &&
+            !string.IsNullOrWhiteSpace(
+                user.Profile.DriverLicenseNumber
+            ) &&
+            user.Profile.ExpDriverLicense.HasValue &&
+            !string.IsNullOrWhiteSpace(
+                user.Profile.DrivingLicenseUrl
+            );
+
+
+        // =====================================================
+        // STEP 3 - INSURANCE
+        // =====================================================
+
+        var insuranceCompleted =
+            user.Profile != null &&
+            user.Profile.ExpInsurance.HasValue &&
+            !string.IsNullOrWhiteSpace(
+                user.Profile.InsuranceUrl
+            );
+
+
+        // =====================================================
+        // STEP 4 - SOCIAL SECURITY
+        // =====================================================
+
+        var socialSecurityCompleted =
+            user.Profile != null &&
+            !string.IsNullOrWhiteSpace(
+                user.Profile.SsnEncrypted
+            ) &&
+            !string.IsNullOrWhiteSpace(
+                user.Profile.SsnLast4
+            );
+
+
+        // =====================================================
+        // STEP 5 - BANK
+        // =====================================================
+
+        var bankCompleted =
+            user.DefaultAccount != null &&
+            !string.IsNullOrWhiteSpace(
+                user.DefaultAccount.AccountNumber
+            ) &&
+            !string.IsNullOrWhiteSpace(
+                user.DefaultAccount.RoutingNumber
+            );
+
+
+        // =====================================================
+        // STEP 6 - AVATAR
+        // =====================================================
+
+        var avatarCompleted =
+            !string.IsNullOrWhiteSpace(
+                user.AvatarUrl
+            );
+
+
+        // =====================================================
+        // PROGRESS
+        // =====================================================
+
+        var completedSteps = 0;
+
+        if (personalInfoCompleted)
+            completedSteps++;
+
+        if (driverLicenseCompleted)
+            completedSteps++;
+
+        if (insuranceCompleted)
+            completedSteps++;
+
+        if (socialSecurityCompleted)
+            completedSteps++;
+
+        if (bankCompleted)
+            completedSteps++;
+
+        if (avatarCompleted)
+            completedSteps++;
+
+
+        const int totalSteps = 6;
+
+        var isProfileComplete =
+            completedSteps == totalSteps;
+
+
+        var progressPercentage =
+            (int)Math.Round(
+                completedSteps /
+                (double)totalSteps * 100
+            );
+
+
+        // =====================================================
+        // MASK SENSITIVE INFORMATION
+        // =====================================================
+
+        string? maskedSsn = null;
+
+        if (
+            !string.IsNullOrWhiteSpace(
+                user.Profile?.SsnLast4
+            )
+        )
+        {
+            maskedSsn =
+                $"***-**-{user.Profile.SsnLast4}";
+        }
+
+
+        string? maskedAccount = null;
+
+        if (
+            !string.IsNullOrWhiteSpace(
+                user.DefaultAccount?.AccountNumber
+            )
+        )
+        {
+            var account =
+                user.DefaultAccount.AccountNumber;
+
+            var last4 =
+                account.Length >= 4
+                    ? account[^4..]
+                    : account;
+
+            maskedAccount =
+                $"••••{last4}";
+        }
+
+
+        string? maskedRouting = null;
+
+        if (
+            !string.IsNullOrWhiteSpace(
+                user.DefaultAccount?.RoutingNumber
+            )
+        )
+        {
+            var routing =
+                user.DefaultAccount.RoutingNumber;
+
+            var last4 =
+                routing.Length >= 4
+                    ? routing[^4..]
+                    : routing;
+
+            maskedRouting =
+                $"•••••{last4}";
+        }
+
+
+        // =====================================================
+        // RESPONSE
+        // =====================================================
+
+        return Ok(new
+        {
+            // =================================================
+            // COMPLETION
+            // =================================================
+
+            PersonalInfoCompleted =
+                personalInfoCompleted,
+
+            DriverLicenseCompleted =
+                driverLicenseCompleted,
+
+            InsuranceCompleted =
+                insuranceCompleted,
+
+            SocialSecurityCompleted =
+                socialSecurityCompleted,
+
+            BankCompleted =
+                bankCompleted,
+
+            AvatarCompleted =
+                avatarCompleted,
+
+            CompletedSteps =
+                completedSteps,
+
+            TotalSteps =
+                totalSteps,
+
+            ProgressPercentage =
+                progressPercentage,
+
+            IsProfileComplete =
+                isProfileComplete,
+
+
+            // =================================================
+            // PERSONAL INFORMATION
+            // =================================================
+
+            PersonalInfo =
+                user.Profile == null
+                    ? null
+                    : new
+                    {
+                        user.Profile.Address,
+                        user.Profile.City,
+                        user.Profile.State,
+                        user.Profile.ZipCode,
+
+                        DateOfBirth =
+                            user.Profile.DateOfBirth
+                                .HasValue
+                                ? user.Profile.DateOfBirth
+                                    .Value
+                                    .ToString("yyyy-MM-dd")
+                                : null
+                    },
+
+
+            // =================================================
+            // DRIVER LICENSE
+            // =================================================
+
+            DriverLicense =
+                user.Profile == null
+                    ? null
+                    : new
+                    {
+                        user.Profile.DriverLicenseNumber,
+
+                        ExpDriverLicense =
+                            user.Profile.ExpDriverLicense
+                                .HasValue
+                                ? user.Profile.ExpDriverLicense
+                                    .Value
+                                    .ToString("yyyy-MM-dd")
+                                : null,
+
+                        HasFile =
+                            !string.IsNullOrWhiteSpace(
+                                user.Profile.DrivingLicenseUrl
+                            )
+                    },
+
+
+            // =================================================
+            // INSURANCE
+            // =================================================
+
+            Insurance =
+                user.Profile == null
+                    ? null
+                    : new
+                    {
+                        ExpInsurance =
+                            user.Profile.ExpInsurance
+                                .HasValue
+                                ? user.Profile.ExpInsurance
+                                    .Value
+                                    .ToString("yyyy-MM-dd")
+                                : null,
+
+                        HasFile =
+                            !string.IsNullOrWhiteSpace(
+                                user.Profile.InsuranceUrl
+                            )
+                    },
+
+
+            // =================================================
+            // SOCIAL SECURITY
+            // =================================================
+
+            SocialSecurity = new
+            {
+                Masked =
+                    maskedSsn,
+
+                HasSsn =
+                    socialSecurityCompleted,
+
+                HasDocument =
+                    !string.IsNullOrWhiteSpace(
+                        user.Profile?.SocialSecurityUrl
+                    )
+            },
+
+
+            // =================================================
+            // BANK
+            // =================================================
+
+            Bank =
+                user.DefaultAccount == null
+                    ? null
+                    : new
+                    {
+                        AccountHolderName =
+                            user.DefaultAccount.FullName,
+
+                        AccountNumberMasked =
+                            maskedAccount,
+
+                        RoutingNumberMasked =
+                            maskedRouting
+                    },
+
+
+            // =================================================
+            // AVATAR
+            // =================================================
+
+            Avatar = new
+            {
+                HasAvatar =
+                    avatarCompleted,
+
+                AvatarUrl =
+                    user.AvatarUrl
+            }
+        });
+    }
+
 }
 
     public class BulkUpdateWarehouseDto

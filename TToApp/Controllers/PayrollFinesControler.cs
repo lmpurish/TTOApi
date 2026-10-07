@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -16,7 +17,7 @@ namespace TToApp.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class PayrollFinesController : ControllerBase
+public class PayrollFinesController : BaseApiController
 {
     private readonly ApplicationDbContext _context;
     private readonly ApiURL _apiUrl;
@@ -38,7 +39,34 @@ public class PayrollFinesController : ControllerBase
         [FromQuery] bool include = false
     )
     {
+        var companyId = GetCompanyId();
+        if (companyId <= 0) return Unauthorized(new { message = "CompanyId not found in token." });
+
         var q = _context.PayrollFines.AsNoTracking().AsQueryable();
+
+        if (companyId > 0)
+        {
+            var companyWarehouseIds = await _context.Warehouses
+                .AsNoTracking()
+                .Where(w => w.CompanyId == companyId)
+                .Select(w => w.Id)
+                .ToListAsync();
+
+            var companyUserIds = await _context.Users
+                .AsNoTracking()
+                .Where(u => u.CompanyId == companyId)
+                .Select(u => (int)u.Id)
+                .ToListAsync();
+
+            q = q.Where(x =>
+                (x.WarehouseId != null && companyWarehouseIds.Contains(x.WarehouseId.Value)) ||
+                (x.WarehouseId == null && companyUserIds.Contains(x.UserId)));
+        }
+        else
+        {
+            var callerId = (int)GetUserId();
+            q = q.Where(x => x.UserId == callerId);
+        }
 
         if (userId.HasValue) q = q.Where(x => x.UserId == userId.Value);
         if (packageId.HasValue) q = q.Where(x => x.PackageId == packageId.Value);

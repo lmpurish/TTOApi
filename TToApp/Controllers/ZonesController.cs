@@ -14,7 +14,7 @@ namespace TToApp.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    public class ZonesController : ControllerBase
+    public class ZonesController : BaseApiController
     {
         private readonly ApplicationDbContext _context;
 
@@ -28,9 +28,22 @@ namespace TToApp.Controllers
         // GET: api/Zones
         [Authorize]
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Zone>>> GetZones()
+        public async Task<ActionResult<IEnumerable<Zone>>> GetZones([FromQuery] long? companyId = null)
         {
-            return await _context.Zones.ToListAsync();
+            var resolvedCompanyId = GetCompanyIdOrNull(companyId);
+
+            if (resolvedCompanyId == null)
+                return await _context.Zones.ToListAsync();
+
+            var companyWarehouseIds = await _context.Warehouses
+                .AsNoTracking()
+                .Where(w => w.CompanyId == resolvedCompanyId)
+                .Select(w => w.Id)
+                .ToListAsync();
+
+            return await _context.Zones
+                .Where(z => companyWarehouseIds.Contains(z.IdWarehouse))
+                .ToListAsync();
         }
 
         [Authorize]

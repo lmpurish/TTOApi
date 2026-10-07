@@ -15,7 +15,8 @@ public class User
         Applicant,
         CompanyOwner,
         Recruiter,
-        RentalDriver
+        RentalDriver,
+        SuperAdmin
     }
 
     public enum HiringStage

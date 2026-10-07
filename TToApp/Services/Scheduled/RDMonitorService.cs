@@ -5,6 +5,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
+using TToApp.Model;
 using TToApp.Services.EarlyWarnings;
 
 namespace TToApp.Services.Scheduled
@@ -17,6 +19,7 @@ namespace TToApp.Services.Scheduled
         private Timer _dailyUnassignedZonesTimer;
         private Timer _earlyWarningsTimer;
         private Timer _missingDailyPackagesTimer;
+        private Timer _routeStatusTransitionTimer;
 
         public RDMonitorService(IServiceProvider services, ILogger<RDMonitorService> logger)
         {
@@ -64,12 +67,22 @@ namespace TToApp.Services.Scheduled
                 missingPackagesDelay,
                 TimeSpan.FromDays(1)
             );
-            // _missingDailyPackagesTimer = new Timer(
-            //     EjecuteMissingDailyPackages,
+
+            var routeTransitionDelay = GetDelayUntil(new TimeSpan(1, 0, 0));
+
+            _routeStatusTransitionTimer = new Timer(
+                EjecuteRouteStatusTransition,
+                null,
+                routeTransitionDelay,
+                TimeSpan.FromDays(1)
+            );
+            // _routeStatusTransitionTimer = new Timer(
+            //     EjecuteRouteStatusTransition,
             //     null,
             //     TimeSpan.FromSeconds(10),
-            //     Timeout.InfiniteTimeSpan // solo una vez
+            //     Timeout.InfiniteTimeSpan // solo una vez para probar
             // );
+
             return Task.CompletedTask;
         }
 
@@ -172,6 +185,40 @@ namespace TToApp.Services.Scheduled
             }
         }
 
+        private async void EjecuteRouteStatusTransition(object state)
+        {
+            try
+            {
+                _logger.LogInformation("🔄 Running route status transition (5:00 PM)...");
+
+                using var scope = _services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+                var yesterday = DateTime.Today.AddDays(-1);
+
+                var routes = await db.Routes
+                    .Where(r => r.Date.Date == yesterday &&
+                                (r.routeStatus == RouteStatus.Assigned || r.routeStatus == RouteStatus.Available))
+                    .ToListAsync();
+
+                foreach (var route in routes)
+                {
+                    route.routeStatus = route.routeStatus == RouteStatus.Assigned
+                        ? RouteStatus.PendingCompletion
+                        : RouteStatus.Cancelled;
+                }
+
+                await db.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "✅ Route status transition completed. {Count} routes updated.", routes.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error in route status transition.");
+            }
+        }
+
         public Task StopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("🛑 RDMonitorService detenido.");
@@ -179,6 +226,7 @@ namespace TToApp.Services.Scheduled
             _dailyUnassignedZonesTimer?.Dispose();
             _earlyWarningsTimer?.Dispose();
             _missingDailyPackagesTimer?.Dispose();
+            _routeStatusTransitionTimer?.Dispose();
             return Task.CompletedTask;
         }
 
@@ -188,6 +236,7 @@ namespace TToApp.Services.Scheduled
             _dailyUnassignedZonesTimer?.Dispose();
             _earlyWarningsTimer?.Dispose();
             _missingDailyPackagesTimer?.Dispose();
+            _routeStatusTransitionTimer?.Dispose();
         }
 
         private static TimeSpan GetDelayUntil(TimeSpan targetTime)

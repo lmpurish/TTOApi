@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using TToApp.DTOs;
 using TToApp.Model;
 
@@ -9,7 +10,7 @@ namespace TToApp.Controllers
     [Authorize]
     [ApiController]
     [Route("api/loans")]
-    public class LoansController : ControllerBase
+    public class LoansController : BaseApiController
     {
         private readonly ApplicationDbContext _db;
         public LoansController(ApplicationDbContext db) => _db = db;
@@ -155,9 +156,19 @@ namespace TToApp.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<object>>> GetAll()
         {
+            var companyId = GetCompanyId();
+            if (companyId <= 0) return Unauthorized(new { message = "CompanyId not found in token." });
+
+            var companyDriverIds = await _db.Users
+                .AsNoTracking()
+                .Where(u => u.CompanyId == companyId)
+                .Select(u => u.Id)
+                .ToListAsync();
+
             var loans = await _db.EmployeeLoans
                 .AsNoTracking()
-                .Include(l => l.Driver) // 👈 relación con User/Employee
+                .Where(l => companyDriverIds.Contains(l.DriverId))
+                .Include(l => l.Driver)
                 .Include(l => l.Repayments)
                 .ToListAsync();
 

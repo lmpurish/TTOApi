@@ -34,7 +34,7 @@ namespace TToApp.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    public class RoutesController : ControllerBase
+    public class RoutesController : BaseApiController
     {
         private readonly ApplicationDbContext _context;
         private readonly EmailService _emailService;
@@ -54,10 +54,24 @@ namespace TToApp.Controllers
         }
 
         // GET: api/Routes
+        [Authorize]
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Routes>>> GetRoutes()
+        public async Task<ActionResult<IEnumerable<Routes>>> GetRoutes([FromQuery] long? companyId = null)
         {
-            return await _context.Routes.ToListAsync();
+            var resolvedCompanyId = GetCompanyIdOrNull(companyId);
+
+            if (resolvedCompanyId == null)
+                return await _context.Routes.ToListAsync();
+
+            var companyWarehouseIds = await _context.Warehouses
+                .AsNoTracking()
+                .Where(w => w.CompanyId == resolvedCompanyId)
+                .Select(w => w.Id)
+                .ToListAsync();
+
+            return await _context.Routes
+                .Where(r => r.WarehouseId != null && companyWarehouseIds.Contains((int)r.WarehouseId))
+                .ToListAsync();
         }
 
         [HttpGet("by-date")]
@@ -1632,7 +1646,7 @@ public async Task<IActionResult> UploadXmlFile(IFormFile file, int warehouseId)
 
 
             tableHtml.AppendLine(
-                "</tbody></table>");
+                "</tbody></table>"); 
 
 
             var placeholders =
@@ -1836,7 +1850,7 @@ public async Task<IActionResult> UploadXmlFile(IFormFile file, int warehouseId)
                     Volumen = routesDto.Volumen,
                     DeliveryStops = (int)routesDto.DeliveryStops,
                     ZoneId = routesDto.ZoneId,
-                    routeStatus = RouteStatus.Created,
+                    routeStatus = routesDto.Status ?? RouteStatus.Created,
                     PriceRoute = routesDto.PriceRoute,
                     PaymentType = routesDto.paymentType,
                     WarehouseId = routesDto.WarehouseId
@@ -5558,8 +5572,8 @@ public class RoutesDto
     public DateTime Date { get; set; }
     public double? PriceRoute   { get; set; }
     public PaymentType paymentType { get; set; }
-    public Warehouse? Warehouse { get; set; }
     public int? WarehouseId { get; set; }
+    public RouteStatus? Status { get; set; }
 
 }
 

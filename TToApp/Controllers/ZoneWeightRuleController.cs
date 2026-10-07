@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using TToApp.Model;
 
 namespace TToApp.Controllers
@@ -8,7 +9,7 @@ namespace TToApp.Controllers
     [Route("api/zone-weight-rules")]
     [ApiController]
     [Authorize]
-    public class ZoneWeightRuleController : ControllerBase
+    public class ZoneWeightRuleController : BaseApiController
     {
         private readonly ApplicationDbContext _db;
 
@@ -23,6 +24,16 @@ namespace TToApp.Controllers
             [FromQuery] bool? activeOnly = true,
             CancellationToken ct = default)
         {
+            var companyId = GetCompanyId();
+            if (companyId > 0)
+            {
+                var zoneOwned = await _db.Zones
+                    .AsNoTracking()
+                    .AnyAsync(z => z.Id == zoneId &&
+                        _db.Warehouses.Any(w => w.Id == z.IdWarehouse && w.CompanyId == companyId), ct);
+                if (!zoneOwned) return Forbid();
+            }
+
             var query = _db.ZoneWeightRules.Where(r => r.ZoneId == zoneId);
             if (activeOnly == true)
                 query = query.Where(r => r.IsActive);

@@ -20,7 +20,7 @@ namespace TToApp.Services.Payroll
         public record PayRunComputeResult(PayRun PayRun, List<SkippedRouteInfo> SkippedRoutes);
 
         public async Task<PayRunComputeResult> ComputeDriverWeeklyAsync(
-            long companyId,
+            long? companyId,
             long driverId,
             DateOnly weekStart,
             DateOnly weekEnd,
@@ -31,6 +31,42 @@ namespace TToApp.Services.Payroll
         {
             var startDt = weekStart.ToDateTime(TimeOnly.MinValue);
             var endExclusive = weekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue);
+
+            // Derivar companyId del warehouse cuando no viene del caller
+            if (companyId == null && warehouseId.HasValue)
+            {
+                companyId = await _db.Warehouses
+                    .AsNoTracking()
+                    .Where(w => w.Id == (int)warehouseId.Value)
+                    .Select(w => (long?)w.CompanyId)
+                    .FirstOrDefaultAsync();
+            }
+
+            // Fallback: derivar warehouse y companyId desde la zona del driver
+            if (companyId == null || !warehouseId.HasValue)
+            {
+                var zoneWarehouse = await _db.Set<Routes>()
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.UserId == (int)driverId &&
+                        r.Date >= startDt &&
+                        r.Date < endExclusive &&
+                        r.ZoneId != null && r.ZoneId > 0)
+                    .Join(_db.Set<Zone>(),
+                        r => r.ZoneId,
+                        z => z.Id,
+                        (r, z) => new { z.IdWarehouse, z.Warehouse!.CompanyId })
+                    .FirstOrDefaultAsync();
+
+                if (zoneWarehouse != null)
+                {
+                    warehouseId ??= zoneWarehouse.IdWarehouse;
+                    companyId   ??= zoneWarehouse.CompanyId;
+                }
+            }
+
+            if (companyId == null)
+                throw new InvalidOperationException("No se pudo determinar la compañía para el cálculo de nómina.");
 
             // 1) PayPeriod
             var period = await _db.PayPeriods.FirstOrDefaultAsync(p =>
@@ -44,7 +80,7 @@ namespace TToApp.Services.Payroll
             {
                 period = new PayPeriod
                 {
-                    CompanyId = companyId,
+                    CompanyId = companyId.Value,
                     WarehouseId = warehouseId,
                     StartDate = weekStart,
                     EndDate = weekEnd,
@@ -65,10 +101,8 @@ namespace TToApp.Services.Payroll
                 .ThenByDescending(r => r.EffectiveFrom)
                 .ToListAsync();
                 
-            if (!rates.Any())
-            {
-                throw new Exception($"Driver {driverId} has no DriverRate configured.");
-            }
+            // Sin DriverRate se usará PriceRoute de cada ruta como fallback (PerRoute)
+            var usePriceRouteFallback = !rates.Any();
 
             // 3) PayrollConfig (por warehouse)
             PayrollConfig? payrollConfig = null;
@@ -83,8 +117,7 @@ namespace TToApp.Services.Payroll
                 .AsNoTracking()
                 .AnyAsync(w =>
                     w.Id == (int)warehouseId.Value &&
-                    w.CompanyId == companyId &&          // si aplica en tu modelo
-                    w.Company == "OnTrac"                // AJUSTA: o Contains("OnTrac")
+                    w.Company == "OnTrac"
                 );
                 payrollConfig = await _db.PayrollConfigs
                     .AsNoTracking()
@@ -129,7 +162,8 @@ namespace TToApp.Services.Payroll
                     r.Date >= startDt &&
                     r.Date < endExclusive &&
                     r.UserId != null &&
-                    r.UserId == (int)driverId
+                    r.UserId == (int)driverId &&
+                    (!warehouseId.HasValue || r.WarehouseId == (int)warehouseId.Value)
                 );
 
             if (filterZoneId.HasValue && filterZoneId.Value > 0 && isOnTrac)
@@ -370,6 +404,31 @@ namespace TToApp.Services.Payroll
                 var failed    = Math.Max(0, route.CNL);
                 var volumen   = route.Volumen;
                 var earningType = route.Type == RouteType.Pickup ? "Earning:Pickup" : "Earning:Delivery";
+
+                // Fallback: si no hay DriverRate, usar PriceRoute de la ruta
+                if (usePriceRouteFallback || driverRate == null)
+                {
+                    var priceRoute = (decimal)(route.PriceRoute ?? 0);
+                    if (priceRoute <= 0)
+                    {
+                        skippedRoutes.Add(new SkippedRouteInfo(
+                            route.Id, route.RouteCode, route.Date,
+                            "No DriverRate and no PriceRoute configured"));
+                        continue;
+                    }
+
+                    gross += AddLine(
+                        payRun,
+                        earningType,
+                        route.Id.ToString(),
+                        $"Route {route.RouteCode ?? route.Id.ToString()} – PriceRoute",
+                        1m,
+                        priceRoute,
+                        $"PRICE_ROUTE_FALLBACK",
+                        route.Date
+                    );
+                    continue;
+                }
 
                 var activeZoneRule = route.ZoneId.HasValue
                     ? zonePayRules.FirstOrDefault(r =>
@@ -1072,7 +1131,8 @@ public async Task<PayRun> ComputeStaffWeeklyAsync(
     {
         global::User.Role.Admin,
         global::User.Role.Recruiter,
-        global::User.Role.Assistant
+        global::User.Role.Assistant,
+        global::User.Role.SuperAdmin
     };
 
     var staff = await _db.Users
@@ -1539,7 +1599,7 @@ public async Task<PayRun> ComputeStaffWeeklyAsync(
         }
 
         public Task<PayRunComputeResult> ComputeDriverWeeklyAsync(
-            long companyId,
+            long? companyId,
             long driverId,
             DateTime startDateInclusive,
             DateTime endDateInclusive,

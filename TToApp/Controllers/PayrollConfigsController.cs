@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using TToApp.DTOs;
 using TToApp.Model;
 
@@ -7,7 +8,7 @@ namespace TToApp.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class PayrollConfigsController : ControllerBase
+public class PayrollConfigsController : BaseApiController
 {
     private readonly ApplicationDbContext _context; // ajusta el nombre real
 
@@ -23,7 +24,17 @@ public class PayrollConfigsController : ControllerBase
         [FromQuery] bool includeRules = false
    )
      {
-        IQueryable<PayrollConfig> q = _context.PayrollConfigs.AsNoTracking();
+        var companyId = GetCompanyId();
+        if (companyId <= 0) return Unauthorized(new { message = "CompanyId not found in token." });
+
+        var companyWarehouseIds = await _context.Warehouses
+            .AsNoTracking()
+            .Where(w => w.CompanyId == companyId)
+            .Select(w => w.Id)
+            .ToListAsync();
+
+        IQueryable<PayrollConfig> q = _context.PayrollConfigs.AsNoTracking()
+            .Where(x => companyWarehouseIds.Contains(x.WarehouseId));
 
         if (warehouseId.HasValue)
            q = q.Where(x => x.WarehouseId == warehouseId.Value);

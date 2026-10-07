@@ -150,6 +150,10 @@ namespace TToApp.Controllers
 public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
     [FromBody] ComputePeriodRequest req)
 {
+    var companyId = GetCompanyId();
+    var userId = GetUserId();
+    if (companyId <= 0) return Unauthorized(new { message = "CompanyId not found in token." });
+
     var start = ParseDateOnly(req.StartDate);
     var end = ParseDateOnly(req.EndDate);
     var endExclusive = end.AddDays(1);
@@ -163,6 +167,11 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
     if (req.WarehouseId.HasValue && req.WarehouseId.Value > 0)
     {
         requestedWarehouseId = (int)req.WarehouseId.Value;
+
+        var warehouseOwned = await _db.Warehouses
+            .AnyAsync(w => w.Id == requestedWarehouseId && w.CompanyId == companyId);
+        if (!warehouseOwned)
+            return Forbid();
     }
 
 
@@ -172,7 +181,7 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
 
     var period = await _db.PayPeriods
         .FirstOrDefaultAsync(p =>
-            p.CompanyId == req.CompanyId &&
+            p.CompanyId == companyId &&
             p.WarehouseId == req.WarehouseId &&
             p.StartDate == start &&
             p.EndDate == end
@@ -182,12 +191,12 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
     {
         period = new PayPeriod
         {
-            CompanyId = req.CompanyId,
+            CompanyId = companyId,
             WarehouseId = req.WarehouseId,
             StartDate = start,
             EndDate = end,
             Status = "Open",
-            CreatedBy = req.UserId
+            CreatedBy = userId
         };
 
         _db.PayPeriods.Add(period);
@@ -386,7 +395,7 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
                 warehouseIdsAll.Contains(w.Id) &&
 
                 w.CompanyId ==
-                    req.CompanyId &&
+                    companyId &&
 
                 (w.Company ?? "")
                     .Trim()
@@ -848,7 +857,7 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
             var batchResult = await _service
                 .ComputeDriverWeeklyAsync(
                     companyId:
-                        req.CompanyId,
+                        companyId,
 
                     driverId:
                         driverId,
@@ -863,7 +872,7 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
                         req.WarehouseId,
 
                     userId:
-                        req.UserId,
+                        userId,
 
                     filterZoneId:
                         req.ZoneId
@@ -1156,6 +1165,10 @@ public async Task<ActionResult<PeriodSummaryDto>> ComputePeriod(
 public async Task<ActionResult> ComputeStaffPeriod(
     [FromBody] ComputePeriodRequest req)
 {
+    var companyId = GetCompanyId();
+    var userId = GetUserId();
+    if (companyId <= 0) return Unauthorized(new { message = "CompanyId not found in token." });
+
     var start = ParseDateOnly(req.StartDate);
     var end = ParseDateOnly(req.EndDate);
 
@@ -1168,7 +1181,8 @@ public async Task<ActionResult> ComputeStaffPeriod(
     {
         global::User.Role.Admin,
         global::User.Role.Recruiter,
-        global::User.Role.Assistant
+        global::User.Role.Assistant,
+        global::User.Role.SuperAdmin
     };
 
 
@@ -1183,7 +1197,7 @@ public async Task<ActionResult> ComputeStaffPeriod(
         .AsNoTracking()
         .Where(u =>
             u.IsActive &&
-            u.CompanyId == req.CompanyId &&
+            u.CompanyId == companyId &&
             u.UserRole.HasValue &&
             staffRoles.Contains(u.UserRole.Value))
         .Select(u => new
@@ -1351,7 +1365,7 @@ public async Task<ActionResult> ComputeStaffPeriod(
         .FirstOrDefaultAsync(p =>
 
             p.CompanyId ==
-                req.CompanyId
+                companyId
 
             &&
 
@@ -1375,7 +1389,7 @@ public async Task<ActionResult> ComputeStaffPeriod(
         period = new PayPeriod
         {
             CompanyId =
-                req.CompanyId,
+                companyId,
 
             WarehouseId =
                 null,
@@ -1390,7 +1404,7 @@ public async Task<ActionResult> ComputeStaffPeriod(
                 "Open",
 
             CreatedBy =
-                req.UserId
+                userId
         };
 
 
@@ -1471,7 +1485,7 @@ public async Task<ActionResult> ComputeStaffPeriod(
             await _service
                 .ComputeStaffWeeklyAsync(
                     companyId:
-                        req.CompanyId,
+                        companyId,
 
                     staffId:
                         employee.UserId,
@@ -1483,7 +1497,7 @@ public async Task<ActionResult> ComputeStaffPeriod(
                         end,
 
                     userId:
-                        req.UserId
+                        userId
                 );
         }
         catch (Exception ex)
@@ -1671,18 +1685,21 @@ public async Task<ActionResult> ComputeStaffPeriod(
         [HttpPost("compute")]
         public async Task<ActionResult<PayRun>> Compute([FromBody] ComputePayrollRequest req)
         {
+            var companyId = GetCompanyId();
+            var userId = GetUserId();
+
             var start = ParseDateOnly(req.WeekStart);
             var end = ParseDateOnly(req.WeekEnd);
 
             try
             {
                 var result = await _service.ComputeDriverWeeklyAsync(
-                    companyId: req.CompanyId,
+                    companyId: companyId > 0 ? companyId : req.CompanyId,
                     driverId: req.DriverId,
                     weekStart: start,
                     weekEnd: end,
                     warehouseId: req.WarehouseId,
-                    userId: req.UserId
+                    userId: userId
                 );
 
                 var full = await _db.PayRuns
@@ -1710,11 +1727,15 @@ public async Task<ActionResult> ComputeStaffPeriod(
         [HttpPost("periods")]
         public async Task<ActionResult<PayPeriod>> CreateOrGetPeriod([FromBody] CreatePeriodRequest req)
         {
+            var companyId = GetCompanyId();
+            var userId = GetUserId();
+            if (companyId <= 0) return Unauthorized(new { message = "CompanyId not found in token." });
+
             var start = ParseDateOnly(req.StartDate);
             var end = ParseDateOnly(req.EndDate);
 
             var period = await _db.PayPeriods.FirstOrDefaultAsync(p =>
-                p.CompanyId == req.CompanyId &&
+                p.CompanyId == companyId &&
                 p.StartDate == start &&
                 p.EndDate == end &&
                 p.WarehouseId == req.WarehouseId
@@ -1724,12 +1745,12 @@ public async Task<ActionResult> ComputeStaffPeriod(
             {
                 period = new PayPeriod
                 {
-                    CompanyId = req.CompanyId,
+                    CompanyId = companyId,
                     WarehouseId = req.WarehouseId,
                     StartDate = start,
                     EndDate = end,
                     Status = "Open",
-                    CreatedBy = req.UserId,
+                    CreatedBy = userId,
                     Notes = req.Notes
                 };
                 _db.PayPeriods.Add(period);
@@ -3838,6 +3859,12 @@ public async Task<ActionResult<PeriodSummaryDto>> GetPeriodSummaryByRange(
         {
             var id = User.FindFirstValue(ClaimTypes.NameIdentifier);
             return long.Parse(id!);
+        }
+
+        private long GetCompanyId()
+        {
+            var claim = User.FindFirst("CompanyId")?.Value ?? User.FindFirst("companyId")?.Value;
+            return long.TryParse(claim, out var id) ? id : 0;
         }
 
         [HttpGet("my-paid-summary")]

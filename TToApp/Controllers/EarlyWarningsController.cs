@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using TToApp.Model;
 using TToApp.Services.EarlyWarnings;
 using TToApp.Constants;
@@ -8,7 +9,7 @@ namespace TToApp.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class EarlyWarningsController : ControllerBase
+    public class EarlyWarningsController : BaseApiController
     {
         private readonly ApplicationDbContext _db;
 
@@ -19,15 +20,18 @@ namespace TToApp.Controllers
 
         [HttpGet]
         public async Task<IActionResult> GetAll(
-            [FromQuery] int? companyId,
-            [FromQuery] int? warehouseId,
-            [FromQuery] string? type,
+            [FromQuery] long? companyId = null,
+            [FromQuery] int? warehouseId = null,
+            [FromQuery] string? type = null,
             [FromQuery] string? status = "Open")
         {
-            var query = _db.EarlyWarnings.AsNoTracking().AsQueryable();
+            var resolvedCompanyId = GetCompanyIdOrNull(companyId);
+            if (!IsSuperAdmin() && resolvedCompanyId == null)
+                return Unauthorized(new { message = "CompanyId not found in token." });
 
-            if (companyId.HasValue)
-                query = query.Where(x => x.CompanyId == companyId.Value);
+            var query = _db.EarlyWarnings.AsNoTracking().AsQueryable();
+            if (resolvedCompanyId.HasValue)
+                query = query.Where(x => x.CompanyId == resolvedCompanyId.Value);
 
             if (warehouseId.HasValue)
                 query = query.Where(x => x.WarehouseId == warehouseId.Value);
@@ -129,18 +133,21 @@ namespace TToApp.Controllers
 
         [HttpGet("dashboard")]
         public async Task<IActionResult> Dashboard(
-            [FromQuery] int? companyId,
-            [FromQuery] int? warehouseId,
+            [FromQuery] long? companyId = null,
+            [FromQuery] int? warehouseId = null,
             [FromQuery] int days = 30)
         {
+            var resolvedCompanyId = GetCompanyIdOrNull(companyId);
+            if (!IsSuperAdmin() && resolvedCompanyId == null)
+                return Unauthorized(new { message = "CompanyId not found in token." });
+
             var fromDate = DateTime.UtcNow.AddDays(-days);
 
-            var query = _db.EarlyWarnings
-                .AsNoTracking()
+            var query = _db.EarlyWarnings.AsNoTracking()
                 .Where(x => x.CreatedAt >= fromDate);
 
-            if (companyId.HasValue)
-                query = query.Where(x => x.CompanyId == companyId.Value);
+            if (resolvedCompanyId.HasValue)
+                query = query.Where(x => x.CompanyId == resolvedCompanyId.Value);
 
             if (warehouseId.HasValue)
                 query = query.Where(x => x.WarehouseId == warehouseId.Value);
